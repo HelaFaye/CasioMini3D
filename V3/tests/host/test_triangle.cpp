@@ -199,6 +199,59 @@ static void test_off_screen_and_clipped_triangles()
     assert(invalid_pixel_writes == 0);
 }
 
+static void test_explicit_texture_sampler_path()
+{
+    reset_framebuffer();
+
+    const uint16_t texels[4] = {
+        0xf800, 0x001f,
+        0x07e0, 0xffff
+    };
+    const gfx::Texture2DView texture = {texels, 2, 2, 2};
+    const gfx::TextureSampler sampler = {
+        gfx::TextureFilter::Nearest,
+        gfx::TextureAddressMode::Clamp,
+        gfx::TextureAddressMode::Clamp
+    };
+
+    DrawTriangleTextured(
+        VertexLocal{10, 10, 0, 0},
+        VertexLocal{30, 10, FLOAT_TO_FIXED(1), 0},
+        VertexLocal{10, 30, 0, FLOAT_TO_FIXED(1)},
+        texture,
+        sampler);
+
+    assert(pixel_writes == 230);
+    assert(uv_reads == 0);
+    assert(invalid_pixel_writes == 0);
+    assert(framebuffer[10 * SCREEN_WIDTH + 10] == 0xf800);
+    assert(framebuffer[10 * SCREEN_WIDTH + 30] == 0x001f);
+    assert(framebuffer[30 * SCREEN_WIDTH + 10] == 0x07e0);
+}
+
+static void test_explicit_texture_sampler_rejects_invalid_view()
+{
+    reset_framebuffer();
+
+    const uint16_t texels[4] = {0xf800, 0x001f, 0x07e0, 0xffff};
+    const gfx::Texture2DView invalid_texture = {texels, 2, 2, 1};
+    const gfx::TextureSampler sampler = {
+        gfx::TextureFilter::Nearest,
+        gfx::TextureAddressMode::Clamp,
+        gfx::TextureAddressMode::Clamp
+    };
+
+    DrawTriangleTextured(
+        VertexLocal{10, 10, 0, 0},
+        VertexLocal{30, 10, FLOAT_TO_FIXED(1), 0},
+        VertexLocal{10, 30, 0, FLOAT_TO_FIXED(1)},
+        invalid_texture,
+        sampler);
+
+    assert(pixel_writes == 0);
+    assert(uv_reads == 0);
+}
+
 static void test_textured_path_still_samples_uv_map()
 {
     reset_framebuffer();
@@ -221,6 +274,8 @@ int main()
     test_flat_top_and_flat_bottom();
     test_degenerate_triangles_draw_nothing();
     test_off_screen_and_clipped_triangles();
+    test_explicit_texture_sampler_path();
+    test_explicit_texture_sampler_rejects_invalid_view();
     test_textured_path_still_samples_uv_map();
 
     std::puts("triangle rasterizer tests: PASS");
