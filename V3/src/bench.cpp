@@ -40,9 +40,9 @@ static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frame
             const int h = 12 + (int)((i * 3u) % 20u);
 
             VertexLocal a = {x, y, 0, 0};
-            VertexLocal b = {x + w, y + h / 2, FLOAT_TO_FIXED(39), 0};
-            VertexLocal c = {x, y + h, 0, FLOAT_TO_FIXED(39)};
-            DrawTriangle(a, b, c);
+            VertexLocal b = {x + w, y + h / 2, 0, 0};
+            VertexLocal c = {x, y + h, 0, 0};
+            DrawTriangleSolid(a, b, c, C_WHITE);
         }
         dupdate();
     }

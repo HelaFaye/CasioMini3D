@@ -40,6 +40,18 @@ inline void ProcessScanline(int y, int Ax, int Bx, fixed_t Au, fixed_t Av, fixed
     }
 };
 
+inline void ProcessScanlineSolid(int y, int Ax, int Bx, int color)
+{
+    if (Bx - Ax == 0) return;
+    if (Ax > Bx)
+        std::swap(Ax, Bx);
+
+    const int startX = std::max(Ax, 0);
+    const int endX = std::min(Bx, SCREEN_WIDTH - 1);
+    for (int x = startX; x <= endX; ++x)
+        DrawPixel(x, y, color);
+}
+
 void DrawTriangle(VertexLocal v0, VertexLocal v1, VertexLocal v2)
 {
     if (v1.y < v0.y) std::swap(v0, v1);
@@ -58,3 +70,22 @@ void DrawTriangle(VertexLocal v0, VertexLocal v1, VertexLocal v2)
         ProcessScanline(y, A.x, B.x, A.u, A.v, B.u, B.v);
     }
 };
+
+void DrawTriangleSolid(VertexLocal v0, VertexLocal v1, VertexLocal v2, int color)
+{
+    if (v1.y < v0.y) std::swap(v0, v1);
+    if (v2.y < v0.y) std::swap(v0, v2);
+    if (v2.y < v1.y) std::swap(v1, v2);
+
+    if (v2.y - v0.y == 0) return;
+
+    int startY = std::max(v0.y, 0);
+    int endY = std::min(v2.y, SCREEN_HEIGHT - 1);
+
+    for (int y = startY; y <= endY; ++y) {
+        const bool second_half = y > v1.y || v1.y == v0.y;
+        Edge A = CalcEdge(v0, v2, y);
+        Edge B = second_half ? CalcEdge(v1, v2, y) : CalcEdge(v0, v1, y);
+        ProcessScanlineSolid(y, A.x, B.x, color);
+    }
+}
