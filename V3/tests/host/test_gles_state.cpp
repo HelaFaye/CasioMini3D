@@ -190,7 +190,7 @@ void test_buffer_objects_and_vertex_attributes()
     assert(value == static_cast<GLint>(names[0]));
 
     const GLvoid *offset = reinterpret_cast<const GLvoid *>(
-        static_cast<uintptr_t>(sizeof(GLfloat)));
+        static_cast<std::uintptr_t>(sizeof(GLfloat)));
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), offset);
     glEnableVertexAttribArray(2);
 
@@ -225,7 +225,7 @@ void test_buffer_objects_and_vertex_attributes()
     assert(glGetError() == GL_INVALID_ENUM);
     glVertexAttribPointer(2, 5, GL_FLOAT, GL_FALSE, 0, nullptr);
     assert(glGetError() == GL_INVALID_VALUE);
-    glEnableVertexAttribArray(FXGL_MAX_VERTEX_ATTRIBS);
+    glEnableVertexAttribArray(8);
     assert(glGetError() == GL_INVALID_VALUE);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
