@@ -432,6 +432,7 @@ static bool resolve_draw_surface(fxgl_surface_t& surface)
     surface = {};
     GLsizei width = 0;
     GLsizei height = 0;
+
     if (framebuffer->color.object_type == GL_TEXTURE)
     {
         TextureObject *texture = find_texture(framebuffer->color.object_name);
@@ -451,10 +452,27 @@ static bool resolve_draw_surface(fxgl_surface_t& surface)
         width = renderbuffer->width;
         height = renderbuffer->height;
     }
-    else
+
+    if (width == 0 || height == 0)
     {
-        return false;
+        const FramebufferAttachment *fallbacks[2] = {
+            &framebuffer->depth, &framebuffer->stencil
+        };
+        for (const FramebufferAttachment *attachment : fallbacks)
+        {
+            if (attachment->object_type != GL_RENDERBUFFER)
+                continue;
+            RenderbufferObject *renderbuffer =
+                find_renderbuffer(attachment->object_name);
+            if (!renderbuffer)
+                return false;
+            width = renderbuffer->width;
+            height = renderbuffer->height;
+            break;
+        }
     }
+    if (width <= 0 || height <= 0)
+        return false;
 
     if (framebuffer->depth.object_type == GL_RENDERBUFFER)
     {
@@ -3329,7 +3347,7 @@ bool draw_clip_triangle(
     RenderSurface surface = {};
     PipelineState state = {};
     build_pipeline_context(surface, state);
-    if (!surface.color)
+    if (surface.width <= 0 || surface.height <= 0)
         return false;
 
     return fxgl::draw_triangle(surface, state, input, varying_count,
