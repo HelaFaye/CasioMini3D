@@ -83,6 +83,27 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_FUNC_SUBTRACT 0x800A
 #define GL_FUNC_REVERSE_SUBTRACT 0x800B
 
+#define GL_TEXTURE_2D 0x0DE1
+#define GL_TEXTURE_BINDING_2D 0x8069
+#define GL_ACTIVE_TEXTURE 0x84E0
+#define GL_TEXTURE0 0x84C0
+#define GL_TEXTURE1 0x84C1
+#define GL_MAX_TEXTURE_IMAGE_UNITS 0x8872
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_TEXTURE_WRAP_S 0x2802
+#define GL_TEXTURE_WRAP_T 0x2803
+#define GL_NEAREST 0x2600
+#define GL_LINEAR 0x2601
+#define GL_NEAREST_MIPMAP_NEAREST 0x2700
+#define GL_LINEAR_MIPMAP_NEAREST 0x2701
+#define GL_NEAREST_MIPMAP_LINEAR 0x2702
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#define GL_CLAMP_TO_EDGE 0x812F
+#define GL_MIRRORED_REPEAT 0x8370
+#define GL_RGB 0x1907
+#define GL_UNSIGNED_SHORT_5_6_5 0x8363
+
 #define GL_ARRAY_BUFFER 0x8892
 #define GL_ELEMENT_ARRAY_BUFFER 0x8893
 #define GL_STATIC_DRAW 0x88E4
@@ -124,6 +145,19 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_STENCIL_WRITEMASK 0x0B98
 #define GL_MAX_TEXTURE_SIZE 0x0D33
 #define GL_MAX_VIEWPORT_DIMS 0x0D3A
+
+void glGenTextures(GLsizei n, GLuint *textures);
+void glDeleteTextures(GLsizei n, const GLuint *textures);
+void glActiveTexture(GLenum texture);
+void glBindTexture(GLenum target, GLuint texture);
+void glTexParameteri(GLenum target, GLenum pname, GLint param);
+void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
+void glTexImage2D(GLenum target, GLint level, GLint internalformat,
+    GLsizei width, GLsizei height, GLint border, GLenum format,
+    GLenum type, const GLvoid *pixels);
+void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+    GLsizei width, GLsizei height, GLenum format, GLenum type,
+    const GLvoid *pixels);
 
 void glGenBuffers(GLsizei n, GLuint *buffers);
 void glDeleteBuffers(GLsizei n, const GLuint *buffers);
