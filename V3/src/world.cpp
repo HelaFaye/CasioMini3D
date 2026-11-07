@@ -18,8 +18,9 @@ void Camera::UpdateCoordinates()
 {
     fposition = {INT_TO_FIXED(position.x), INT_TO_FIXED(position.y), INT_TO_FIXED(position.z)};
     angle %= 360;
-    fixed_t temp = INT_TO_FIXED(angle)/180;
-    fangle = {fcos_approx(temp), fsin_approx(temp)};
+    const fixed_t angle_radians =
+        fmul(INT_TO_FIXED(angle), FLOAT_TO_FIXED(M_PI / 180.0));
+    fangle = {fcos_approx(angle_radians), fsin_approx(angle_radians)};
 }
 
 
