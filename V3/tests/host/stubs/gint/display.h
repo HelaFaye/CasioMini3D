@@ -17,3 +17,6 @@ typedef struct bopti_image_t
 #define C_BLACK 0
 #define C_WHITE 0x7fff
 #define C_RED 0x7c00
+
+void dclear(int color);
+void dupdate(void);
