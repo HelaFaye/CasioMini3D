@@ -87,7 +87,7 @@ The benchmark test uses a deterministic LibProf-compatible stub to test timing p
 
 ### 3.1 LibProf timer and measurement phases
 
-The target build now requires LibProf 2.4 or newer:
+The target build now requires LibProf 2.4 or newer. The recorded source label is `libprof>=2.4/TMU`, because CMake accepts any compatible installed version at or above 2.4:
 
 ```cmake
 find_package(LibProf 2.4 REQUIRED)
@@ -116,7 +116,7 @@ Defaults are 5 warm-up frames, 60 measured frames per repetition, and 5 repetiti
 | `present` | `dupdate()` | CPU time spent in the display-update call. It does not measure physical LCD scanout completion. |
 | `frame_total` | Entire measured frame loop | End-to-end frame-path time, including clear, draw, update, loop and inner profiler-context overhead. |
 
-The component metrics are independently bracketed. `frame_total` should not be expected to equal the sum of `clear`, `raster`, and `present`, because the outer context also includes loop and profiling instrumentation overhead. The displayed FPS is derived from the mean `frame_total` microseconds per frame. The on-screen summary shows raster and presentation mean/median, plus full-frame mean/spread and derived FPS. The CSV contains min/max/mean/median/spread for all four phases.
+The component metrics are independently bracketed. `frame_total` should not be expected to equal the sum of `clear`, `raster`, and `present`, because the outer context also includes loop and profiling instrumentation overhead. The displayed FPS is derived from the mean `frame_total` microseconds per frame. The on-screen summary shows clear, raster, and presentation mean/median, plus full-frame mean/spread and derived FPS. The CSV contains min/max/mean/median/spread for all four phases.
 
 `dupdate()` can initiate or schedule display transfer work that continues asynchronously. Its measured call duration is therefore not the duration of the LCD scanout. This distinction is essential when comparing raster costs with presentation overhead. [The libprof author describes separate measurement of drawing and display-update calls and notes background transfer behavior.](https://www.planet-casio.com/Fr/forums/topic15796-1-libprof-mesure-de-temps-et-profilage-pour-gint.html)
 
@@ -134,7 +134,7 @@ The repeated runs use identical deterministic frame-index geometry. They improve
 
 ### 3.4 Current result structure
 
-`BenchResult` contains the scene name, warm-up/measured frame counts, repetition count, triangles per frame, and five statistics for each of `clear`, `raster`, `present`, and `frame_total`. For `textured-geometry`, the recorded triangle count is twice `triangle_count`; for the other triangle scenes it is `triangle_count`; `clear-only` records zero.
+`BenchResult` contains the scene name, warm-up/measured frame counts, repetition count, triangles per frame, actual display width/height, and five statistics for each of `clear`, `raster`, `present`, and `frame_total`. For `textured-geometry`, the recorded triangle count is twice `triangle_count`; for the other triangle scenes it is `triangle_count`; `clear-only` records zero.
 
 ## 4. CSV result persistence
 
@@ -148,7 +148,7 @@ The original `/benchmarks.csv` schema-v1 file is intentionally left unchanged so
 
 The raw volume-prefixed path spelling (for example, `\\\\fls0\\file`) is the BFile path form. The active logger uses Gint's POSIX/C99 filesystem interface instead, and the file operations remain inside `gint_world_switch(GINT_CALL(...))` so they execute in the OS world on fx-CG targets.
 
-The schema-v2 CSV header records benchmark and timer identifiers, reported timer quantum, warm-up/measured frame counts, repeat count, triangles per frame, and per-frame mean/median/minimum/maximum/spread for clear, raster, presentation-call, and full-frame timings. The file contains one row per named workload after each suite or manual rerun.
+The schema-v2 CSV header records benchmark and timer identifiers, reported timer quantum, warm-up/measured frame counts, repeat count, triangles per frame, effective display width/height, and per-frame mean/median/minimum/maximum/spread for clear, raster, presentation-call, and full-frame timings. The file contains one row per named workload after each suite or manual rerun.
 
 The logger opens an existing file for update with `r+`; if the file does not exist (`ENOENT`), it creates it with `w+`. It then explicitly seeks to EOF, writes the header if the file is empty, appends one row, flushes, checks stream errors, closes the file, and returns a success or failure result. This avoids relying on append-mode semantics. The results UI now distinguishes the failing stage: `CSV OPEN`, `CSV SEEK`, `CSV SIZE`, `CSV HEADER`, `CSV WRITE`, `CSV FLUSH`, `CSV STREAM`, `CSV CLOSE`, or `CSV SWITCH`. It also displays the captured `errno` or world-switch return code.
 
@@ -191,11 +191,12 @@ The audit patch makes the following targeted corrections:
 - Retain raw results and compare median, minimum, maximum, and spread.
 - Verify CSV header-once behavior, appended rows, readback/export, and restart persistence on physical hardware.
 
-### Milestone 2 — Improve timing without changing workload semantics
+### Milestone 2 — Improve timing without changing workload semantics (implemented; hardware validation pending)
 
-- Integrate a microsecond-capable timer (such as the separately tested `libprof` API) with explicit initialization/error handling.
-- Record timer source and resolution in result metadata.
-- Separate render-only and end-to-end presentation modes rather than changing the meaning of current scores.
+- Implemented: link LibProf 2.4+, initialize and shut down the profiler, and record timer source and integer-microsecond reporting unit.
+- Implemented: separate clear, raster, `dupdate()` call, and full-frame measurements without changing the four workload definitions.
+- Implemented: five repeated measurements by default with min/max/mean/median/spread statistics, effective display dimensions, and triangles per frame.
+- Pending: fxSDK/SH cross-build and physical fx-CG50 validation of profiler startup, timing values, and `dupdate()` call semantics.
 
 ### Milestone 3 — Make scene definitions precise
 
@@ -221,7 +222,7 @@ Publish workload definitions, result schema, device/clock/OS settings, timer sou
 
 - `V3/src/main.cpp` — scene registry, startup suite, controls, result display, and CSV logging.
 - `V3/src/bench.cpp` — four scene draw callbacks, LibProf phase timing, and repeated-run statistics.
-- `V3/src/bench.hpp` — scene IDs, configuration, and result structures.
+- `V3/src/bench.hpp` — scene IDs, repeated-run configuration, timer metadata, effective display dimensions, and phase statistics.
 - `V3/src/shapes/triangle.cpp` — shared scan conversion with specialized solid-fill and UV-interpolated triangle paths.
 - `V3/tests/host/` — host-side rasterizer and benchmark timing regression tests using minimal Gint and LibProf stubs.
 - `V3/src/display.cpp` — Gint VRAM writes, generated UV map, and image/palette helpers.
