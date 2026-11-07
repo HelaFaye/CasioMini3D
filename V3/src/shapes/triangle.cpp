@@ -57,6 +57,12 @@ static void ProcessScanline(
     const gfx::Texture2DView* texture,
     const gfx::TextureSampler* sampler)
 {
+    if constexpr (!Textured)
+    {
+        (void)texture;
+        (void)sampler;
+    }
+
     if (a.x == b.x)
         return;
 
