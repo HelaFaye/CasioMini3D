@@ -25,6 +25,7 @@ bool draw_clip_triangle(
 /* The GLES-style API is intentionally single-context on the calculator. */
 void program_context_reset();
 void report_error(unsigned int error);
+void report_context_error(unsigned int error);
 unsigned int current_program_name();
 
 struct LinkedProgramView
