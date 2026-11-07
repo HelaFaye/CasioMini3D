@@ -112,6 +112,23 @@ static void test_bilinear_interpolation_rgb565()
     assert(gfx::sample_texture(texture, -(ONE / 2), ONE / 2, bilinear) == 0x8400);
 }
 
+static void test_mirrored_repeat_addressing()
+{
+    const uint16_t pixels[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
+    const Texture2DView texture = {pixels, 2, 2, 2};
+    const TextureSampler mirrored = {
+        TextureFilter::Nearest,
+        TextureAddressMode::MirroredRepeat,
+        TextureAddressMode::MirroredRepeat
+    };
+
+    assert(gfx::sample_texture(texture, -ONE, 0, mirrored) == 0xf800);
+    assert(gfx::sample_texture(texture, 2 * ONE, 0, mirrored) == 0x07e0);
+    assert(gfx::sample_texture(texture, 3 * ONE, 0, mirrored) == 0xf800);
+    assert(gfx::sample_texture(texture, 4 * ONE, 0, mirrored) == 0xf800);
+    assert(gfx::sample_texture(texture, -2 * ONE, ONE, mirrored) == 0x001f);
+}
+
 static void test_invalid_inputs_fail_closed()
 {
     const uint16_t pixels[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
@@ -135,6 +152,7 @@ int main()
     test_clamp_and_repeat_addressing();
     test_negative_fractional_coordinates_use_floor();
     test_bilinear_interpolation_rgb565();
+    test_mirrored_repeat_addressing();
     test_invalid_inputs_fail_closed();
 
     std::puts("texture sampler tests: PASS");
