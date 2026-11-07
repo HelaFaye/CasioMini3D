@@ -26,6 +26,7 @@ These are the workloads currently represented in code and documentation. This is
 - `V3/` — active benchmark/demo application
 - `V3/src/` — renderer, benchmarks, and app entry point
 - `docs/fxmark-design.md` — benchmark design notes and implementation roadmap
+- `docs/THIRD_PARTY_NOTICES.md` — third-party references and attribution notes
 - `ModelRenderer/` — exploratory or legacy rendering work
 - `v1/`, `V2/` — earlier prototype generations
 
@@ -63,7 +64,7 @@ The benchmark structure follows the same basic idea as glmark2:
 - the timed section is separated from UI and camera controls
 - results are reported as runtime metrics instead of a portable desktop score
 
-This project keeps the scope intentionally smaller and more native to the calculator pipeline than a full glmark2 port.
+This project keeps the scope intentionally smaller and more native to the calculator pipeline than a full glmark2 port. glmark2 is credited as a conceptual and source-reference project; see [third-party notices](docs/THIRD_PARTY_NOTICES.md). No glmark2 source code is intentionally copied into the current benchmark implementation. This statement covers the work documented here, not an exhaustive audit of every historical file in the repository.
 
 ## Validation checklist for hardware testing
 
