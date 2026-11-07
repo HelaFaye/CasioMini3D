@@ -433,6 +433,7 @@ GLboolean fxglMakeCurrent(const fxgl_surface_t *surface)
         destroy_buffers(g_context);
         destroy_textures(g_context);
     }
+    fxgl::program_context_reset();
 
     Context next = {};
     next.current = true;
@@ -461,6 +462,7 @@ void fxglReleaseCurrent(void)
 {
     destroy_buffers(g_context);
     destroy_textures(g_context);
+    fxgl::program_context_reset();
     g_context = {};
 }
 
@@ -1598,6 +1600,9 @@ void glGetIntegerv(GLenum pname, GLint *data)
         case GL_ARRAY_BUFFER_BINDING:
             data[0] = static_cast<GLint>(g_context.array_buffer_binding);
             break;
+        case GL_CURRENT_PROGRAM:
+            data[0] = static_cast<GLint>(fxgl::current_program_name());
+            break;
         case GL_ELEMENT_ARRAY_BUFFER_BINDING:
             data[0] = static_cast<GLint>(g_context.element_buffer_binding);
             break;
@@ -1727,6 +1732,11 @@ GLenum glGetError(void)
 
 namespace fxgl
 {
+void report_context_error(unsigned int error)
+{
+    set_error(static_cast<GLenum>(error));
+}
+
 bool get_texture_binding(
     size_t unit,
     gfx::Texture2DView& view,
