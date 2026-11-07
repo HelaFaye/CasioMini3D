@@ -31,25 +31,23 @@ void dclock()
 
 static void print_bench_result(const BenchResult& result)
 {
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer),
-             "bench:%s fps:%.2f ms/frame:%.3f",
-             result.name,
-             result.fps,
-             result.avg_ms_per_frame);
+    char fps_buffer[32];
+    char frame_buffer[32];
+    snprintf(fps_buffer, sizeof(fps_buffer), "FPS: %.2f", result.fps);
+    snprintf(frame_buffer, sizeof(frame_buffer), "ms/frame: %.3f", result.avg_ms_per_frame);
 
-    dtext(0, 0, C_WHITE, buffer);
+    dtext(8, 8, C_WHITE, "Benchmark complete");
+    dtext(8, 24, C_WHITE, result.name);
+    dtext(8, 40, C_WHITE, fps_buffer);
+    dtext(8, 56, C_WHITE, frame_buffer);
+    dtext(8, 80, C_WHITE, "MENU: return");
 }
 
 static void print_benchmark_legend()
 {
-    const char* text1 = "F6 clear";
-    const char* text2 = "EXE triangles";
-    const char* text3 = "MENU quit";
-
-    dtext(10, 190, C_WHITE, text1);
-    dtext(10, 205, C_WHITE, text2);
-    dtext(10, 220, C_WHITE, text3);
+    dtext(8, 180, C_WHITE, "F6: clear-only");
+    dtext(8, 194, C_WHITE, "EXE: moving triangles");
+    dtext(8, 208, C_WHITE, "MENU: quit");
 }
 
 int main(){
@@ -100,8 +98,8 @@ int main(){
             BenchResult result;
             if (run_benchmark(selected_bench, cfg, &result))
             {
+                dclear(C_BLACK);
                 print_bench_result(result);
-                print_benchmark_legend();
                 dupdate();
                 while (!keydown(KEY_MENU))
                     clearevents();
