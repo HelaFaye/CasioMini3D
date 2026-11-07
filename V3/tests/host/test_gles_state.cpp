@@ -755,10 +755,25 @@ void test_gles_draw_arrays_and_elements()
     glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, nullptr);
     assert(glGetError() == GL_INVALID_OPERATION);
 
-    // A recognized but not-yet-implemented primitive mode is rejected
-    // explicitly rather than misinterpreted as triangles.
-    glDrawArrays(GL_LINES, 0, 3);
-    assert(glGetError() == GL_INVALID_OPERATION);
+    // Independent line pairs and points now use their own raster paths.
+    for (uint16_t& pixel : color)
+        pixel = 0;
+    glUniform4f(color_location, 0.0f, 0.0f, 1.0f, 1.0f);
+    glDrawArrays(GL_LINES, 0, 2);
+    assert(color[0] == BLUE);
+    size_t blue_line_pixels = 0;
+    for (size_t x = 0; x < 8; ++x)
+        if (color[x] == BLUE) ++blue_line_pixels;
+    assert(blue_line_pixels >= 7);
+
+    for (uint16_t& pixel : color)
+        pixel = 0;
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(color[0] == BLUE);
+
+    // Unknown primitive enums are rejected, not treated as a known mode.
+    glDrawArrays(0x0007, 0, 3);
+    assert(glGetError() == GL_INVALID_ENUM);
 
     // The current program and all bound object names remain queryable.
     GLint current = 0;
