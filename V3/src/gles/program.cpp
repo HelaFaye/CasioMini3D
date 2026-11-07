@@ -32,6 +32,7 @@ struct AttributeBinding
 struct ProgramObject
 {
     bool alive = false;
+    bool delete_pending = false;
     bool linked = false;
     GLuint vertex_shader = 0;
     GLuint fragment_shader = 0;
@@ -343,6 +344,30 @@ static bool link_program(ProgramObject& program)
     return true;
 }
 
+static void release_program(ProgramObject& program)
+{
+    ShaderObject *vertex = find_shader(program.vertex_shader);
+    ShaderObject *fragment = find_shader(program.fragment_shader);
+    if (vertex && vertex->attached_count > 0)
+    {
+        --vertex->attached_count;
+        release_shader_if_pending(*vertex);
+    }
+    if (fragment && fragment != vertex && fragment->attached_count > 0)
+    {
+        --fragment->attached_count;
+        release_shader_if_pending(*fragment);
+    }
+    program = {};
+}
+
+static void release_program_if_pending(ProgramObject& program)
+{
+    if (program.alive && program.delete_pending &&
+        g_current_program != static_cast<GLuint>(&program - g_programs + 1))
+        release_program(program);
+}
+
 static ProgramObject *current_program()
 {
     if (g_current_program == 0)
@@ -644,22 +669,8 @@ void glDeleteProgram(GLuint program_name)
     ProgramObject *program = find_program(program_name);
     if (!program)
         return;
-    if (g_current_program == program_name)
-        g_current_program = 0;
-
-    ShaderObject *vertex = find_shader(program->vertex_shader);
-    ShaderObject *fragment = find_shader(program->fragment_shader);
-    if (vertex && vertex->attached_count > 0)
-    {
-        --vertex->attached_count;
-        release_shader_if_pending(*vertex);
-    }
-    if (fragment && fragment != vertex && fragment->attached_count > 0)
-    {
-        --fragment->attached_count;
-        release_shader_if_pending(*fragment);
-    }
-    *program = {};
+    program->delete_pending = true;
+    release_program_if_pending(*program);
 }
 
 void glAttachShader(GLuint program_name, GLuint shader_name)
@@ -733,18 +744,24 @@ void glUseProgram(GLuint program_name)
 {
     if (!fxglHasCurrentContext())
         return;
-    if (program_name == 0)
+    if (program_name != 0)
     {
-        g_current_program = 0;
-        return;
+        ProgramObject *program = find_program(program_name);
+        if (!program || !program->linked || program->delete_pending)
+        {
+            fxgl::report_error(GL_INVALID_OPERATION);
+            return;
+        }
     }
-    ProgramObject *program = find_program(program_name);
-    if (!program || !program->linked)
-    {
-        fxgl::report_error(GL_INVALID_OPERATION);
-        return;
-    }
+
+    const GLuint old_program = g_current_program;
     g_current_program = program_name;
+    if (old_program != 0 && old_program != program_name)
+    {
+        ProgramObject *old = find_program(old_program);
+        if (old)
+            release_program_if_pending(*old);
+    }
 }
 
 void glGetProgramiv(GLuint program_name, GLenum pname, GLint *params)
@@ -769,7 +786,7 @@ void glGetProgramiv(GLuint program_name, GLenum pname, GLint *params)
             *params = program->linked ? GL_TRUE : GL_FALSE;
             break;
         case GL_DELETE_STATUS:
-            *params = GL_FALSE;
+            *params = program->delete_pending ? GL_TRUE : GL_FALSE;
             break;
         case GL_INFO_LOG_LENGTH:
             *params = static_cast<GLint>(std::strlen(program->info_log) + 1);
