@@ -123,7 +123,8 @@ void test_scissor_color_mask_and_depth_stencil_clear()
     assert(depth[1] == 32768);
     assert(stencil[1] == 0xf2);
 
-    for (size_t i : {size_t(0), size_t(2), size_t(4), size_t(5), size_t(6), size_t(7)})
+    const size_t untouched[] = {0, 2, 4, 5, 6, 7};
+    for (size_t i : untouched)
     {
         assert(depth[i] == 0x1234);
         assert(stencil[i] == 0xf0);
