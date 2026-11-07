@@ -952,6 +952,39 @@ void test_gles_framebuffer_and_renderbuffer_objects()
     assert(view.pixels[5] == BLUE);
     assert(view.pixels[15] == BLUE);
 
+    GLubyte rgba[2 * 2 * 4] = {};
+    glReadPixels(1, 1, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    assert(rgba[0] == 0 && rgba[1] == 0 && rgba[2] == 255 && rgba[3] == 255);
+    assert(rgba[4] == 0 && rgba[5] == 0 && rgba[6] == 255 && rgba[7] == 255);
+
+    // RGB rows are padded to the current pack alignment (four bytes by default).
+    GLubyte aligned_rgb[8] = {0xaa, 0xaa, 0xaa, 0xaa, 0xbb, 0xbb, 0xbb, 0xbb};
+    glReadPixels(0, 0, 1, 2, GL_RGB, GL_UNSIGNED_BYTE, aligned_rgb);
+    assert(aligned_rgb[0] == 0 && aligned_rgb[1] == 0 && aligned_rgb[2] == 255);
+    assert(aligned_rgb[3] == 0xaa);
+    assert(aligned_rgb[4] == 0 && aligned_rgb[5] == 0 && aligned_rgb[6] == 255);
+    assert(aligned_rgb[7] == 0xbb);
+
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    GLubyte tight_rgb[6] = {};
+    glReadPixels(0, 0, 1, 2, GL_RGB, GL_UNSIGNED_BYTE, tight_rgb);
+    assert(tight_rgb[0] == 0 && tight_rgb[1] == 0 && tight_rgb[2] == 255);
+    assert(tight_rgb[3] == 0 && tight_rgb[4] == 0 && tight_rgb[5] == 255);
+
+    uint16_t packed[4] = {};
+    glReadPixels(0, 0, 2, 2, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, packed);
+    for (uint16_t pixel : packed)
+        assert(pixel == BLUE);
+
+    // Reads outside the framebuffer are safely initialized to black.
+    GLubyte outside[4] = {0xff, 0xff, 0xff, 0xff};
+    glReadPixels(-1, -1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, outside);
+    assert(outside[0] == 0 && outside[1] == 0 &&
+           outside[2] == 0 && outside[3] == 255);
+
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
     // An invalid attachment point is an enum error and does not mutate the FBO.
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, 0x8ce1,
         GL_RENDERBUFFER, renderbuffers[0]);
@@ -1002,6 +1035,8 @@ void test_gles_framebuffer_and_renderbuffer_objects()
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &value);
     assert(value == 0);
     assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    assert(rgba[0] == 0 && rgba[1] == 0 && rgba[2] == 0 && rgba[3] == 255);
 
     // Bad targets, formats and dimensions are rejected with GLES errors.
     glBindFramebuffer(GL_RENDERBUFFER, 0);
@@ -1014,6 +1049,10 @@ void test_gles_framebuffer_and_renderbuffer_objects()
     glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB565, 129, 4);
     assert(glGetError() == GL_INVALID_VALUE);
     glDeleteRenderbuffers(1, &rb);
+    glReadPixels(0, 0, 1, 1, 0xdead, GL_UNSIGNED_BYTE, rgba);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glReadPixels(0, 0, -1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    assert(glGetError() == GL_INVALID_VALUE);
 
     fxglReleaseCurrent();
 }
