@@ -1,0 +1,1510 @@
+#include "glsl.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+namespace fxgl
+{
+namespace
+{
+enum class TokenKind : uint8_t
+{
+    End,
+    Identifier,
+    Number,
+    Punctuation,
+    Invalid
+};
+
+struct Token
+{
+    TokenKind kind;
+    char text[GLSL_NAME_BYTES];
+    float number;
+    bool integer;
+    size_t offset;
+};
+
+class Lexer
+{
+public:
+    explicit Lexer(const char *source) : source_(source ? source : ""), offset_(0) {}
+
+    Token next()
+    {
+        skip_space_and_comments();
+        Token token = {};
+        token.offset = offset_;
+
+        const char c = source_[offset_];
+        if (c == '\0')
+        {
+            token.kind = TokenKind::End;
+            return token;
+        }
+
+        if (is_identifier_start(c))
+        {
+            const size_t start = offset_++;
+            while (is_identifier_part(source_[offset_]))
+                ++offset_;
+            const size_t length = offset_ - start;
+            if (length >= sizeof(token.text))
+            {
+                token.kind = TokenKind::Invalid;
+                copy_error_text(token.text, sizeof(token.text), "identifier too long");
+                return token;
+            }
+            std::memcpy(token.text, source_ + start, length);
+            token.text[length] = '\0';
+            token.kind = TokenKind::Identifier;
+            return token;
+        }
+
+        if ((c >= '0' && c <= '9') ||
+            (c == '.' && source_[offset_ + 1] >= '0' &&
+             source_[offset_ + 1] <= '9'))
+        {
+            const size_t start = offset_;
+            bool has_dot = false;
+            bool has_exponent = false;
+            if (source_[offset_] == '.')
+            {
+                has_dot = true;
+                ++offset_;
+            }
+            while (source_[offset_] >= '0' && source_[offset_] <= '9')
+                ++offset_;
+            if (source_[offset_] == '.' && !has_dot)
+            {
+                has_dot = true;
+                ++offset_;
+                while (source_[offset_] >= '0' && source_[offset_] <= '9')
+                    ++offset_;
+            }
+            if (source_[offset_] == 'e' || source_[offset_] == 'E')
+            {
+                has_exponent = true;
+                ++offset_;
+                if (source_[offset_] == '+' || source_[offset_] == '-')
+                    ++offset_;
+                const size_t exponent_start = offset_;
+                while (source_[offset_] >= '0' && source_[offset_] <= '9')
+                    ++offset_;
+                if (offset_ == exponent_start)
+                {
+                    token.kind = TokenKind::Invalid;
+                    copy_error_text(token.text, sizeof(token.text), "invalid exponent");
+                    return token;
+                }
+            }
+
+            const size_t length = offset_ - start;
+            if (length >= sizeof(token.text))
+            {
+                token.kind = TokenKind::Invalid;
+                copy_error_text(token.text, sizeof(token.text), "number too long");
+                return token;
+            }
+            std::memcpy(token.text, source_ + start, length);
+            token.text[length] = '\0';
+            char *end = nullptr;
+            token.number = std::strtof(token.text, &end);
+            if (!end || *end != '\0' || !std::isfinite(token.number))
+            {
+                token.kind = TokenKind::Invalid;
+                copy_error_text(token.text, sizeof(token.text), "invalid number");
+                return token;
+            }
+            token.integer = !has_dot && !has_exponent;
+            token.kind = TokenKind::Number;
+            return token;
+        }
+
+        if (std::strchr("{}();,=.+-*/.", c))
+        {
+            token.kind = TokenKind::Punctuation;
+            token.text[0] = c;
+            token.text[1] = '\0';
+            ++offset_;
+            return token;
+        }
+
+        token.kind = TokenKind::Invalid;
+        token.text[0] = c;
+        token.text[1] = '\0';
+        ++offset_;
+        return token;
+    }
+
+private:
+    static bool is_identifier_start(char c)
+    {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    }
+
+    static bool is_identifier_part(char c)
+    {
+        return is_identifier_start(c) || (c >= '0' && c <= '9');
+    }
+
+    static void copy_error_text(char *destination, size_t size, const char *source)
+    {
+        if (size == 0) return;
+        std::snprintf(destination, size, "%s", source);
+    }
+
+    void skip_space_and_comments()
+    {
+        for (;;)
+        {
+            while (source_[offset_] == ' ' || source_[offset_] == '\t' ||
+                   source_[offset_] == '\r' || source_[offset_] == '\n')
+                ++offset_;
+
+            if (source_[offset_] == '/' && source_[offset_ + 1] == '/')
+            {
+                offset_ += 2;
+                while (source_[offset_] != '\0' && source_[offset_] != '\n')
+                    ++offset_;
+                continue;
+            }
+
+            if (source_[offset_] == '/' && source_[offset_ + 1] == '*')
+            {
+                offset_ += 2;
+                while (source_[offset_] != '\0' &&
+                       !(source_[offset_] == '*' && source_[offset_ + 1] == '/'))
+                    ++offset_;
+                if (source_[offset_] == '\0')
+                    return;
+                offset_ += 2;
+                continue;
+            }
+            return;
+        }
+    }
+
+    const char *source_;
+    size_t offset_;
+};
+
+enum class Storage : uint8_t
+{
+    Attribute,
+    Uniform,
+    Varying,
+    Local,
+    Position,
+    FragmentColor
+};
+
+struct ResolvedVariable
+{
+    Storage storage;
+    ShaderType type;
+    uint8_t index;
+};
+
+static size_t component_count(ShaderType type)
+{
+    switch (type)
+    {
+        case ShaderType::Float:
+        case ShaderType::Int:
+        case ShaderType::Bool:
+        case ShaderType::Sampler2D:
+            return 1;
+        case ShaderType::Vec2:
+            return 2;
+        case ShaderType::Vec3:
+            return 3;
+        case ShaderType::Vec4:
+            return 4;
+        case ShaderType::Mat4:
+            return 16;
+        default:
+            return 0;
+    }
+}
+
+static ShaderType vector_type(size_t components)
+{
+    switch (components)
+    {
+        case 1: return ShaderType::Float;
+        case 2: return ShaderType::Vec2;
+        case 3: return ShaderType::Vec3;
+        case 4: return ShaderType::Vec4;
+        default: return ShaderType::Invalid;
+    }
+}
+
+static bool is_vector(ShaderType type)
+{
+    return type == ShaderType::Vec2 || type == ShaderType::Vec3 ||
+           type == ShaderType::Vec4;
+}
+
+static bool is_numeric(ShaderType type)
+{
+    return type == ShaderType::Float || is_vector(type) ||
+           type == ShaderType::Mat4;
+}
+
+class Parser
+{
+public:
+    Parser(ShaderStage stage, const char *source, ShaderModule& module)
+        : stage_(stage), lexer_(source), module_(module), current_(),
+          failed_(false), recursion_depth_(0)
+    {
+        advance();
+    }
+
+    bool parse()
+    {
+        while (!failed_ && current_.kind != TokenKind::End &&
+               !is_identifier("void"))
+        {
+            if (is_identifier("precision"))
+                parse_precision();
+            else
+                parse_global_declaration();
+        }
+
+        if (!failed_)
+            parse_main();
+
+        if (!failed_ && current_.kind != TokenKind::End)
+            fail("unexpected tokens after main function");
+        return !failed_;
+    }
+
+private:
+    void advance()
+    {
+        current_ = lexer_.next();
+        if (current_.kind == TokenKind::Invalid && !failed_)
+            fail("invalid token");
+    }
+
+    bool is_identifier(const char *name) const
+    {
+        return current_.kind == TokenKind::Identifier &&
+               std::strcmp(current_.text, name) == 0;
+    }
+
+    bool is_punctuation(char value) const
+    {
+        return current_.kind == TokenKind::Punctuation &&
+               current_.text[0] == value;
+    }
+
+    bool accept_punctuation(char value)
+    {
+        if (!is_punctuation(value))
+            return false;
+        advance();
+        return true;
+    }
+
+    bool expect_punctuation(char value)
+    {
+        if (accept_punctuation(value))
+            return true;
+        char message[64];
+        std::snprintf(message, sizeof(message), "expected '%c'", value);
+        fail(message);
+        return false;
+    }
+
+    bool expect_identifier(const char *name)
+    {
+        if (!is_identifier(name))
+        {
+            char message[64];
+            std::snprintf(message, sizeof(message), "expected %s", name);
+            fail(message);
+            return false;
+        }
+        advance();
+        return true;
+    }
+
+    void fail(const char *message)
+    {
+        if (failed_)
+            return;
+        failed_ = true;
+        std::snprintf(module_.info_log, sizeof(module_.info_log),
+                      "GLSL ES subset: %s at byte %lu",
+                      message, static_cast<unsigned long>(current_.offset));
+    }
+
+    ShaderType parse_type()
+    {
+        if (current_.kind != TokenKind::Identifier)
+        {
+            fail("expected a type name");
+            return ShaderType::Invalid;
+        }
+
+        ShaderType type = ShaderType::Invalid;
+        if (std::strcmp(current_.text, "float") == 0)
+            type = ShaderType::Float;
+        else if (std::strcmp(current_.text, "int") == 0)
+            type = ShaderType::Int;
+        else if (std::strcmp(current_.text, "bool") == 0)
+            type = ShaderType::Bool;
+        else if (std::strcmp(current_.text, "vec2") == 0)
+            type = ShaderType::Vec2;
+        else if (std::strcmp(current_.text, "vec3") == 0)
+            type = ShaderType::Vec3;
+        else if (std::strcmp(current_.text, "vec4") == 0)
+            type = ShaderType::Vec4;
+        else if (std::strcmp(current_.text, "mat4") == 0)
+            type = ShaderType::Mat4;
+        else if (std::strcmp(current_.text, "sampler2D") == 0)
+            type = ShaderType::Sampler2D;
+
+        if (type == ShaderType::Invalid)
+        {
+            fail("unsupported type");
+            return type;
+        }
+        advance();
+        return type;
+    }
+
+    void parse_precision()
+    {
+        advance(); /* precision */
+        if (!is_identifier("lowp") && !is_identifier("mediump") &&
+            !is_identifier("highp"))
+        {
+            fail("expected lowp, mediump or highp precision qualifier");
+            return;
+        }
+        advance();
+        const ShaderType type = parse_type();
+        if (type != ShaderType::Float && type != ShaderType::Int &&
+            type != ShaderType::Bool)
+            fail("precision statements only support scalar types");
+        expect_punctuation(';');
+    }
+
+    void parse_global_declaration()
+    {
+        Storage storage;
+        if (is_identifier("attribute"))
+            storage = Storage::Attribute;
+        else if (is_identifier("uniform"))
+            storage = Storage::Uniform;
+        else if (is_identifier("varying"))
+            storage = Storage::Varying;
+        else
+        {
+            fail("expected attribute, uniform, varying or precision declaration");
+            return;
+        }
+        advance();
+
+        const ShaderType type = parse_type();
+        if (failed_)
+            return;
+
+        if (current_.kind != TokenKind::Identifier)
+        {
+            fail("expected variable name");
+            return;
+        }
+        char name[GLSL_NAME_BYTES];
+        std::snprintf(name, sizeof(name), "%s", current_.text);
+        advance();
+
+        if (accept_punctuation('['))
+        {
+            fail("arrays are not supported yet");
+            return;
+        }
+        expect_punctuation(';');
+        if (failed_)
+            return;
+
+        if (lookup(name).type != ShaderType::Invalid)
+        {
+            fail("duplicate variable declaration");
+            return;
+        }
+
+        ShaderVariable *variables = nullptr;
+        size_t *count = nullptr;
+        size_t capacity = 0;
+
+        if (storage == Storage::Attribute)
+        {
+            if (stage_ != ShaderStage::Vertex)
+            {
+                fail("attributes are only valid in vertex shaders");
+                return;
+            }
+            variables = module_.attributes;
+            count = &module_.attribute_count;
+            capacity = GLSL_MAX_ATTRIBUTES;
+        }
+        else if (storage == Storage::Uniform)
+        {
+            variables = module_.uniforms;
+            count = &module_.uniform_count;
+            capacity = GLSL_MAX_UNIFORMS;
+        }
+        else
+        {
+            variables = module_.varyings;
+            count = &module_.varying_count;
+            capacity = GLSL_MAX_VARYINGS;
+        }
+
+        if (*count >= capacity)
+        {
+            fail("shader variable limit exceeded");
+            return;
+        }
+
+        ShaderVariable& variable = variables[*count];
+        std::snprintf(variable.name, sizeof(variable.name), "%s", name);
+        variable.type = type;
+        variable.index = static_cast<uint8_t>(*count);
+        ++(*count);
+    }
+
+    ResolvedVariable lookup(const char *name) const
+    {
+        if (stage_ == ShaderStage::Vertex &&
+            std::strcmp(name, "gl_Position") == 0)
+            return {Storage::Position, ShaderType::Vec4, 0};
+        if (stage_ == ShaderStage::Fragment &&
+            std::strcmp(name, "gl_FragColor") == 0)
+            return {Storage::FragmentColor, ShaderType::Vec4, 0};
+
+        const ShaderVariable *variable = find_variable(
+            module_.attributes, module_.attribute_count, name);
+        if (variable)
+            return {Storage::Attribute, variable->type, variable->index};
+
+        variable = find_variable(
+            module_.uniforms, module_.uniform_count, name);
+        if (variable)
+            return {Storage::Uniform, variable->type, variable->index};
+
+        variable = find_variable(
+            module_.varyings, module_.varying_count, name);
+        if (variable)
+            return {Storage::Varying, variable->type, variable->index};
+
+        variable = find_variable(
+            module_.locals, module_.local_count, name);
+        if (variable)
+            return {Storage::Local, variable->type, variable->index};
+
+        return {Storage::Local, ShaderType::Invalid, 0};
+    }
+
+    static const ShaderVariable *find_variable(
+        const ShaderVariable *variables,
+        size_t count,
+        const char *name)
+    {
+        for (size_t i = 0; i < count; ++i)
+            if (std::strcmp(variables[i].name, name) == 0)
+                return &variables[i];
+        return nullptr;
+    }
+
+    bool emit(const ShaderInstruction& instruction)
+    {
+        if (module_.instruction_count >= GLSL_MAX_INSTRUCTIONS)
+        {
+            fail("instruction budget exceeded");
+            return false;
+        }
+        module_.instructions[module_.instruction_count++] = instruction;
+        return true;
+    }
+
+    bool emit_simple(ShaderOp op, ShaderType type, uint8_t index = 0,
+                     uint8_t argument_count = 0)
+    {
+        ShaderInstruction instruction = {};
+        instruction.op = op;
+        instruction.type = type;
+        instruction.index = index;
+        instruction.argument_count = argument_count;
+        return emit(instruction);
+    }
+
+    void parse_main()
+    {
+        expect_identifier("void");
+        expect_identifier("main");
+        expect_punctuation('(');
+        expect_punctuation(')');
+        expect_punctuation('{');
+
+        while (!failed_ && !is_punctuation('}') &&
+               current_.kind != TokenKind::End)
+            parse_statement();
+
+        expect_punctuation('}');
+    }
+
+    bool is_type_token() const
+    {
+        if (current_.kind != TokenKind::Identifier)
+            return false;
+        return std::strcmp(current_.text, "float") == 0 ||
+               std::strcmp(current_.text, "int") == 0 ||
+               std::strcmp(current_.text, "bool") == 0 ||
+               std::strcmp(current_.text, "vec2") == 0 ||
+               std::strcmp(current_.text, "vec3") == 0 ||
+               std::strcmp(current_.text, "vec4") == 0 ||
+               std::strcmp(current_.text, "mat4") == 0 ||
+               std::strcmp(current_.text, "sampler2D") == 0;
+    }
+
+    void parse_statement()
+    {
+        if (is_type_token())
+        {
+            parse_local_declaration();
+            return;
+        }
+
+        if (current_.kind != TokenKind::Identifier)
+        {
+            fail("expected a local declaration or assignment");
+            return;
+        }
+
+        char name[GLSL_NAME_BYTES];
+        std::snprintf(name, sizeof(name), "%s", current_.text);
+        advance();
+        const ResolvedVariable target = lookup(name);
+        if (target.type == ShaderType::Invalid)
+        {
+            fail("assignment target is not declared");
+            return;
+        }
+        if (target.storage == Storage::Attribute ||
+            target.storage == Storage::Uniform ||
+            target.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex ||
+            target.storage == Storage::Position && stage_ == ShaderStage::Fragment ||
+            target.storage == Storage::Varying && stage_ == ShaderStage::Fragment)
+        {
+            fail("assignment target is read-only or unavailable in this shader stage");
+            return;
+        }
+
+        expect_punctuation('=');
+        const ShaderType expression_type = parse_expression(1);
+        if (expression_type != target.type)
+        {
+            fail("assignment type does not match target type");
+            return;
+        }
+        expect_punctuation(';');
+
+        switch (target.storage)
+        {
+            case Storage::Varying:
+                emit_simple(ShaderOp::StoreVarying, target.type, target.index);
+                break;
+            case Storage::Local:
+                emit_simple(ShaderOp::StoreLocal, target.type, target.index);
+                break;
+            case Storage::Position:
+                emit_simple(ShaderOp::StorePosition, target.type);
+                break;
+            case Storage::FragmentColor:
+                emit_simple(ShaderOp::StoreFragmentColor, target.type);
+                break;
+            default:
+                fail("unsupported assignment storage");
+                break;
+        }
+    }
+
+    void parse_local_declaration()
+    {
+        const ShaderType type = parse_type();
+        if (current_.kind != TokenKind::Identifier)
+        {
+            fail("expected local variable name");
+            return;
+        }
+
+        char name[GLSL_NAME_BYTES];
+        std::snprintf(name, sizeof(name), "%s", current_.text);
+        advance();
+
+        if (lookup(name).type != ShaderType::Invalid)
+        {
+            fail("duplicate local variable");
+            return;
+        }
+        if (module_.local_count >= GLSL_MAX_LOCALS)
+        {
+            fail("local variable limit exceeded");
+            return;
+        }
+
+        ShaderVariable& variable = module_.locals[module_.local_count];
+        std::snprintf(variable.name, sizeof(variable.name), "%s", name);
+        variable.type = type;
+        variable.index = static_cast<uint8_t>(module_.local_count);
+        ++module_.local_count;
+
+        if (accept_punctuation('='))
+        {
+            const ShaderType expression_type = parse_expression(1);
+            if (expression_type != type)
+            {
+                fail("local initializer type mismatch");
+                return;
+            }
+            emit_simple(ShaderOp::StoreLocal, type, variable.index);
+        }
+        expect_punctuation(';');
+    }
+
+    int precedence() const
+    {
+        if (is_punctuation('+') || is_punctuation('-'))
+            return 1;
+        if (is_punctuation('*') || is_punctuation('/'))
+            return 2;
+        return 0;
+    }
+
+    void parse_unary(ShaderType& result_type)
+    {
+        if (accept_punctuation('-'))
+        {
+            parse_unary(result_type);
+            if (!is_numeric(result_type) || result_type == ShaderType::Mat4)
+            {
+                fail("unary minus requires a scalar or vector");
+                return;
+            }
+            emit_simple(ShaderOp::Negate, result_type);
+            return;
+        }
+        if (accept_punctuation('+'))
+        {
+            parse_unary(result_type);
+            return;
+        }
+        parse_primary(result_type);
+    }
+
+    ShaderType parse_expression(int minimum_precedence)
+    {
+        if (++recursion_depth_ > 32)
+        {
+            fail("expression nesting limit exceeded");
+            --recursion_depth_;
+            return ShaderType::Invalid;
+        }
+
+        ShaderType left_type = ShaderType::Invalid;
+        parse_unary(left_type);
+        while (!failed_)
+        {
+            const int current_precedence = precedence();
+            if (current_precedence < minimum_precedence || current_precedence == 0)
+                break;
+
+            const char operation = current_.text[0];
+            advance();
+            const ShaderType right_type = parse_expression(current_precedence + 1);
+            const ShaderType result_type =
+                result_of_binary(operation, left_type, right_type);
+            if (result_type == ShaderType::Invalid)
+            {
+                fail("incompatible operand types");
+                break;
+            }
+
+            const ShaderOp op = operation == '+' ? ShaderOp::Add :
+                                operation == '-' ? ShaderOp::Subtract :
+                                operation == '*' ? ShaderOp::Multiply :
+                                                   ShaderOp::Divide;
+            emit_simple(op, result_type);
+            left_type = result_type;
+        }
+
+        --recursion_depth_;
+        return left_type;
+    }
+
+    static ShaderType result_of_binary(
+        char operation,
+        ShaderType left,
+        ShaderType right)
+    {
+        if (left == ShaderType::Invalid || right == ShaderType::Invalid)
+            return ShaderType::Invalid;
+
+        if (operation == '+' || operation == '-')
+        {
+            if (left == right && (left == ShaderType::Float ||
+                                  left == ShaderType::Vec2 ||
+                                  left == ShaderType::Vec3 ||
+                                  left == ShaderType::Vec4))
+                return left;
+            return ShaderType::Invalid;
+        }
+
+        if (operation == '*')
+        {
+            if (left == ShaderType::Mat4 && right == ShaderType::Vec4)
+                return ShaderType::Vec4;
+            if (left == ShaderType::Mat4 && right == ShaderType::Mat4)
+                return ShaderType::Mat4;
+            if (left == right && (left == ShaderType::Float ||
+                                  left == ShaderType::Vec2 ||
+                                  left == ShaderType::Vec3 ||
+                                  left == ShaderType::Vec4))
+                return left;
+            if (left == ShaderType::Float && is_vector(right))
+                return right;
+            if (right == ShaderType::Float && is_vector(left))
+                return left;
+            return ShaderType::Invalid;
+        }
+
+        if (operation == '/')
+        {
+            if (left == right && (left == ShaderType::Float ||
+                                  left == ShaderType::Vec2 ||
+                                  left == ShaderType::Vec3 ||
+                                  left == ShaderType::Vec4))
+                return left;
+            if (is_vector(left) && right == ShaderType::Float)
+                return left;
+            return ShaderType::Invalid;
+        }
+
+        return ShaderType::Invalid;
+    }
+
+    void parse_primary(ShaderType& result_type)
+    {
+        if (current_.kind == TokenKind::Number)
+        {
+            ShaderInstruction instruction = {};
+            instruction.op = current_.integer ? ShaderOp::PushInt : ShaderOp::PushFloat;
+            instruction.type = current_.integer ? ShaderType::Int : ShaderType::Float;
+            instruction.literal = current_.number;
+            emit(instruction);
+            result_type = instruction.type;
+            advance();
+            parse_swizzle(result_type);
+            return;
+        }
+
+        if (accept_punctuation('('))
+        {
+            result_type = parse_expression(1);
+            expect_punctuation(')');
+            parse_swizzle(result_type);
+            return;
+        }
+
+        if (current_.kind != TokenKind::Identifier)
+        {
+            fail("expected an expression");
+            result_type = ShaderType::Invalid;
+            return;
+        }
+
+        char name[GLSL_NAME_BYTES];
+        std::snprintf(name, sizeof(name), "%s", current_.text);
+        advance();
+
+        if (accept_punctuation('('))
+        {
+            result_type = parse_call(name);
+            parse_swizzle(result_type);
+            return;
+        }
+
+        if (std::strcmp(name, "true") == 0 || std::strcmp(name, "false") == 0)
+        {
+            ShaderInstruction instruction = {};
+            instruction.op = ShaderOp::PushInt;
+            instruction.type = ShaderType::Bool;
+            instruction.literal = std::strcmp(name, "true") == 0 ? 1.0f : 0.0f;
+            emit(instruction);
+            result_type = ShaderType::Bool;
+            parse_swizzle(result_type);
+            return;
+        }
+
+        const ResolvedVariable variable = lookup(name);
+        if (variable.type == ShaderType::Invalid)
+        {
+            fail("identifier is not declared");
+            result_type = ShaderType::Invalid;
+            return;
+        }
+        if ((variable.storage == Storage::Position ||
+             variable.storage == Storage::FragmentColor) &&
+            ((variable.storage == Storage::Position && stage_ != ShaderStage::Vertex) ||
+             (variable.storage == Storage::FragmentColor && stage_ != ShaderStage::Fragment)))
+        {
+            fail("built-in variable is unavailable in this shader stage");
+            result_type = ShaderType::Invalid;
+            return;
+        }
+
+        ShaderOp op = ShaderOp::LoadLocal;
+        switch (variable.storage)
+        {
+            case Storage::Attribute: op = ShaderOp::LoadAttribute; break;
+            case Storage::Uniform: op = ShaderOp::LoadUniform; break;
+            case Storage::Varying: op = ShaderOp::LoadVarying; break;
+            case Storage::Local: op = ShaderOp::LoadLocal; break;
+            default:
+                fail("output built-ins cannot be used as expressions");
+                result_type = ShaderType::Invalid;
+                return;
+        }
+        emit_simple(op, variable.type, variable.index);
+        result_type = variable.type;
+        parse_swizzle(result_type);
+    }
+
+    ShaderType parse_call(const char *name)
+    {
+        ShaderType arguments[4] = {};
+        size_t argument_count = 0;
+
+        if (!accept_punctuation(')'))
+        {
+            for (;;)
+            {
+                if (argument_count >= 4)
+                {
+                    fail("function argument limit exceeded");
+                    return ShaderType::Invalid;
+                }
+                arguments[argument_count++] = parse_expression(1);
+                if (failed_)
+                    return ShaderType::Invalid;
+                if (accept_punctuation(')'))
+                    break;
+                if (!expect_punctuation(','))
+                    return ShaderType::Invalid;
+            }
+        }
+
+        ShaderType constructor = constructor_type(name);
+        if (constructor != ShaderType::Invalid)
+        {
+            if (!valid_constructor(constructor, arguments, argument_count))
+            {
+                fail("invalid constructor arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Construct, constructor, 0,
+                        static_cast<uint8_t>(argument_count));
+            return constructor;
+        }
+
+        if (std::strcmp(name, "texture2D") == 0)
+        {
+            if (argument_count != 2 ||
+                arguments[0] != ShaderType::Sampler2D ||
+                arguments[1] != ShaderType::Vec2)
+            {
+                fail("texture2D requires sampler2D and vec2 arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Texture2D, ShaderType::Vec4, 0, 2);
+            return ShaderType::Vec4;
+        }
+
+        if (std::strcmp(name, "dot") == 0)
+        {
+            if (argument_count != 2 || !is_vector(arguments[0]) ||
+                arguments[0] != arguments[1])
+            {
+                fail("dot requires two matching vector arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Dot, ShaderType::Float, 0, 2);
+            return ShaderType::Float;
+        }
+
+        if (std::strcmp(name, "length") == 0)
+        {
+            if (argument_count != 1 || !is_vector(arguments[0]))
+            {
+                fail("length requires a vector argument");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Length, ShaderType::Float, 0, 1);
+            return ShaderType::Float;
+        }
+
+        if (std::strcmp(name, "normalize") == 0)
+        {
+            if (argument_count != 1 || !is_vector(arguments[0]))
+            {
+                fail("normalize requires a vector argument");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Normalize, arguments[0], 0, 1);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "mix") == 0)
+        {
+            if (argument_count != 3 || arguments[0] != arguments[1] ||
+                (arguments[0] != ShaderType::Float && !is_vector(arguments[0])) ||
+                arguments[2] != ShaderType::Float)
+            {
+                fail("mix requires matching values and a scalar interpolation factor");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Mix, arguments[0], 0, 3);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "clamp") == 0)
+        {
+            if (argument_count != 3 || arguments[0] != arguments[1] ||
+                arguments[0] != arguments[2] ||
+                (arguments[0] != ShaderType::Float && !is_vector(arguments[0])))
+            {
+                fail("clamp requires three matching scalar or vector arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Clamp, arguments[0], 0, 3);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "min") == 0 || std::strcmp(name, "max") == 0)
+        {
+            if (argument_count != 2 || arguments[0] != arguments[1] ||
+                (arguments[0] != ShaderType::Float && !is_vector(arguments[0])))
+            {
+                fail("min/max require matching scalar or vector arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(std::strcmp(name, "min") == 0
+                ? ShaderOp::Minimum : ShaderOp::Maximum,
+                arguments[0], 0, 2);
+            return arguments[0];
+        }
+
+        fail("unsupported built-in function");
+        return ShaderType::Invalid;
+    }
+
+    static ShaderType constructor_type(const char *name)
+    {
+        if (std::strcmp(name, "float") == 0) return ShaderType::Float;
+        if (std::strcmp(name, "int") == 0) return ShaderType::Int;
+        if (std::strcmp(name, "bool") == 0) return ShaderType::Bool;
+        if (std::strcmp(name, "vec2") == 0) return ShaderType::Vec2;
+        if (std::strcmp(name, "vec3") == 0) return ShaderType::Vec3;
+        if (std::strcmp(name, "vec4") == 0) return ShaderType::Vec4;
+        if (std::strcmp(name, "mat4") == 0) return ShaderType::Mat4;
+        return ShaderType::Invalid;
+    }
+
+    static bool valid_constructor(
+        ShaderType destination,
+        const ShaderType *arguments,
+        size_t argument_count)
+    {
+        if (argument_count == 0)
+            return false;
+        const size_t required = component_count(destination);
+        size_t supplied = 0;
+        for (size_t i = 0; i < argument_count; ++i)
+        {
+            const size_t count = component_count(arguments[i]);
+            if (count == 0 || arguments[i] == ShaderType::Sampler2D ||
+                arguments[i] == ShaderType::Bool)
+                return false;
+            supplied += count;
+        }
+
+        if (argument_count == 1 && arguments[0] == ShaderType::Float)
+            return true;
+        if (argument_count == 1 && arguments[0] == destination)
+            return true;
+        if (destination == ShaderType::Float || destination == ShaderType::Int ||
+            destination == ShaderType::Bool)
+            return argument_count == 1 &&
+                (arguments[0] == ShaderType::Float ||
+                 arguments[0] == ShaderType::Int ||
+                 arguments[0] == ShaderType::Bool);
+        return supplied == required;
+    }
+
+    void parse_swizzle(ShaderType& type)
+    {
+        if (!accept_punctuation('.'))
+            return;
+
+        if (!is_vector(type) || current_.kind != TokenKind::Identifier)
+        {
+            fail("swizzles require a vector and a component selector");
+            type = ShaderType::Invalid;
+            return;
+        }
+
+        const size_t length = std::strlen(current_.text);
+        if (length == 0 || length > 4)
+        {
+            fail("invalid swizzle length");
+            type = ShaderType::Invalid;
+            return;
+        }
+
+        ShaderInstruction instruction = {};
+        instruction.op = ShaderOp::Swizzle;
+        instruction.type = vector_type(length);
+        instruction.argument_count = static_cast<uint8_t>(length);
+
+        const char *selectors = "xyzw";
+        const char *aliases = "rgba";
+        const size_t source_components = component_count(type);
+        for (size_t i = 0; i < length; ++i)
+        {
+            const char *position = std::strchr(selectors, current_.text[i]);
+            if (!position)
+                position = std::strchr(aliases, current_.text[i]);
+            if (!position)
+            {
+                fail("invalid swizzle component");
+                type = ShaderType::Invalid;
+                return;
+            }
+            size_t component = static_cast<size_t>(
+                position - (std::strchr(selectors, current_.text[i])
+                    ? selectors : aliases));
+            if (component >= source_components)
+            {
+                fail("swizzle component exceeds vector width");
+                type = ShaderType::Invalid;
+                return;
+            }
+            instruction.swizzle[i] = static_cast<uint8_t>(component);
+        }
+
+        advance();
+        emit(instruction);
+        type = instruction.type;
+    }
+
+    ShaderStage stage_;
+    Lexer lexer_;
+    ShaderModule& module_;
+    Token current_;
+    bool failed_;
+    size_t recursion_depth_;
+};
+
+static ShaderValue zero_value(ShaderType type)
+{
+    ShaderValue value = {};
+    value.type = type;
+    return value;
+}
+
+static bool pop_value(
+    ShaderValue stack[GLSL_MAX_STACK],
+    size_t& stack_size,
+    ShaderValue& value)
+{
+    if (stack_size == 0)
+        return false;
+    value = stack[--stack_size];
+    return true;
+}
+
+static bool push_value(
+    ShaderValue stack[GLSL_MAX_STACK],
+    size_t& stack_size,
+    const ShaderValue& value)
+{
+    if (stack_size >= GLSL_MAX_STACK)
+        return false;
+    stack[stack_size++] = value;
+    return true;
+}
+
+static void apply_binary(
+    ShaderOp op,
+    const ShaderValue& left,
+    const ShaderValue& right,
+    ShaderValue& result)
+{
+    result = zero_value(left.type);
+    const size_t count = component_count(left.type);
+
+    if (op == ShaderOp::Multiply &&
+        left.type == ShaderType::Mat4 && right.type == ShaderType::Vec4)
+    {
+        result = zero_value(ShaderType::Vec4);
+        for (size_t row = 0; row < 4; ++row)
+            for (size_t column = 0; column < 4; ++column)
+                result.data[row] +=
+                    left.data[column * 4 + row] * right.data[column];
+        return;
+    }
+
+    if (op == ShaderOp::Multiply &&
+        left.type == ShaderType::Mat4 && right.type == ShaderType::Mat4)
+    {
+        result = zero_value(ShaderType::Mat4);
+        for (size_t column = 0; column < 4; ++column)
+        {
+            for (size_t row = 0; row < 4; ++row)
+            {
+                for (size_t k = 0; k < 4; ++k)
+                    result.data[column * 4 + row] +=
+                        left.data[k * 4 + row] * right.data[column * 4 + k];
+            }
+        }
+        return;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const float a = left.data[i];
+        const float b = right.data[
+            component_count(right.type) == 1 ? 0 : i];
+        switch (op)
+        {
+            case ShaderOp::Add: result.data[i] = a + b; break;
+            case ShaderOp::Subtract: result.data[i] = a - b; break;
+            case ShaderOp::Multiply: result.data[i] = a * b; break;
+            case ShaderOp::Divide:
+                result.data[i] = b == 0.0f ? 0.0f : a / b;
+                break;
+            default: break;
+        }
+    }
+}
+
+static bool finite_value(const ShaderValue& value)
+{
+    const size_t count = component_count(value.type);
+    for (size_t i = 0; i < count; ++i)
+        if (!std::isfinite(value.data[i]))
+            return false;
+    return true;
+}
+
+} // namespace
+
+bool compile_glsl(
+    ShaderStage stage,
+    const char *source,
+    ShaderModule& module)
+{
+    module = {};
+    module.stage = stage;
+    if (!source)
+    {
+        std::snprintf(module.info_log, sizeof(module.info_log),
+                      "GLSL ES subset: source pointer is null");
+        return false;
+    }
+
+    Parser parser(stage, source, module);
+    module.compiled = parser.parse();
+    return module.compiled;
+}
+
+bool execute_glsl(
+    const ShaderModule& module,
+    ShaderRuntime& runtime,
+    TextureSampleFunction texture_sample,
+    void *user_data)
+{
+    if (!module.compiled)
+        return false;
+
+    ShaderValue stack[GLSL_MAX_STACK] = {};
+    size_t stack_size = 0;
+
+    for (size_t pc = 0; pc < module.instruction_count; ++pc)
+    {
+        const ShaderInstruction& instruction = module.instructions[pc];
+        ShaderValue a = {};
+        ShaderValue b = {};
+        ShaderValue c = {};
+        ShaderValue result = {};
+
+        switch (instruction.op)
+        {
+            case ShaderOp::PushFloat:
+            case ShaderOp::PushInt:
+                result = zero_value(instruction.type);
+                result.data[0] = instruction.literal;
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::LoadAttribute:
+                if (instruction.index >= GLSL_MAX_ATTRIBUTES ||
+                    !push_value(stack, stack_size, runtime.attributes[instruction.index]))
+                    return false;
+                break;
+            case ShaderOp::LoadUniform:
+                if (instruction.index >= GLSL_MAX_UNIFORMS ||
+                    !push_value(stack, stack_size, runtime.uniforms[instruction.index]))
+                    return false;
+                break;
+            case ShaderOp::LoadVarying:
+                if (instruction.index >= GLSL_MAX_VARYINGS ||
+                    !push_value(stack, stack_size, runtime.varyings[instruction.index]))
+                    return false;
+                break;
+            case ShaderOp::LoadLocal:
+                if (instruction.index >= GLSL_MAX_LOCALS ||
+                    !push_value(stack, stack_size, runtime.locals[instruction.index]))
+                    return false;
+                break;
+
+            case ShaderOp::StoreVarying:
+                if (!pop_value(stack, stack_size, a) ||
+                    instruction.index >= GLSL_MAX_VARYINGS ||
+                    a.type != instruction.type)
+                    return false;
+                runtime.varyings[instruction.index] = a;
+                break;
+            case ShaderOp::StoreLocal:
+                if (!pop_value(stack, stack_size, a) ||
+                    instruction.index >= GLSL_MAX_LOCALS ||
+                    a.type != instruction.type)
+                    return false;
+                runtime.locals[instruction.index] = a;
+                break;
+            case ShaderOp::StorePosition:
+                if (!pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Vec4)
+                    return false;
+                runtime.position = a;
+                break;
+            case ShaderOp::StoreFragmentColor:
+                if (!pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Vec4)
+                    return false;
+                runtime.fragment_color = a;
+                break;
+
+            case ShaderOp::Construct:
+            {
+                if (instruction.argument_count == 0 ||
+                    instruction.argument_count > 4 ||
+                    stack_size < instruction.argument_count)
+                    return false;
+                ShaderValue args[4] = {};
+                for (size_t i = instruction.argument_count; i > 0; --i)
+                    if (!pop_value(stack, stack_size, args[i - 1]))
+                        return false;
+
+                result = zero_value(instruction.type);
+                const size_t wanted = component_count(instruction.type);
+                if (instruction.argument_count == 1 &&
+                    component_count(args[0].type) == 1)
+                {
+                    const float scalar = args[0].data[0];
+                    if (instruction.type == ShaderType::Mat4)
+                    {
+                        result.data[0] = scalar;
+                        result.data[5] = scalar;
+                        result.data[10] = scalar;
+                        result.data[15] = scalar;
+                    }
+                    else
+                    {
+                        for (size_t i = 0; i < wanted; ++i)
+                            result.data[i] = scalar;
+                    }
+                }
+                else
+                {
+                    size_t offset = 0;
+                    for (size_t arg = 0; arg < instruction.argument_count; ++arg)
+                    {
+                        const size_t count = component_count(args[arg].type);
+                        if (offset + count > wanted)
+                            return false;
+                        for (size_t i = 0; i < count; ++i)
+                            result.data[offset++] = args[arg].data[i];
+                    }
+                    if (offset != wanted)
+                        return false;
+                }
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+            }
+
+            case ShaderOp::Swizzle:
+                if (!pop_value(stack, stack_size, a) ||
+                    !is_vector(a.type) ||
+                    instruction.argument_count == 0 ||
+                    instruction.argument_count > 4)
+                    return false;
+                result = zero_value(instruction.type);
+                for (size_t i = 0; i < instruction.argument_count; ++i)
+                    result.data[i] = a.data[instruction.swizzle[i]];
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Negate:
+                if (!pop_value(stack, stack_size, a) ||
+                    a.type != instruction.type)
+                    return false;
+                result = a;
+                for (size_t i = 0; i < component_count(a.type); ++i)
+                    result.data[i] = -result.data[i];
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Add:
+            case ShaderOp::Subtract:
+            case ShaderOp::Multiply:
+            case ShaderOp::Divide:
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    instruction.type != (instruction.op == ShaderOp::Multiply &&
+                        a.type == ShaderType::Mat4 && b.type == ShaderType::Vec4
+                        ? ShaderType::Vec4 : a.type))
+                    return false;
+                apply_binary(instruction.op, a, b, result);
+                if (!finite_value(result) || !push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Dot:
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != b.type || !is_vector(a.type))
+                    return false;
+                result = zero_value(ShaderType::Float);
+                for (size_t i = 0; i < component_count(a.type); ++i)
+                    result.data[0] += a.data[i] * b.data[i];
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Length:
+                if (!pop_value(stack, stack_size, a) || !is_vector(a.type))
+                    return false;
+                result = zero_value(ShaderType::Float);
+                for (size_t i = 0; i < component_count(a.type); ++i)
+                    result.data[0] += a.data[i] * a.data[i];
+                result.data[0] = std::sqrt(result.data[0]);
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Normalize:
+                if (!pop_value(stack, stack_size, a) || !is_vector(a.type))
+                    return false;
+                result = a;
+                {
+                    float length_squared = 0.0f;
+                    for (size_t i = 0; i < component_count(a.type); ++i)
+                        length_squared += a.data[i] * a.data[i];
+                    const float inverse_length = length_squared > 0.0f
+                        ? 1.0f / std::sqrt(length_squared) : 0.0f;
+                    for (size_t i = 0; i < component_count(a.type); ++i)
+                        result.data[i] *= inverse_length;
+                }
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Mix:
+                if (!pop_value(stack, stack_size, c) ||
+                    !pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != b.type || c.type != ShaderType::Float)
+                    return false;
+                result = zero_value(a.type);
+                for (size_t i = 0; i < component_count(a.type); ++i)
+                    result.data[i] = a.data[i] * (1.0f - c.data[0]) +
+                                     b.data[i] * c.data[0];
+                if (!finite_value(result) || !push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Clamp:
+                if (!pop_value(stack, stack_size, c) ||
+                    !pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != b.type || a.type != c.type)
+                    return false;
+                result = zero_value(a.type);
+                for (size_t i = 0; i < component_count(a.type); ++i)
+                    result.data[i] = std::max(b.data[i],
+                        std::min(a.data[i], c.data[i]));
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Minimum:
+            case ShaderOp::Maximum:
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != b.type)
+                    return false;
+                result = zero_value(a.type);
+                for (size_t i = 0; i < component_count(a.type); ++i)
+                    result.data[i] = instruction.op == ShaderOp::Minimum
+                        ? std::min(a.data[i], b.data[i])
+                        : std::max(a.data[i], b.data[i]);
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::Texture2D:
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Sampler2D ||
+                    b.type != ShaderType::Vec2 ||
+                    !texture_sample)
+                    return false;
+                result = zero_value(ShaderType::Vec4);
+                if (!texture_sample(static_cast<int>(a.data[0]),
+                                    b.data[0], b.data[1],
+                                    result.data, user_data))
+                    return false;
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+        }
+    }
+
+    return stack_size == 0;
+}
+
+} // namespace fxgl
