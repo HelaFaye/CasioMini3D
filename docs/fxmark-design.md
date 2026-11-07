@@ -60,7 +60,7 @@ The interactive block-world demo in `V3/src/world.cpp` is separate from the four
 
 ### 2.4 Host-side rasterizer and benchmark regression tests
 
-The host test target compiles the production `V3/src/shapes/triangle.cpp` source with minimal Gint header stubs. It checks:
+The host test target compiles the production `V3/src/shapes/triangle.cpp` and `V3/src/bench.cpp` sources with minimal Gint header stubs. It checks:
 
 - solid-fill color output and the current 230-pixel coverage for a known right-triangle fixture;
 - all six vertex permutations for the same triangle coverage;
