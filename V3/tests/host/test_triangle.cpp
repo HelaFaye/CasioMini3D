@@ -180,6 +180,23 @@ static void test_off_screen_and_clipped_triangles()
         SOLID_COLOR);
     assert(invalid_pixel_writes == 0);
     assert(uv_reads == 0);
+
+    DrawTriangleSolid(
+        VertexLocal{20, 200, 0, 0},
+        VertexLocal{40, 250, 0, 0},
+        VertexLocal{0, 250, 0, 0},
+        SOLID_COLOR);
+    assert(pixel_writes > 0);
+    assert(invalid_pixel_writes == 0);
+
+    reset_framebuffer();
+    DrawTriangleSolid(
+        VertexLocal{20, 230, 0, 0},
+        VertexLocal{40, 250, 0, 0},
+        VertexLocal{0, 250, 0, 0},
+        SOLID_COLOR);
+    assert(pixel_writes == 0);
+    assert(invalid_pixel_writes == 0);
 }
 
 static void test_textured_path_still_samples_uv_map()
@@ -191,7 +208,7 @@ static void test_textured_path_still_samples_uv_map()
         VertexLocal{30, 10, FLOAT_TO_FIXED(39), 0},
         VertexLocal{10, 30, 0, FLOAT_TO_FIXED(39)});
 
-    assert(pixel_writes > 0);
+    assert(pixel_writes == 230);
     assert(uv_reads == pixel_writes);
     assert(invalid_pixel_writes == 0);
     assert(invalid_uv_reads == 0);
