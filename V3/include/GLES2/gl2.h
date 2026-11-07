@@ -173,6 +173,7 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_REPEAT 0x2901
 #define GL_MIRRORED_REPEAT 0x8370
 #define GL_RGB 0x1907
+#define GL_RGBA 0x1908
 #define GL_UNSIGNED_SHORT_5_6_5 0x8363
 
 #define GL_ARRAY_BUFFER 0x8892
@@ -368,6 +369,8 @@ void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 void glClearDepthf(GLclampf depth);
 void glClearStencil(GLint s);
 void glClear(GLbitfield mask);
+void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
+    GLenum format, GLenum type, GLvoid *pixels);
 void glEnable(GLenum cap);
 void glDisable(GLenum cap);
 GLboolean glIsEnabled(GLenum cap);
