@@ -601,9 +601,12 @@ private:
         }
         if (target.storage == Storage::Attribute ||
             target.storage == Storage::Uniform ||
-            target.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex ||
-            target.storage == Storage::Position && stage_ == ShaderStage::Fragment ||
-            target.storage == Storage::Varying && stage_ == ShaderStage::Fragment)
+            (target.storage == Storage::FragmentColor &&
+             stage_ == ShaderStage::Vertex) ||
+            (target.storage == Storage::Position &&
+             stage_ == ShaderStage::Fragment) ||
+            (target.storage == Storage::Varying &&
+             stage_ == ShaderStage::Fragment))
         {
             fail("assignment target is read-only or unavailable in this shader stage");
             return;
@@ -1157,10 +1160,11 @@ static void apply_binary(
     ShaderOp op,
     const ShaderValue& left,
     const ShaderValue& right,
+    ShaderType result_type,
     ShaderValue& result)
 {
-    result = zero_value(left.type);
-    const size_t count = component_count(left.type);
+    result = zero_value(result_type);
+    const size_t count = component_count(result_type);
 
     if (op == ShaderOp::Multiply &&
         left.type == ShaderType::Mat4 && right.type == ShaderType::Vec4)
@@ -1189,11 +1193,12 @@ static void apply_binary(
         return;
     }
 
+    const size_t left_components = component_count(left.type);
+    const size_t right_components = component_count(right.type);
     for (size_t i = 0; i < count; ++i)
     {
-        const float a = left.data[i];
-        const float b = right.data[
-            component_count(right.type) == 1 ? 0 : i];
+        const float a = left.data[left_components == 1 ? 0 : i];
+        const float b = right.data[right_components == 1 ? 0 : i];
         switch (op)
         {
             case ShaderOp::Add: result.data[i] = a + b; break;
@@ -1398,7 +1403,7 @@ bool execute_glsl(
                         a.type == ShaderType::Mat4 && b.type == ShaderType::Vec4
                         ? ShaderType::Vec4 : a.type))
                     return false;
-                apply_binary(instruction.op, a, b, result);
+                apply_binary(instruction.op, a, b, instruction.type, result);
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
                 break;
