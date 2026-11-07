@@ -102,8 +102,7 @@ static bool valid_blend_factor(GLenum value)
 static bool valid_blend_equation(GLenum value)
 {
     return value == GL_FUNC_ADD || value == GL_FUNC_SUBTRACT ||
-           value == GL_FUNC_REVERSE_SUBTRACT || value == GL_MIN ||
-           value == GL_MAX;
+           value == GL_FUNC_REVERSE_SUBTRACT;
 }
 
 static bool *capability(GLenum cap)
@@ -137,19 +136,24 @@ static uint16_t pack_rgb565(const GLfloat rgba[4])
 
 static void clear_rect(GLint rect[4], GLint bounds[4])
 {
-    const int64_t x0 = std::max<int64_t>(0, rect[0]);
-    const int64_t y0 = std::max<int64_t>(0, rect[1]);
-    const int64_t x1 = std::min<int64_t>(
-        g_context.surface.width,
-        static_cast<int64_t>(rect[0]) + rect[2]);
-    const int64_t y1 = std::min<int64_t>(
-        g_context.surface.height,
-        static_cast<int64_t>(rect[1]) + rect[3]);
+    const int64_t raw_x0 = rect[0];
+    const int64_t raw_y0 = rect[1];
+    const int64_t raw_x1 = raw_x0 + rect[2];
+    const int64_t raw_y1 = raw_y0 + rect[3];
 
-    bounds[0] = static_cast<GLint>(std::min<int64_t>(x0, x1));
-    bounds[1] = static_cast<GLint>(std::min<int64_t>(y0, y1));
-    bounds[2] = static_cast<GLint>(std::max<int64_t>(x0, x1));
-    bounds[3] = static_cast<GLint>(std::max<int64_t>(y0, y1));
+    const int64_t x0 = std::max<int64_t>(
+        0, std::min<int64_t>(g_context.surface.width, raw_x0));
+    const int64_t y0 = std::max<int64_t>(
+        0, std::min<int64_t>(g_context.surface.height, raw_y0));
+    const int64_t x1 = std::max<int64_t>(
+        0, std::min<int64_t>(g_context.surface.width, raw_x1));
+    const int64_t y1 = std::max<int64_t>(
+        0, std::min<int64_t>(g_context.surface.height, raw_y1));
+
+    bounds[0] = static_cast<GLint>(std::min(x0, x1));
+    bounds[1] = static_cast<GLint>(std::min(y0, y1));
+    bounds[2] = static_cast<GLint>(std::max(x0, x1));
+    bounds[3] = static_cast<GLint>(std::max(y0, y1));
 }
 
 static void clear_color_buffer(GLint x0, GLint y0, GLint x1, GLint y1)
@@ -510,7 +514,7 @@ const GLubyte *glGetString(GLenum name)
 {
     static const GLubyte vendor[] = "HelaFaye / CasioMini3D";
     static const GLubyte renderer[] = "fxgl SH-4A software renderer";
-    static const GLubyte version[] = "OpenGL ES 2.0 fxgl subset";
+    static const GLubyte version[] = "OpenGL ES 2.0 fxgl partial software implementation";
     static const GLubyte extensions[] = "";
     if (!has_context()) return nullptr;
 
