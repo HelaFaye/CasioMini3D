@@ -15,6 +15,10 @@ namespace
 constexpr size_t FXGL_MAX_BUFFERS = 16;
 constexpr size_t FXGL_MAX_BUFFER_BYTES = 128u * 1024u;
 constexpr GLuint FXGL_MAX_VERTEX_ATTRIBS = 8;
+constexpr size_t FXGL_MAX_TEXTURES = 8;
+constexpr size_t FXGL_MAX_TEXTURE_UNITS = 2;
+constexpr size_t FXGL_MAX_TEXTURE_BYTES = 64u * 1024u;
+constexpr GLint FXGL_MAX_TEXTURE_SIZE = 128;
 
 struct BufferObject
 {
