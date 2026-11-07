@@ -280,26 +280,28 @@ static void draw_results(const BenchConfig& cfg)
         }
 
         const BenchResult& r = benchmark_results[i];
-        char raster_present[64];
-        char total[64];
+        char clear_raster[64];
+        char present_total[64];
         char csv_number[20];
 
-        snprintf(raster_present, sizeof(raster_present),
-            "R %.1f/%.1f us  P %.1f/%.1f us",
+        snprintf(clear_raster, sizeof(clear_raster),
+            "C %.1f/%.1f R %.1f/%.1f us",
+            r.clear.mean_us_per_frame,
+            r.clear.median_us_per_frame,
             r.raster.mean_us_per_frame,
-            r.raster.median_us_per_frame,
+            r.raster.median_us_per_frame);
+        snprintf(present_total, sizeof(present_total),
+            "P %.1f/%.1f F %.1f +/- %.1f us %.1f FPS",
             r.present.mean_us_per_frame,
-            r.present.median_us_per_frame);
-        snprintf(total, sizeof(total),
-            "F %.1f us +/- %.1f  %.1f FPS",
+            r.present.median_us_per_frame,
             r.frame_total.mean_us_per_frame,
             r.frame_total.spread_us_per_frame,
             r.frame_total.mean_us_per_frame > 0.0
                 ? 1000000.0 / r.frame_total.mean_us_per_frame
                 : 0.0);
 
-        dtext(8, y + 12, C_WHITE, raster_present);
-        dtext(8, y + 24, C_WHITE, total);
+        dtext(8, y + 12, C_WHITE, clear_raster);
+        dtext(8, y + 24, C_WHITE, present_total);
         dtext(300, y, C_WHITE,
             benchmark_logged[i] ? "CSV OK" : csv_error_name(benchmark_csv_error[i]));
 
@@ -313,8 +315,8 @@ static void draw_results(const BenchConfig& cfg)
         }
     }
 
-    dtext(8, 188, C_WHITE, "R raster / P dupdate / F full frame");
-    dtext(8, 205, C_WHITE, "F6 clear F5 solid EXE tri DEL UV | MENU quit");
+    dtext(8, 188, C_WHITE, "C clear R raster P dupdate F full-frame");
+    dtext(8, 205, C_WHITE, "5 runs x60 frames | F6 clear F5 solid EXE tri DEL UV");
     (void)cfg;
 }
 
