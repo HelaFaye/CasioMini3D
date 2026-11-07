@@ -54,7 +54,7 @@ The three geometry workloads use deterministic coordinate formulas based on item
 
 `V3/src/shapes/triangle.cpp` is a scanline triangle rasterizer. It clips scanline and horizontal spans against screen bounds, but it does not implement 3D view-volume clipping, a depth buffer, or perspective-correct attribute interpolation. UV interpolation is linear in screen space.
 
-The interactive block-world demo in `V3/src/world.cpp` is separate from the three benchmark scenes. It applies a camera transform/projection, collects visible cube quads, sorts them by average depth, and draws them. Average-depth face sorting is a painter-order approximation; it can fail for intersecting or cyclically overlapping geometry. The camera now converts degree input to radians before evaluating its fixed-point trigonometric approximation, but the projection still clamps near/small Z values rather than clipping geometry against a near plane.
+The interactive block-world demo in `V3/src/world.cpp` is separate from the four benchmark scenes. It applies a camera transform/projection, collects visible cube quads, sorts them by average depth, and draws them. Average-depth face sorting is a painter-order approximation; it can fail for intersecting or cyclically overlapping geometry. The camera now converts degree input to radians before evaluating its fixed-point trigonometric approximation, but the projection still clamps near/small Z values rather than clipping geometry against a near plane.
 
 `ModelRenderer/` is a separate exploratory/legacy implementation. It should not be treated as the V3 benchmark backend or as a validated general-purpose renderer without separate source review and tests.
 
@@ -158,7 +158,7 @@ The audit patch makes the following targeted corrections:
 ### Milestone 1 — Validate and characterize the existing suite
 
 - Build with the fxSDK wrapper and exact Gint/toolchain versions.
-- Run all three scenes at least three times under identical clock/configuration.
+- Run all four scenes at least three times under identical clock/configuration.
 - Retain raw results and compare median, minimum, maximum, and spread.
 - Verify CSV header-once behavior, appended rows, readback/export, and restart persistence on physical hardware.
 
@@ -205,4 +205,4 @@ The current third-party notice states that glmark2's benchmark organization was 
 
 ## Definition of a useful first validated release
 
-A first validated fxmark release should run all three deterministic workloads on the physical target, report exact workload and measurement semantics, produce repeatable results across multiple runs, demonstrate CSV persistence on the target OS, and clearly distinguish screen-space raster workloads from general 3D rendering. It must not claim OpenGL compatibility or direct score comparability with glmark2.
+A first validated fxmark release should run all four deterministic workloads on the physical target, report exact workload and measurement semantics, produce repeatable results across multiple runs, demonstrate CSV persistence on the target OS, and clearly distinguish screen-space raster workloads from general 3D rendering. It must not claim OpenGL compatibility or direct score comparability with glmark2.
