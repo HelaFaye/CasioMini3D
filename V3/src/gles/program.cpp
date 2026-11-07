@@ -317,6 +317,23 @@ static ProgramObject *current_program()
     return program && program->linked ? program : nullptr;
 }
 
+static size_t shader_component_count(fxgl::ShaderType type)
+{
+    switch (type)
+    {
+        case fxgl::ShaderType::Float:
+        case fxgl::ShaderType::Int:
+        case fxgl::ShaderType::Bool:
+        case fxgl::ShaderType::Sampler2D:
+            return 1;
+        case fxgl::ShaderType::Vec2: return 2;
+        case fxgl::ShaderType::Vec3: return 3;
+        case fxgl::ShaderType::Vec4: return 4;
+        case fxgl::ShaderType::Mat4: return 16;
+        default: return 0;
+    }
+}
+
 static bool valid_uniform_location(
     ProgramObject& program,
     GLint location,
@@ -329,7 +346,7 @@ static bool valid_uniform_location(
         return false;
     const fxgl::ShaderVariable& uniform = program.uniforms[location];
     return uniform.type == type &&
-           fxgl::component_count(type) == components;
+           shader_component_count(type) == components;
 }
 
 static void set_uniform(
@@ -375,7 +392,7 @@ void program_context_reset()
 
 void report_error(unsigned int error)
 {
-    fxglSetContextError(static_cast<GLenum>(error));
+    report_context_error(error);
 }
 
 unsigned int current_program_name()
