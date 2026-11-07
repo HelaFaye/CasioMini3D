@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <fxlibc/printf.h>
 #include <libprof.h>
 #include <gint/gint.h>
@@ -23,14 +24,13 @@ enum class CsvErrorStage : uint8_t
     None = 0,
     WorldSwitch,
     Open,
-    Create,
-    Seek,
-    Size,
+    Stat,
     HeaderWrite,
     RowWrite,
     Flush,
     Stream,
-    Close
+    Close,
+    Verify
 };
 
 static CsvErrorStage benchmark_csv_error[BENCHMARK_COUNT];
@@ -60,57 +60,53 @@ static int append_csv_in_os_world(void* opaque)
         "present_mean_us_per_frame,present_median_us_per_frame,present_min_us_per_frame,present_max_us_per_frame,present_spread_us_per_frame,"
         "frame_mean_us_per_frame,frame_median_us_per_frame,frame_min_us_per_frame,frame_max_us_per_frame,frame_spread_us_per_frame\n";
 
+    // fxlibc's append stream starts at EOF when opened. We open a
+    // fresh stream for each benchmark record and never seek it, so this
+    // avoids relying on update-stream fseek() behavior for appending.
+    struct stat before = {};
+    long long original_size = 0;
     errno = 0;
-    FILE* file = fopen(path, "r+");
+    if (stat(path, &before) == 0)
+    {
+        if (before.st_size < 0)
+        {
+            args->error = CsvErrorStage::Stat;
+            args->error_number = EIO;
+            return static_cast<int>(args->error);
+        }
+        original_size = static_cast<long long>(before.st_size);
+    }
+    else if (errno != ENOENT)
+    {
+        args->error = CsvErrorStage::Stat;
+        args->error_number = errno;
+        return static_cast<int>(args->error);
+    }
+
+    errno = 0;
+    FILE* file = fopen(path, "a");
     if (!file)
     {
-        const int open_errno = errno;
-        if (open_errno != ENOENT)
-        {
-            args->error = CsvErrorStage::Open;
-            args->error_number = open_errno;
-            return static_cast<int>(args->error);
-        }
-
-        errno = 0;
-        file = fopen(path, "w+");
-        if (!file)
-        {
-            args->error = CsvErrorStage::Create;
-            args->error_number = errno;
-            return static_cast<int>(args->error);
-        }
+        args->error = CsvErrorStage::Open;
+        args->error_number = errno;
+        return static_cast<int>(args->error);
     }
 
     CsvErrorStage failure = CsvErrorStage::None;
     int failure_errno = 0;
+    long long expected_size = original_size;
 
-    errno = 0;
-    if (fseek(file, 0, SEEK_END) != 0)
-    {
-        failure = CsvErrorStage::Seek;
-        failure_errno = errno;
-    }
-
-    long size = -1;
-    if (failure == CsvErrorStage::None)
-    {
-        errno = 0;
-        size = ftell(file);
-        if (size < 0)
-        {
-            failure = CsvErrorStage::Size;
-            failure_errno = errno;
-        }
-    }
-
-    if (failure == CsvErrorStage::None && size == 0)
+    if (expected_size == 0)
     {
         errno = 0;
         if (fprintf(file, "%s", header) < 0)
         {
             failure = CsvErrorStage::HeaderWrite;
             failure_errno = errno;
+        }
+        else
+        {
+            expected_size += static_cast<long long>(sizeof(header) - 1);
         }
     }
 
@@ -159,6 +155,10 @@ static int append_csv_in_os_world(void* opaque)
             failure = CsvErrorStage::RowWrite;
             failure_errno = errno;
         }
+        else
+        {
+            expected_size += written;
+        }
     }
 
     if (failure == CsvErrorStage::None)
@@ -184,6 +184,24 @@ static int append_csv_in_os_world(void* opaque)
         failure_errno = errno;
     }
 
+    // A successful stdio return code alone does not prove the append
+    // reached persistent storage. Verify the final file size after close.
+    if (failure == CsvErrorStage::None)
+    {
+        struct stat after = {};
+        errno = 0;
+        if (stat(path, &after) != 0)
+        {
+            failure = CsvErrorStage::Verify;
+            failure_errno = errno;
+        }
+        else if (static_cast<long long>(after.st_size) != expected_size)
+        {
+            failure = CsvErrorStage::Verify;
+            failure_errno = EIO;
+        }
+    }
+
     args->error = failure;
     args->error_number = failure_errno;
     return static_cast<int>(failure);
@@ -196,14 +214,13 @@ static const char* csv_error_name(CsvErrorStage error)
         case CsvErrorStage::None:        return "CSV OK";
         case CsvErrorStage::WorldSwitch: return "CSV SWITCH";
         case CsvErrorStage::Open:        return "CSV OPEN";
-        case CsvErrorStage::Create:      return "CSV CREATE";
-        case CsvErrorStage::Seek:        return "CSV SEEK";
-        case CsvErrorStage::Size:        return "CSV SIZE";
+        case CsvErrorStage::Stat:        return "CSV STAT";
         case CsvErrorStage::HeaderWrite: return "CSV HEADER";
         case CsvErrorStage::RowWrite:    return "CSV WRITE";
         case CsvErrorStage::Flush:       return "CSV FLUSH";
         case CsvErrorStage::Stream:      return "CSV STREAM";
         case CsvErrorStage::Close:       return "CSV CLOSE";
+        case CsvErrorStage::Verify:      return "CSV VERIFY";
     }
     return "CSV UNKNOWN";
 }
