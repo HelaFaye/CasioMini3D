@@ -53,7 +53,7 @@ static int append_csv_in_os_world(void* opaque)
     static const char path[] = "/benchmarks-v2.csv";
     static const char header[] =
         "schema_version,benchmark_version,scene,timer_source,timer_resolution_us,"
-        "warmup_frames,measure_frames,repeat_count,triangles_per_frame,"
+        "warmup_frames,measure_frames,repeat_count,triangles_per_frame,screen_width,screen_height,"
         "clear_mean_us_per_frame,clear_median_us_per_frame,clear_min_us_per_frame,clear_max_us_per_frame,clear_spread_us_per_frame,"
         "raster_mean_us_per_frame,raster_median_us_per_frame,raster_min_us_per_frame,raster_max_us_per_frame,raster_spread_us_per_frame,"
         "present_mean_us_per_frame,present_median_us_per_frame,present_min_us_per_frame,present_max_us_per_frame,present_spread_us_per_frame,"
@@ -118,7 +118,7 @@ static int append_csv_in_os_world(void* opaque)
     {
         errno = 0;
         const int written = fprintf(file,
-            "2,%s,%s,%s,%u,%lu,%lu,%lu,%lu,"
+            "2,%s,%s,%s,%u,%lu,%lu,%lu,%lu,%u,%u,"
             "%.3f,%.3f,%.3f,%.3f,%.3f,"
             "%.3f,%.3f,%.3f,%.3f,%.3f,"
             "%.3f,%.3f,%.3f,%.3f,%.3f,"
@@ -131,6 +131,8 @@ static int append_csv_in_os_world(void* opaque)
             static_cast<unsigned long>(r.measure_frames),
             static_cast<unsigned long>(r.repeat_count),
             static_cast<unsigned long>(r.triangles_per_frame),
+            static_cast<unsigned int>(r.screen_width),
+            static_cast<unsigned int>(r.screen_height),
             r.clear.mean_us_per_frame,
             r.clear.median_us_per_frame,
             r.clear.min_us_per_frame,
