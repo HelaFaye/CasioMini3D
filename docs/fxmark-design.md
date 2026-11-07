@@ -1,8 +1,8 @@
 # fxmark: benchmark design, current implementation, and roadmap
 
-**Status reviewed:** 2026-11-07  
-**Active application:** `V3/`  
-**Target:** Casio fx-CG family using Gint and fxSDK  
+**Status reviewed:** 2026-11-07
+**Active application:** `V3/`
+**Target:** Casio fx-CG family using Gint and fxSDK
 **Physical validation target:** fx-CG50, OS 3.20.0202
 
 ## 1. Purpose and scope
