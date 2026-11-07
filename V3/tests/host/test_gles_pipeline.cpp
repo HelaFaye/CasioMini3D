@@ -1,0 +1,300 @@
+#include <array>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+
+#include "../../src/gles/pipeline.hpp"
+
+namespace
+{
+using fxgl::ClipVertex;
+using fxgl::PipelineState;
+using fxgl::RasterStats;
+using fxgl::RenderSurface;
+
+struct SolidColor
+{
+    float rgba[4];
+};
+
+bool solid_fragment(const float *, size_t, float rgba[4], void *user_data)
+{
+    const SolidColor& color = *static_cast<const SolidColor *>(user_data);
+    for (int i = 0; i < 4; ++i)
+        rgba[i] = color.rgba[i];
+    return true;
+}
+
+bool red_from_varying(const float *varyings, size_t count,
+                      float rgba[4], void *)
+{
+    if (count < 1)
+        return false;
+    rgba[0] = varyings[0];
+    rgba[1] = 0.0f;
+    rgba[2] = 0.0f;
+    rgba[3] = 1.0f;
+    return true;
+}
+
+ClipVertex vertex(float x, float y, float z, float w)
+{
+    ClipVertex result = {};
+    result.position = {x, y, z, w};
+    return result;
+}
+
+void full_screen_triangle(ClipVertex triangle[3], float z = 0.0f)
+{
+    triangle[0] = vertex(-1.0f, -1.0f, z, 1.0f);
+    triangle[1] = vertex(1.0f, -1.0f, z, 1.0f);
+    triangle[2] = vertex(-1.0f, 1.0f, z, 1.0f);
+}
+
+void reset_surface(uint16_t *color, uint16_t *depth, uint8_t *stencil)
+{
+    for (size_t i = 0; i < 16; ++i)
+    {
+        color[i] = 0x0000;
+        depth[i] = 0xffff;
+        stencil[i] = 0;
+    }
+}
+
+void test_solid_triangle_coverage_and_top_left_fill()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    SolidColor red = {{1.0f, 0.0f, 0.0f, 1.0f}};
+    ClipVertex triangle[3];
+    full_screen_triangle(triangle);
+
+    RasterStats stats = {};
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &red, &stats));
+    assert(stats.input_triangles == 1);
+    assert(stats.clipped_polygons == 1);
+    assert(stats.generated_triangles == 1);
+    assert(stats.tested_fragments > 0);
+    assert(stats.written_fragments > 0);
+    assert(color[0] == 0xf800);
+    assert(color[3 * 4 + 3] == 0x0000);
+}
+
+void test_back_face_culling_and_front_face_winding()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    state.cull_enabled = true;
+    state.cull_face = GL_BACK;
+
+    SolidColor green = {{0.0f, 1.0f, 0.0f, 1.0f}};
+    ClipVertex triangle[3];
+    full_screen_triangle(triangle);
+    std::swap(triangle[1], triangle[2]);
+
+    RasterStats stats = {};
+    assert(!fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &green, &stats));
+    assert(stats.tested_fragments == 0);
+    for (uint16_t pixel : color)
+        assert(pixel == 0x0000);
+
+    state.front_face = GL_CW;
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &green, &stats));
+    assert(color[0] == 0x07e0);
+}
+
+void test_homogeneous_clipping_renders_visible_portion()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    SolidColor blue = {{0.0f, 0.0f, 1.0f, 1.0f}};
+
+    ClipVertex triangle[3] = {
+        vertex(-2.0f, 0.0f, 0.0f, 1.0f),
+        vertex(0.5f, -0.75f, 0.0f, 1.0f),
+        vertex(0.5f, 0.75f, 0.0f, 1.0f)
+    };
+    RasterStats stats = {};
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &blue, &stats));
+    assert(stats.clipped_polygons == 1);
+    assert(stats.generated_triangles >= 1);
+    assert(stats.written_fragments > 0);
+}
+
+void test_depth_comparison_and_write_mask()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    state.depth_enabled = true;
+
+    ClipVertex triangle[3];
+    full_screen_triangle(triangle);
+    SolidColor red = {{1.0f, 0.0f, 0.0f, 1.0f}};
+    SolidColor green = {{0.0f, 1.0f, 0.0f, 1.0f}};
+
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &red));
+    assert(color[0] == 0xf800);
+    assert(depth[0] == 32768);
+
+    assert(!fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &green));
+    assert(color[0] == 0xf800);
+
+    state.depth_function = GL_ALWAYS;
+    state.depth_write = false;
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &green));
+    assert(color[0] == 0x07e0);
+    assert(depth[0] == 32768);
+}
+
+void test_alpha_blending_and_color_mask()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+    for (uint16_t& pixel : color)
+        pixel = 0xf800;
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    state.blend_enabled = true;
+    state.blend_src_rgb = GL_SRC_ALPHA;
+    state.blend_dst_rgb = GL_ONE_MINUS_SRC_ALPHA;
+    state.blend_src_alpha = GL_ONE;
+    state.blend_dst_alpha = GL_ZERO;
+
+    SolidColor half_blue = {{0.0f, 0.0f, 1.0f, 0.5f}};
+    ClipVertex triangle[3];
+    full_screen_triangle(triangle);
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &half_blue));
+
+    const uint16_t blended = color[0];
+    const int red = (blended >> 11) & 0x1f;
+    const int blue = blended & 0x1f;
+    assert(red >= 14 && red <= 17);
+    assert(blue >= 14 && blue <= 17);
+
+    state.color_write[0] = false;
+    state.color_write[1] = false;
+    SolidColor green = {{0.0f, 1.0f, 0.0f, 1.0f}};
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &green));
+    assert(((color[0] >> 11) & 0x1f) == red);
+    assert((color[0] & 0x1f) == blue);
+}
+
+void test_scissor_and_stencil_operations()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    state.scissor_enabled = true;
+    state.scissor[0] = 1;
+    state.scissor[1] = 1;
+    state.scissor[2] = 1;
+    state.scissor[3] = 1;
+    state.stencil_enabled = true;
+    state.stencil_front.function = GL_ALWAYS;
+    state.stencil_front.reference = 7;
+    state.stencil_front.stencil_pass = GL_REPLACE;
+
+    SolidColor white = {{1.0f, 1.0f, 1.0f, 1.0f}};
+    ClipVertex triangle[3];
+    full_screen_triangle(triangle);
+    assert(fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &white));
+    assert(color[1 * 4 + 1] == 0xffff);
+    assert(color[0] == 0x0000);
+    assert(stencil[1 * 4 + 1] == 7);
+    assert(stencil[0] == 0);
+
+    state.stencil_front.function = GL_EQUAL;
+    state.stencil_front.reference = 6;
+    state.stencil_front.stencil_fail = GL_INCR;
+    SolidColor red = {{1.0f, 0.0f, 0.0f, 1.0f}};
+    assert(!fxgl::draw_triangle(surface, state, triangle, 0,
+        solid_fragment, &red));
+    assert(color[1 * 4 + 1] == 0xffff);
+    assert(stencil[1 * 4 + 1] == 8);
+}
+
+void test_perspective_correct_varying_interpolation()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+
+    ClipVertex triangle[3] = {
+        vertex(-1.0f, -1.0f, 0.0f, 1.0f),
+        vertex(2.0f, -2.0f, 0.0f, 2.0f),
+        vertex(0.0f, 2.0f, 0.0f, 2.0f)
+    };
+    triangle[0].varying[0] = 0.0f;
+    triangle[1].varying[0] = 1.0f;
+    triangle[2].varying[0] = 0.0f;
+
+    assert(fxgl::draw_triangle(surface, state, triangle, 1,
+        red_from_varying, nullptr));
+    const int red = (color[0 * 4 + 2] >> 11) & 0x1f;
+    // At pixel center (2.5, 0.5), perspective correction yields 3/7,
+    // while affine interpolation would yield 9/16.
+    assert(red >= 12 && red <= 14);
+}
+} // namespace
+
+int main()
+{
+    test_solid_triangle_coverage_and_top_left_fill();
+    test_back_face_culling_and_front_face_winding();
+    test_homogeneous_clipping_renders_visible_portion();
+    test_depth_comparison_and_write_mask();
+    test_alpha_blending_and_color_mask();
+    test_scissor_and_stencil_operations();
+    test_perspective_correct_varying_interpolation();
+
+    std::puts("GLES software pipeline tests: PASS");
+    return 0;
+}
