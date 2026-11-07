@@ -596,15 +596,30 @@ void test_shader_and_program_object_lifecycle()
     glUniform1f(-1, 1.0f);
     assert(glGetError() == GL_NO_ERROR);
 
+    // Deleting attached shaders marks them pending; the attached program
+    // keeps them alive until it is deleted or detached.
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    glGetShaderiv(vertex, GL_DELETE_STATUS, &value);
+    assert(value == GL_TRUE);
+    assert(glIsShader(vertex) == GL_TRUE);
+
+    // A current program remains current while deletion is pending. It is
+    // released when another program (or zero) becomes current.
+    glDeleteProgram(program);
+    glGetProgramiv(program, GL_DELETE_STATUS, &value);
+    assert(value == GL_TRUE);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &value);
+    assert(value == static_cast<GLint>(program));
+    assert(glIsProgram(program) == GL_TRUE);
+
+    glUniform1f(gain_location, 0.5f);
+    assert(glGetError() == GL_NO_ERROR);
     glUseProgram(0);
     glGetIntegerv(GL_CURRENT_PROGRAM, &value);
     assert(value == 0);
     assert(!fxgl::get_current_program_view(view));
-
-    glDeleteProgram(program);
     assert(glIsProgram(program) == GL_FALSE);
-    glDeleteShader(vertex);
-    glDeleteShader(fragment);
     assert(glIsShader(vertex) == GL_FALSE);
     assert(glIsShader(fragment) == GL_FALSE);
 
