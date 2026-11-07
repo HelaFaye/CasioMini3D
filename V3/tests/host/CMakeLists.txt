@@ -44,6 +44,7 @@ add_test(NAME texture_sampler COMMAND texture_tests)
 add_executable(gles_state_tests
     test_gles_state.cpp
     ../../src/gles/gles_context.cpp
+    ../../src/gfx/texture.cpp
 )
 
 target_compile_features(gles_state_tests PRIVATE cxx_std_20)
