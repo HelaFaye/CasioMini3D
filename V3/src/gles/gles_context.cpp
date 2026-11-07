@@ -1,6 +1,7 @@
 #include <GLES2/gl2.h>
 #include <fxgl/platform.h>
 #include "../gfx/texture.hpp"
+#include "context_internal.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -171,7 +172,7 @@ static TextureObject *bound_texture(GLenum target)
 static gfx::TextureSampler make_sampler(const TextureObject& object)
 {
     gfx::TextureSampler sampler = {};
-    sampler.filter = object.mag_filter == GL_LINEAR
+    sampler.filter = object.min_filter == GL_LINEAR
         ? gfx::TextureFilter::Bilinear : gfx::TextureFilter::Nearest;
     sampler.address_u = object.wrap_s == GL_REPEAT
         ? gfx::TextureAddressMode::Repeat :
@@ -1384,3 +1385,27 @@ GLenum glGetError(void)
 }
 
 } // extern "C"
+
+namespace fxgl
+{
+bool get_texture_binding(
+    size_t unit,
+    gfx::Texture2DView& view,
+    gfx::TextureSampler& sampler)
+{
+    if (!g_context.current || unit >= FXGL_MAX_TEXTURE_UNITS)
+        return false;
+
+    TextureObject *object = find_texture(
+        g_context.texture_binding_2d[unit]);
+    if (!object || !object->pixels || object->width == 0 || object->height == 0)
+        return false;
+
+    view.pixels = object->pixels;
+    view.width = object->width;
+    view.height = object->height;
+    view.stride = object->width;
+    sampler = make_sampler(*object);
+    return gfx::texture_valid(view) && gfx::sampler_valid(sampler);
+}
+} // namespace fxgl
