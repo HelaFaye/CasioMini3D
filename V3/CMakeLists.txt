@@ -20,6 +20,7 @@ set(SOURCES
     src/gfx/texture.cpp
     src/gles/gles_context.cpp
     src/gles/math.cpp
+    src/gles/pipeline.cpp
     src/shapes/parallelogram.cpp
     src/shapes/rectangle.cpp
     src/shapes/triangle.cpp
