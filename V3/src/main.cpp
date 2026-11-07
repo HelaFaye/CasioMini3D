@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <fxlibc/printf.h>
 #include <libprof.h>
 #include <gint/gint.h>
 
@@ -118,7 +119,7 @@ static int append_csv_in_os_world(void* opaque)
     {
         errno = 0;
         const int written = fprintf(file,
-            "2,%s,%s,%s,%u,%lu,%lu,%lu,%lu,%u,%u,"
+            "2,%s,%s,%s,%lu,%lu,%lu,%lu,%lu,%u,%u,"
             "%.3f,%.3f,%.3f,%.3f,%.3f,"
             "%.3f,%.3f,%.3f,%.3f,%.3f,"
             "%.3f,%.3f,%.3f,%.3f,%.3f,"
@@ -126,7 +127,7 @@ static int append_csv_in_os_world(void* opaque)
             BENCH_VERSION,
             r.name,
             BENCH_TIMER_SOURCE,
-            BENCH_TIMER_RESOLUTION_US,
+            static_cast<unsigned long>(BENCH_TIMER_RESOLUTION_US),
             static_cast<unsigned long>(r.warmup_frames),
             static_cast<unsigned long>(r.measure_frames),
             static_cast<unsigned long>(r.repeat_count),
@@ -324,6 +325,7 @@ static void draw_results(const BenchConfig& cfg)
 
 int main()
 {
+    __printf_enable_fp();
     prof_init();
     init_uv_map();
 
