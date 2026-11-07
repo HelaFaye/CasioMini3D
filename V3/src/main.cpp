@@ -9,10 +9,11 @@
 #include <time.h>
 #include <gint/gint.h>
 
+// Suite order: clear baseline, then solid-color fill, then UV-textured fill.
 static const BenchId BENCHMARKS[] = {
     BenchId::ClearOnly,
-    BenchId::TriangleThroughput,
-    BenchId::TexturedGeometry
+    BenchId::SolidFill,
+    BenchId::UvFill
 };
 static const size_t BENCHMARK_COUNT = sizeof(BENCHMARKS) / sizeof(BENCHMARKS[0]);
 static BenchResult benchmark_results[BENCHMARK_COUNT];
@@ -127,7 +128,7 @@ static void draw_results()
         }
     }
 
-    dtext(8, 164, C_WHITE, "F6 / EXE / DEL: rerun test");
+    dtext(8, 164, C_WHITE, "F6 clear / EXE solid / DEL UV");
     dtext(8, 182, C_WHITE, "MENU: quit");
 }
 

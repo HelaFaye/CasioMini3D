@@ -5,8 +5,8 @@
 enum class BenchId : uint8_t
 {
     ClearOnly = 0,
-    TriangleThroughput = 1,
-    TexturedGeometry = 2
+    SolidFill = 1,
+    UvFill = 2
 };
 
 struct BenchConfig

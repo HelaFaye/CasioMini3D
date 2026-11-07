@@ -27,7 +27,8 @@ static bool run_clear_only_scene(const BenchConfig& cfg, uint32_t frames)
     return true;
 }
 
-static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frames)
+// Solid-color raster baseline: no UV interpolation or texture lookup.
+static bool run_solid_fill_scene(const BenchConfig& cfg, uint32_t frames)
 {
     for (uint32_t frame = 0; frame < frames; ++frame)
     {
@@ -49,7 +50,8 @@ static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frame
     return true;
 }
 
-static bool run_textured_geometry_scene(const BenchConfig& cfg, uint32_t frames)
+// UV-textured workload; follows solid-fill in the default suite.
+static bool run_uv_fill_scene(const BenchConfig& cfg, uint32_t frames)
 {
     for (uint32_t frame = 0; frame < frames; ++frame)
     {
@@ -74,11 +76,12 @@ static bool run_textured_geometry_scene(const BenchConfig& cfg, uint32_t frames)
     return true;
 }
 
+// Default suite order intentionally compares clear, solid fill, then UV fill.
 static const BenchSceneEntry g_bench_scenes[] =
 {
     {BenchId::ClearOnly, "clear-only", run_clear_only_scene},
-    {BenchId::TriangleThroughput, "triangle-throughput", run_triangle_throughput_scene},
-    {BenchId::TexturedGeometry, "textured-geometry", run_textured_geometry_scene}
+    {BenchId::SolidFill, "solid-fill", run_solid_fill_scene},
+    {BenchId::UvFill, "uv-fill", run_uv_fill_scene}
 };
 
 static const int g_bench_scene_count = sizeof(g_bench_scenes) / sizeof(g_bench_scenes[0]);
@@ -107,7 +110,7 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
 {
     if (!out || cfg.measure_frames == 0 || cfg.width <= 0 || cfg.height <= 0)
         return false;
-    if ((id == BenchId::TriangleThroughput || id == BenchId::TexturedGeometry) && cfg.triangle_count == 0)
+    if ((id == BenchId::SolidFill || id == BenchId::UvFill) && cfg.triangle_count == 0)
         return false;
 
     if (!execute_scene(id, cfg, cfg.warmup_frames))
