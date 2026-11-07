@@ -79,7 +79,7 @@ The exact workload semantics and measurement limitations are documented in [docs
 
 ## CSV logging
 
-The active V3 entry point contains a versioned CSV appender. It switches to Gint's OS world before using the Fugue filesystem, and appends rows to `/benchmarks-v2.csv` (the normalized root of the Fugue storage volume). Schema v2 records benchmark/timer identifiers, reported timer unit, warm-up/measurement/repetition settings, triangles per frame, and per-frame clear/raster/presentation/full-frame min/max/mean/median/spread. The earlier `/benchmarks.csv` v1 file is left untouched. The logger checks file operations, flush, stream error state, and close status. On failure, the results screen now shows the failing stage and either the captured `errno` value or the world-switch return code.
+The active V3 entry point contains a versioned CSV appender. It switches to Gint's OS world before using the Fugue filesystem, and appends rows to `/benchmarks-v2.csv` (the normalized root of the Fugue storage volume). Schema v2 records benchmark/timer identifiers, reported timer unit, warm-up/measurement/repetition settings, triangles per frame, effective display dimensions, and per-frame clear/raster/presentation/full-frame min/max/mean/median/spread. The earlier `/benchmarks.csv` v1 file is left untouched. The logger checks file operations, flush, stream error state, and close status. On failure, the results screen now shows the failing stage and either the captured `errno` value or the world-switch return code.
 
 This is source-level implementation, not yet a claim of validated persistence. The repository still needs a physical-device test that confirms the file is created, contains the expected rows, can be read back/exported, and remains usable after a restart. See the validation checklist in [docs/fxmark-design.md](docs/fxmark-design.md).
 
@@ -100,7 +100,7 @@ The current maintainer test target is an fx-CG50 running OS 3.20.0202. That iden
 
 - This is not a desktop OpenGL or OpenGL ES port.
 - The V3 benchmark's triangle workloads are screen-space 2D raster tests, not general 3D mesh benchmarks.
-- Timing now uses LibProf 2.4.0's TMU-backed profiler and reports integer microseconds. The CSV marks the public report quantum as 1 µs; physical target builds still need validation.
+- Timing now uses LibProf 2.4-or-newer's TMU-backed profiler and reports integer microseconds. The CSV marks the public report quantum as 1 µs; physical target builds still need validation.
 - Raster time brackets the scene's triangle drawing only; clear time brackets `dclear()`; presentation time brackets the `dupdate()` call; full-frame time brackets the entire measured frame loop. Full-frame time also includes loop and profiler-context overhead, so it is not expected to equal the sum of the three component measurements.
 - The measured `dupdate()` value is call execution time, not a measurement of physical LCD scanout completion. The display transfer can proceed asynchronously.
 - `BenchConfig.width` and `.height` are validated but the active scenes use `SCREEN_WIDTH` and `SCREEN_HEIGHT` constants.
