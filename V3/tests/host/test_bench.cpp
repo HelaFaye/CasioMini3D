@@ -90,6 +90,8 @@ static void test_clear_only_separates_clear_present_and_total()
     assert(std::strcmp(result.name, "clear-only") == 0);
     assert(result.repeat_count == 3);
     assert(result.triangles_per_frame == 0);
+    assert(result.screen_width == SCREEN_WIDTH);
+    assert(result.screen_height == SCREEN_HEIGHT);
     assert(clear_calls == 6);
     assert(update_calls == 6);
     assert(pixel_writes == 0);
