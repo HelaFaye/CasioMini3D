@@ -96,7 +96,7 @@ The CSV header is:
 name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame
 ```
 
-The logger opens the file in append/update mode, seeks to the end, writes the header if the file is empty, appends one row, flushes, checks stream errors, closes the file, and returns a success or failure result. The results UI now distinguishes the failing stage: `CSV OPEN`, `CSV SEEK`, `CSV SIZE`, `CSV HEADER`, `CSV WRITE`, `CSV FLUSH`, `CSV STREAM`, `CSV CLOSE`, or `CSV SWITCH`. It also displays the captured `errno` or world-switch return code.
+The logger opens an existing file for update with `r+`; if the file does not exist (`ENOENT`), it creates it with `w+`. It then explicitly seeks to EOF, writes the header if the file is empty, appends one row, flushes, checks stream errors, closes the file, and returns a success or failure result. This avoids relying on append-mode semantics. The results UI now distinguishes the failing stage: `CSV OPEN`, `CSV SEEK`, `CSV SIZE`, `CSV HEADER`, `CSV WRITE`, `CSV FLUSH`, `CSV STREAM`, `CSV CLOSE`, or `CSV SWITCH`. It also displays the captured `errno` or world-switch return code.
 
 This remains an implementation in source, not proof of persistence. Do not mark CSV logging as hardware-validated until the target has been tested for file creation, repeated append, reopen/readback, export, restart persistence, and failure behavior. If the diagnostic still reports a failure, record the stage and code; that narrows the next investigation.
 
@@ -107,6 +107,7 @@ The current schema does not record a unique run ID, timestamp, calculator model,
 The audit patch makes the following targeted corrections:
 
 1. **CSV path and diagnostics:** use the normalized `/benchmarks.csv` path and expose the failed filesystem stage plus its error code on the results screen. The OS-world boundary is retained.
+2. **CSV open modes:** open an existing log with `r+`, create with `w+` only when `r+` fails with `ENOENT`, and explicitly seek to EOF instead of relying on append mode.
 2. **RTC rollover:** calculate the elapsed tick count across the RTC's midnight reset using the 24-hour tick modulus.
 3. **Framebuffer bounds:** reject `DrawPixel()` coordinates outside the active screen dimensions before writing Gint VRAM.
 4. **UV-map bounds:** validate writes to the 40×40 map and define out-of-range sampling as clamp-to-edge.
