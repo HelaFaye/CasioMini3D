@@ -615,7 +615,7 @@ static uint16_t pack_rgb565(const GLfloat rgba[4])
     return static_cast<uint16_t>((red << 11) | (green << 5) | blue);
 }
 
-static void clear_rect(GLint rect[4], GLint bounds[4])
+static void clear_rect(const fxgl_surface_t& surface, GLint rect[4], GLint bounds[4])
 {
     const int64_t raw_x0 = rect[0];
     const int64_t raw_y0 = rect[1];
@@ -623,13 +623,13 @@ static void clear_rect(GLint rect[4], GLint bounds[4])
     const int64_t raw_y1 = raw_y0 + rect[3];
 
     const int64_t x0 = std::max<int64_t>(
-        0, std::min<int64_t>(g_context.surface.width, raw_x0));
+        0, std::min<int64_t>(surface.width, raw_x0));
     const int64_t y0 = std::max<int64_t>(
-        0, std::min<int64_t>(g_context.surface.height, raw_y0));
+        0, std::min<int64_t>(surface.height, raw_y0));
     const int64_t x1 = std::max<int64_t>(
-        0, std::min<int64_t>(g_context.surface.width, raw_x1));
+        0, std::min<int64_t>(surface.width, raw_x1));
     const int64_t y1 = std::max<int64_t>(
-        0, std::min<int64_t>(g_context.surface.height, raw_y1));
+        0, std::min<int64_t>(surface.height, raw_y1));
 
     bounds[0] = static_cast<GLint>(std::min(x0, x1));
     bounds[1] = static_cast<GLint>(std::min(y0, y1));
@@ -1038,7 +1038,7 @@ static bool valid_draw_mode(GLenum mode)
            mode == GL_TRIANGLE_FAN;
 }
 
-static void clear_color_buffer(GLint x0, GLint y0, GLint x1, GLint y1)
+static void clear_color_buffer(const fxgl_surface_t& surface, GLint x0, GLint y0, GLint x1, GLint y1)
 {
     const uint16_t clear_pixel = pack_rgb565(g_context.clear_color);
     const uint16_t red_mask = 0xf800;
@@ -1047,8 +1047,8 @@ static void clear_color_buffer(GLint x0, GLint y0, GLint x1, GLint y1)
 
     for (GLint y = y0; y < y1; ++y)
     {
-        uint16_t *row = g_context.surface.color +
-            static_cast<size_t>(y) * g_context.surface.stride;
+        uint16_t *row = surface.color +
+            static_cast<size_t>(y) * surface.stride;
         for (GLint x = x0; x < x1; ++x)
         {
             if (g_context.color_mask[0] && g_context.color_mask[1] &&
@@ -1087,6 +1087,7 @@ GLboolean fxglMakeCurrent(const fxgl_surface_t *surface)
     {
         destroy_buffers(g_context);
         destroy_textures(g_context);
+        destroy_framebuffer_resources(g_context);
     }
     fxgl::program_context_reset();
 
@@ -1117,6 +1118,7 @@ void fxglReleaseCurrent(void)
 {
     destroy_buffers(g_context);
     destroy_textures(g_context);
+    destroy_framebuffer_resources(g_context);
     fxgl::program_context_reset();
     g_context = {};
 }
@@ -2172,45 +2174,47 @@ void glClear(GLbitfield mask)
         return;
     }
 
-    GLint rect[4] = {0, 0, g_context.surface.width, g_context.surface.height};
-    GLint bounds[4] = {0, 0, g_context.surface.width, g_context.surface.height};
+    fxgl_surface_t surface = {};
+    if (!resolve_draw_surface(surface))
+    {
+        set_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return;
+    }
+
+    GLint rect[4] = {0, 0, surface.width, surface.height};
+    GLint bounds[4] = {0, 0, surface.width, surface.height};
     if (g_context.scissor_test)
-    {
-        clear_rect(g_context.scissor, bounds);
-    }
+        clear_rect(surface, g_context.scissor, bounds);
     else
-    {
-        clear_rect(rect, bounds);
-    }
+        clear_rect(surface, rect, bounds);
 
     if (bounds[0] >= bounds[2] || bounds[1] >= bounds[3])
         return;
 
-    if ((mask & GL_COLOR_BUFFER_BIT) && g_context.surface.color)
-        clear_color_buffer(bounds[0], bounds[1], bounds[2], bounds[3]);
+    if ((mask & GL_COLOR_BUFFER_BIT) && surface.color)
+        clear_color_buffer(surface, bounds[0], bounds[1], bounds[2], bounds[3]);
 
-    if ((mask & GL_DEPTH_BUFFER_BIT) && g_context.surface.depth &&
-        g_context.depth_mask)
+    if ((mask & GL_DEPTH_BUFFER_BIT) && surface.depth && g_context.depth_mask)
     {
         const uint16_t depth = static_cast<uint16_t>(
             g_context.clear_depth * 65535.0f + 0.5f);
         for (GLint y = bounds[1]; y < bounds[3]; ++y)
         {
-            uint16_t *row = g_context.surface.depth +
-                static_cast<size_t>(y) * g_context.surface.stride;
+            uint16_t *row = surface.depth +
+                static_cast<size_t>(y) * surface.stride;
             for (GLint x = bounds[0]; x < bounds[2]; ++x)
                 row[x] = depth;
         }
     }
 
-    if ((mask & GL_STENCIL_BUFFER_BIT) && g_context.surface.stencil)
+    if ((mask & GL_STENCIL_BUFFER_BIT) && surface.stencil)
     {
         const uint8_t clear_value = static_cast<uint8_t>(g_context.clear_stencil);
         const uint8_t write_mask = static_cast<uint8_t>(g_context.stencil_mask);
         for (GLint y = bounds[1]; y < bounds[3]; ++y)
         {
-            uint8_t *row = g_context.surface.stencil +
-                static_cast<size_t>(y) * g_context.surface.stride;
+            uint8_t *row = surface.stencil +
+                static_cast<size_t>(y) * surface.stride;
             for (GLint x = bounds[0]; x < bounds[2]; ++x)
             {
                 row[x] = static_cast<uint8_t>(
@@ -2756,12 +2760,20 @@ static void build_pipeline_context(
     RenderSurface& surface,
     PipelineState& state)
 {
-    surface.color = g_context.surface.color;
-    surface.depth = g_context.surface.depth;
-    surface.stencil = g_context.surface.stencil;
-    surface.width = g_context.surface.width;
-    surface.height = g_context.surface.height;
-    surface.stride = g_context.surface.stride;
+    fxgl_surface_t resolved = {};
+    if (!resolve_draw_surface(resolved))
+    {
+        set_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        surface = {};
+        state = {};
+        return;
+    }
+    surface.color = resolved.color;
+    surface.depth = resolved.depth;
+    surface.stencil = resolved.stencil;
+    surface.width = resolved.width;
+    surface.height = resolved.height;
+    surface.stride = resolved.stride;
 
     pipeline_default_state(state, surface.width, surface.height);
     for (int i = 0; i < 4; ++i)
@@ -2835,48 +2847,11 @@ bool draw_clip_triangle(
     if (!g_context.current)
         return false;
 
-    const RenderSurface surface = {
-        g_context.surface.color,
-        g_context.surface.depth,
-        g_context.surface.stencil,
-        g_context.surface.width,
-        g_context.surface.height,
-        g_context.surface.stride
-    };
-
+    RenderSurface surface = {};
     PipelineState state = {};
-    pipeline_default_state(state, surface.width, surface.height);
-
-    for (int i = 0; i < 4; ++i)
-    {
-        state.viewport[i] = g_context.viewport[i];
-        state.scissor[i] = g_context.scissor[i];
-        state.color_write[i] = g_context.color_mask[i] != GL_FALSE;
-        state.blend_color[i] = g_context.blend_color[i];
-    }
-
-    state.scissor_enabled = g_context.scissor_test;
-    state.cull_enabled = g_context.cull_face;
-    state.cull_face = g_context.cull_mode;
-    state.front_face = g_context.front_face;
-
-    state.depth_enabled = g_context.depth_test;
-    state.depth_function = g_context.depth_func;
-    state.depth_write = g_context.depth_mask;
-    state.depth_near = g_context.depth_near;
-    state.depth_far = g_context.depth_far;
-
-    state.stencil_enabled = g_context.stencil_test;
-    state.stencil_front = convert_stencil_face(g_context.stencil_front);
-    state.stencil_back = convert_stencil_face(g_context.stencil_back);
-
-    state.blend_enabled = g_context.blend;
-    state.blend_src_rgb = g_context.blend_src;
-    state.blend_dst_rgb = g_context.blend_dst;
-    state.blend_src_alpha = g_context.blend_src_alpha;
-    state.blend_dst_alpha = g_context.blend_dst_alpha;
-    state.blend_equation_rgb = g_context.blend_equation;
-    state.blend_equation_alpha = g_context.blend_equation_alpha;
+    build_pipeline_context(surface, state);
+    if (!surface.color)
+        return false;
 
     return fxgl::draw_triangle(surface, state, input, varying_count,
                                fragment_shader, user_data, stats);
