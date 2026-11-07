@@ -25,17 +25,10 @@ These are not a full desktop OpenGL or glmark2 port. In particular, the benchmar
 ## Repository layout
 
 - `V3/` — active benchmark/demo application
-<<<<<<< HEAD
-- `V3/src/` — renderer, benchmarks, and app entry point
-- `docs/fxmark-design.md` — benchmark design notes and implementation roadmap
-- `docs/THIRD_PARTY_NOTICES.md` — third-party references and attribution notes
-- `ModelRenderer/` — exploratory or legacy rendering work
-=======
 - `V3/src/` — rasterizer, benchmark runner, and app entry point
 - `docs/fxmark-design.md` — current implementation audit and benchmark roadmap
 - `docs/THIRD_PARTY_NOTICES.md` — third-party references and attribution notes
 - `ModelRenderer/` — exploratory or legacy mesh-oriented rendering work
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
 - `v1/`, `V2/` — earlier prototype generations
 
 ## Build
@@ -70,13 +63,9 @@ The benchmark runner selects a named workload, runs warm-up frames, measures a f
 
 The exact workload semantics and measurement limitations are documented in [docs/fxmark-design.md](docs/fxmark-design.md). Results measure this calculator's software drawing and display path. They are not directly comparable to desktop/mobile glmark2 scores.
 
-<<<<<<< HEAD
-This project keeps the scope intentionally smaller and more native to the calculator pipeline than a full glmark2 port. glmark2 is credited as a conceptual and source-reference project; see [third-party notices](docs/THIRD_PARTY_NOTICES.md). No glmark2 source code is intentionally copied into the current benchmark implementation. This statement covers the work documented here, not an exhaustive audit of every historical file in the repository.
-=======
 ## CSV logging
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
 
-The active V3 entry point contains an experimental CSV appender. It switches to Gint's OS world before using the Fugue filesystem, and appends rows to `\\fls0\benchmarks.csv`. The logger checks file operations, flush, stream error state, and close status, and the UI reports `CSV OK` or `CSV FAIL`.
+The active V3 entry point contains an experimental CSV appender. It switches to Gint's OS world before using the Fugue filesystem, and appends rows to `/benchmarks.csv` (the normalized root of the Fugue storage volume). The logger checks file operations, flush, stream error state, and close status. On failure, the results screen now shows the failing stage and either the captured `errno` value or the world-switch return code.
 
 This is source-level implementation, not yet a claim of validated persistence. The repository still needs a physical-device test that confirms the file is created, contains the expected rows, can be read back/exported, and remains usable after a restart. See the validation checklist in [docs/fxmark-design.md](docs/fxmark-design.md).
 
@@ -97,11 +86,16 @@ The current maintainer test target is an fx-CG50 running OS 3.20.0202. That iden
 
 - This is not a desktop OpenGL or OpenGL ES port.
 - The V3 benchmark's triangle workloads are screen-space 2D raster tests, not general 3D mesh benchmarks.
-- The current timer is Gint RTC at 128 ticks/second; the measured interval is quantized and the subtraction does not handle midnight rollover.
+- The current timer is Gint RTC at 128 ticks/second; the measured interval is quantized. Midnight rollover is accounted for, but higher-resolution timing is still needed.
 - Scene timing includes `dclear()` and `dupdate()` because both are called inside the measured scene loop. It is therefore an end-to-end frame-path measurement, not an isolated rasterizer measurement.
 - `BenchConfig.width` and `.height` are validated but the active scenes use `SCREEN_WIDTH` and `SCREEN_HEIGHT` constants.
 - The UV lookup map is initialized as a generated 40x40 gradient. The active `DrawTriangle()` path samples that map; the benchmark does not currently exercise the fxconv image asset as a loaded texture.
 - CSV logging is experimental and still requires physical storage validation.
-- The exploratory `ModelRenderer/` code is not yet a general-purpose, visibility-correct 3D pipeline. See the design audit for its current depth/clipping limitations.
+- The exploratory block-world camera now converts degrees to radians correctly, but the demo still uses average-depth face sorting and near-Z clamping rather than full geometric clipping and per-pixel depth testing.
+- The separate `ModelRenderer/` code is not yet a general-purpose, visibility-correct 3D pipeline. See the design audit for its current depth/clipping limitations.
 
 This project is best understood as a target-native graphics benchmark and software-rendering prototype for the fx-CG family, using Gint and fxSDK.
+
+## Attribution
+
+The benchmark organization is inspired by glmark2, which is credited as a design/source reference. No glmark2 source code is intentionally copied into the current V3 implementation. See [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md) for attribution and scope; this is not a provenance audit of every historical file in the repository.
