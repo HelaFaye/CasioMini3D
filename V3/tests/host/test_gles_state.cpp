@@ -164,6 +164,95 @@ void test_outside_scissor_is_safe_noop()
     fxglReleaseCurrent();
 }
 
+void test_buffer_objects_and_vertex_attributes()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    GLuint names[2] = {};
+    glGenBuffers(2, names);
+    assert(names[0] != 0 && names[1] != 0 && names[0] != names[1]);
+
+    const GLfloat vertices[6] = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+    glBindBuffer(GL_ARRAY_BUFFER, names[0]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+
+    GLint value = 0;
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &value);
+    assert(value == static_cast<GLint>(sizeof(vertices)));
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_USAGE, &value);
+    assert(value == GL_DYNAMIC_DRAW);
+
+    const GLfloat replacement[2] = {0.25f, 0.75f};
+    glBufferSubData(GL_ARRAY_BUFFER, sizeof(GLfloat), sizeof(replacement), replacement);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &value);
+    assert(value == static_cast<GLint>(names[0]));
+
+    const GLvoid *offset = reinterpret_cast<const GLvoid *>(
+        static_cast<uintptr_t>(sizeof(GLfloat)));
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), offset);
+    glEnableVertexAttribArray(2);
+
+    glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &value);
+    assert(value == GL_TRUE);
+    glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_SIZE, &value);
+    assert(value == 3);
+    glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_TYPE, &value);
+    assert(value == GL_FLOAT);
+    glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_STRIDE, &value);
+    assert(value == 3 * static_cast<GLint>(sizeof(GLfloat)));
+    glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &value);
+    assert(value == static_cast<GLint>(names[0]));
+
+    GLvoid *stored_pointer = nullptr;
+    glGetVertexAttribPointerv(2, GL_VERTEX_ATTRIB_ARRAY_POINTER, &stored_pointer);
+    assert(stored_pointer == offset);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, names[1]);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, 12, nullptr, GL_STATIC_DRAW);
+    glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &value);
+    assert(value == 12);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &value);
+    assert(value == static_cast<GLint>(names[1]));
+
+    glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 10, 4, replacement);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, 1, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    glVertexAttribPointer(2, 3, 0xdead, GL_FALSE, 0, nullptr);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glVertexAttribPointer(2, 5, GL_FLOAT, GL_FALSE, 0, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glEnableVertexAttribArray(FXGL_MAX_VERTEX_ATTRIBS);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &names[0]);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &value);
+    assert(value == 0);
+    glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &value);
+    assert(value == 0);
+    glGetVertexAttribPointerv(2, GL_VERTEX_ATTRIB_ARRAY_POINTER, &stored_pointer);
+    assert(stored_pointer == nullptr);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 999);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    glBindBuffer(GL_ARRAY_BUFFER, names[1]);
+    glBufferData(GL_ARRAY_BUFFER, 128 * 1024 + 1, nullptr, GL_STATIC_DRAW);
+    assert(glGetError() == GL_OUT_OF_MEMORY);
+
+    glDeleteBuffers(2, names);
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &value);
+    assert(value == 8);
+    assert(glGetError() == GL_NO_ERROR);
+
+    fxglReleaseCurrent();
+}
+
 void test_state_validation_and_error_latching()
 {
     uint16_t color[4] = {};
@@ -209,6 +298,7 @@ int main()
     test_rgb565_clear_and_stride_padding();
     test_scissor_color_mask_and_depth_stencil_clear();
     test_outside_scissor_is_safe_noop();
+    test_buffer_objects_and_vertex_attributes();
     test_state_validation_and_error_latching();
 
     std::puts("GLES-style context/state tests: PASS");
