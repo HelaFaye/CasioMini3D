@@ -58,7 +58,7 @@ The interactive block-world demo in `V3/src/world.cpp` is separate from the four
 
 `ModelRenderer/` is a separate exploratory/legacy implementation. It should not be treated as the V3 benchmark backend or as a validated general-purpose renderer without separate source review and tests.
 
-## 3. Host-side rasterizer regression tests
+### 2.4 Host-side rasterizer and benchmark regression tests
 
 The host test target compiles the production `V3/src/shapes/triangle.cpp` source with minimal Gint header stubs. It checks:
 
@@ -68,7 +68,10 @@ The host test target compiles the production `V3/src/shapes/triangle.cpp` source
 - horizontal, vertical, and collinear degenerate triangles;
 - fully off-screen and partially clipped triangles, including extreme integer coordinates;
 - that `DrawTriangleSolid()` performs zero UV-map reads;
-- that `DrawTriangle()` continues sampling the UV map without out-of-range coordinates for the fixture.
+- that `DrawTriangle()` continues sampling the UV map without out-of-range coordinates for the fixture;
+- benchmark IDs and names resolve for all four scenes;
+- the new `solid-fill` scene writes pixels without UV reads;
+- the existing `triangle-throughput` and `textured-geometry` scenes continue sampling the UV map.
 
 Run it from `V3/`:
 
