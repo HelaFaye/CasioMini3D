@@ -234,7 +234,7 @@ void test_scissor_and_stencil_operations()
     state.stencil_enabled = true;
     state.stencil_front.function = GL_ALWAYS;
     state.stencil_front.reference = 7;
-    state.stencil_front.stencil_pass = GL_REPLACE;
+    state.stencil_front.depth_pass = GL_REPLACE;
 
     SolidColor white = {{1.0f, 1.0f, 1.0f, 1.0f}};
     ClipVertex triangle[3];
