@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <gint/gint.h>
 
 clock_t lastTime = 0;
 
@@ -31,6 +32,61 @@ static const BenchId BENCHMARKS[] = {
 static const size_t BENCHMARK_COUNT = sizeof(BENCHMARKS) / sizeof(BENCHMARKS[0]);
 static BenchResult benchmark_results[BENCHMARK_COUNT];
 static bool benchmark_valid[BENCHMARK_COUNT];
+static bool benchmark_log_ok = true;
+
+struct CsvWriteArgs
+{
+    const BenchResult* result;
+    const BenchConfig* config;
+};
+
+// Fugue-backed filesystem calls need to run in the OS world on Gint.
+static int append_csv_in_os_world(void* opaque)
+{
+    const CsvWriteArgs* args = (const CsvWriteArgs*)opaque;
+    static const char path[] = "\\fls0\\benchmarks.csv";
+    static const char header[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
+
+    FILE* file = fopen(path, "a+");
+    if (!file)
+        return -1;
+
+    bool ok = true;
+    if (fseek(file, 0, SEEK_END) != 0)
+        ok = false;
+
+    const long size = ok ? ftell(file) : -1;
+    if (size < 0)
+        ok = false;
+
+    if (ok && size == 0 && fprintf(file, "%s", header) < 0)
+        ok = false;
+
+    int written = -1;
+    if (ok)
+    {
+        written = fprintf(file,
+            "%s,%lu,%lu,%lu,%.2f,%.3f\n",
+            args->result->name,
+            (unsigned long)args->config->warmup_frames,
+            (unsigned long)args->config->measure_frames,
+            (unsigned long)args->result->elapsed_ms,
+            args->result->fps,
+            args->result->avg_ms_per_frame);
+        if (written < 0)
+            ok = false;
+    }
+
+    if (fclose(file) != 0)
+        ok = false;
+    return ok ? 0 : -1;
+}
+
+static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
+{
+    CsvWriteArgs args = {&result, &cfg};
+    return gint_world_switch(GINT_CALL(append_csv_in_os_world, &args)) == 0;
+}
 
 static void reset_benchmark_state()
 {
@@ -44,45 +100,18 @@ static void reset_benchmark_state()
         benchmark_results[i].fps = 0.0;
         benchmark_results[i].avg_ms_per_frame = 0.0;
     }
+    benchmark_log_ok = true;
 }
 
 static void run_benchmark_suite(const BenchConfig& cfg)
 {
     reset_benchmark_state();
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
-        benchmark_valid[i] = run_benchmark(BENCHMARKS[i], cfg, &benchmark_results[i]);
-}
-
-static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
-{
-    static const char kLogPath[] = "fls0:benchmarks.csv";
-    static const char kCsvHeader[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
-
-    FILE* file = fopen(kLogPath, "a");
-    if (!file)
     {
-        file = fopen(kLogPath, "w");
-        if (!file)
-            return false;
-        if (fprintf(file, "%s", kCsvHeader) < 0)
-        {
-            fclose(file);
-            return false;
-        }
+        benchmark_valid[i] = run_benchmark(BENCHMARKS[i], cfg, &benchmark_results[i]);
+        if (benchmark_valid[i] && !append_benchmark_result_csv(benchmark_results[i], cfg))
+            benchmark_log_ok = false;
     }
-
-    const int written = fprintf(file,
-        "%s,%lu,%lu,%lu,%.2f,%.3f\n",
-        result.name,
-        (unsigned long)cfg.warmup_frames,
-        (unsigned long)cfg.measure_frames,
-        (unsigned long)result.elapsed_ms,
-        result.fps,
-        result.avg_ms_per_frame);
-
-    const bool ok = written >= 0;
-    fclose(file);
-    return ok;
 }
 
 void dclock()
@@ -122,11 +151,12 @@ static void print_benchmark_results()
         }
     }
 
+    dtext(UI_TEXT_X, 132, C_WHITE, benchmark_log_ok ? "CSV log: OK" : "CSV log: FAILED");
     dtext(UI_TEXT_X, 150, C_WHITE, "F6 / EXE / DEL: rerun");
     dtext(UI_TEXT_X, 166, C_WHITE, "MENU: quit");
 }
 
-static void print_bench_result(const BenchResult& result)
+static void print_bench_result(const BenchResult& result, bool logged)
 {
     char fps_buffer[32];
     char frame_buffer[32];
@@ -140,7 +170,8 @@ static void print_bench_result(const BenchResult& result)
     dtext(UI_TEXT_X, 44, C_WHITE, fps_buffer);
     dtext(UI_TEXT_X, 60, C_WHITE, frame_buffer);
     dtext(UI_TEXT_X, 76, C_WHITE, elapsed_buffer);
-    dtext(UI_TEXT_X, 96, C_WHITE, "MENU: return");
+    dtext(UI_TEXT_X, 92, C_WHITE, logged ? "CSV log: OK" : "CSV log: FAILED");
+    dtext(UI_TEXT_X, 108, C_WHITE, "MENU: return");
 }
 
 static void print_benchmark_legend()
@@ -168,23 +199,15 @@ int main()
     world->set_id_unsafe(0, 0, 0, 1);
     world->set_id_unsafe(1, 0, 0, 1);
     for (size_t i = 0; i < 200; ++i)
-    {
         world->set_id_unsafe(rand() % 16, rand() % 16, rand() % 16, 1);
-    }
 
     run_benchmark_suite(cfg);
-    for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
-    {
-        if (benchmark_valid[i])
-            append_benchmark_result_csv(benchmark_results[i], cfg);
-    }
 
     AppMode mode = AppMode::Results;
     BenchId selected_bench = BenchId::ClearOnly;
 
     while (!keydown(KEY_MENU))
     {
-        dclear(C_BLACK);
         clearevents();
 
         if (keydown(KEY_F1))
@@ -210,16 +233,34 @@ int main()
         if (mode == AppMode::Benchmark)
         {
             BenchResult result;
-            if (run_benchmark(selected_bench, cfg, &result))
+            const bool ran = run_benchmark(selected_bench, cfg, &result);
+            const size_t index = (size_t)selected_bench;
+            bool logged = false;
+            if (ran)
             {
-                append_benchmark_result_csv(result, cfg);
-                dclear(C_BLACK);
-                print_bench_result(result);
-                dupdate();
-                while (!keydown(KEY_MENU))
-                    clearevents();
-                mode = AppMode::Results;
+                logged = append_benchmark_result_csv(result, cfg);
+                if (!logged)
+                    benchmark_log_ok = false;
+                if (index < BENCHMARK_COUNT)
+                {
+                    benchmark_valid[index] = true;
+                    benchmark_results[index] = result;
+                }
             }
+            else if (index < BENCHMARK_COUNT)
+            {
+                benchmark_valid[index] = false;
+            }
+
+            dclear(C_BLACK);
+            if (ran)
+                print_bench_result(result, logged);
+            else
+                dtext(UI_TEXT_X, 12, C_WHITE, "Benchmark failed");
+            dupdate();
+            while (!keydown(KEY_MENU))
+                clearevents();
+            mode = AppMode::Results;
         }
         else if (mode == AppMode::Results)
         {
@@ -228,6 +269,7 @@ int main()
         }
         else
         {
+            dclear(C_BLACK);
             if (keydown(KEY_LEFT))
                 camera->position.x -= 10;
             if (keydown(KEY_RIGHT))
