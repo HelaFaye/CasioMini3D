@@ -1437,16 +1437,51 @@ bool execute_glsl(
             case ShaderOp::Subtract:
             case ShaderOp::Multiply:
             case ShaderOp::Divide:
+            {
                 if (!pop_value(stack, stack_size, b) ||
-                    !pop_value(stack, stack_size, a) ||
-                    instruction.type != (instruction.op == ShaderOp::Multiply &&
-                        a.type == ShaderType::Mat4 && b.type == ShaderType::Vec4
-                        ? ShaderType::Vec4 : a.type))
+                    !pop_value(stack, stack_size, a))
                     return false;
+
+                ShaderType expected_type = ShaderType::Invalid;
+                if (instruction.op == ShaderOp::Add ||
+                    instruction.op == ShaderOp::Subtract)
+                {
+                    if (a.type == b.type &&
+                        (a.type == ShaderType::Float || is_vector(a.type)))
+                        expected_type = a.type;
+                }
+                else if (instruction.op == ShaderOp::Multiply)
+                {
+                    if (a.type == ShaderType::Mat4 && b.type == ShaderType::Vec4)
+                        expected_type = ShaderType::Vec4;
+                    else if (a.type == ShaderType::Mat4 && b.type == ShaderType::Mat4)
+                        expected_type = ShaderType::Mat4;
+                    else if (a.type == ShaderType::Float && is_vector(b.type))
+                        expected_type = b.type;
+                    else if (is_vector(a.type) && b.type == ShaderType::Float)
+                        expected_type = a.type;
+                    else if (a.type == b.type &&
+                             (a.type == ShaderType::Float || is_vector(a.type)))
+                        expected_type = a.type;
+                }
+                else if (instruction.op == ShaderOp::Divide)
+                {
+                    if (is_vector(a.type) && b.type == ShaderType::Float)
+                        expected_type = a.type;
+                    else if (a.type == b.type &&
+                             (a.type == ShaderType::Float || is_vector(a.type)))
+                        expected_type = a.type;
+                }
+
+                if (expected_type == ShaderType::Invalid ||
+                    instruction.type != expected_type)
+                    return false;
+
                 apply_binary(instruction.op, a, b, instruction.type, result);
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
                 break;
+            }
 
             case ShaderOp::Dot:
                 if (!pop_value(stack, stack_size, b) ||
