@@ -31,8 +31,23 @@ static const size_t BENCHMARK_COUNT = sizeof(BENCHMARKS) / sizeof(BENCHMARKS[0])
 static BenchResult benchmark_results[BENCHMARK_COUNT];
 static bool benchmark_valid[BENCHMARK_COUNT];
 
+static void reset_benchmark_state()
+{
+    for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
+    {
+        benchmark_valid[i] = false;
+        benchmark_results[i].name = "";
+        benchmark_results[i].warmup_frames = 0;
+        benchmark_results[i].measure_frames = 0;
+        benchmark_results[i].elapsed_ms = 0;
+        benchmark_results[i].fps = 0.0;
+        benchmark_results[i].avg_ms_per_frame = 0.0;
+    }
+}
+
 static void run_benchmark_suite(const BenchConfig& cfg)
 {
+    reset_benchmark_state();
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
     {
         benchmark_valid[i] = run_benchmark(BENCHMARKS[i], cfg, &benchmark_results[i]);
@@ -97,9 +112,7 @@ void dclock()
     clock_t deltaTime = clock() - lastTime;
     int fps = 1000;
     if (deltaTime != 0)
-    {
         fps = CLOCKS_PER_SEC / deltaTime;
-    }
 
     char buffer[20];
     sprintf(buffer, "FPS %d", fps);
