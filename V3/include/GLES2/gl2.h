@@ -87,6 +87,8 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_SCISSOR_BOX 0x0C10
 #define GL_DEPTH_FUNC 0x0B74
 #define GL_DEPTH_WRITEMASK 0x0B72
+#define GL_DEPTH_CLEAR_VALUE 0x0B73
+#define GL_STENCIL_CLEAR_VALUE 0x0B91
 #define GL_COLOR_WRITEMASK 0x0C23
 #define GL_CULL_FACE_MODE 0x0B45
 #define GL_FRONT_FACE 0x0B46
@@ -115,6 +117,8 @@ void glBlendEquation(GLenum mode);
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
 void glStencilMask(GLuint mask);
 void glGetIntegerv(GLenum pname, GLint *data);
+void glGetBooleanv(GLenum pname, GLboolean *data);
+void glGetFloatv(GLenum pname, GLfloat *data);
 const GLubyte *glGetString(GLenum name);
 GLenum glGetError(void);
 
