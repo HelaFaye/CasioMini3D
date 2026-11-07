@@ -84,6 +84,8 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_FUNC_REVERSE_SUBTRACT 0x800B
 
 #define GL_TEXTURE_2D 0x0DE1
+#define GL_UNPACK_ALIGNMENT 0x0CF5
+#define GL_PACK_ALIGNMENT 0x0D05
 #define GL_TEXTURE_BINDING_2D 0x8069
 #define GL_ACTIVE_TEXTURE 0x84E0
 #define GL_TEXTURE0 0x84C0
@@ -147,6 +149,7 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_MAX_TEXTURE_SIZE 0x0D33
 #define GL_MAX_VIEWPORT_DIMS 0x0D3A
 
+void glPixelStorei(GLenum pname, GLint param);
 void glGenTextures(GLsizei n, GLuint *textures);
 void glDeleteTextures(GLsizei n, const GLuint *textures);
 void glActiveTexture(GLenum texture);
