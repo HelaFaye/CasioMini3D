@@ -30,6 +30,27 @@ The renderer core must not include Gint headers. A surface descriptor supplies p
 
 Start with one current context, matching the single-screen calculator use case, but keep state in an explicit context structure so multiple contexts remain architecturally possible.
 
+### Current implementation status on this feature branch
+
+The following foundation has been added and is host-tested:
+
+| Area | Implemented now | Remaining for GLES-style compatibility |
+|---|---|---|
+| Public API/context | GLES-style scalar types/constants, one current context, caller-owned RGB565 color surface and optional depth/stencil planes, error queue and state queries | Multiple contexts, broader format/attachment model and Khronos conformance |
+| Buffers/attributes | Reserved-name and live-object lifecycle, 16 bounded buffer names, 128 KiB aggregate data budget, data/sub-data upload, eight vertex-attribute descriptors and queries | Attribute fetch and standard draw calls |
+| Textures | Eight texture objects, two texture units, RGB565 5:6:5 upload/sub-upload, unpack alignment, nearest/linear filtering, clamp/repeat/mirrored-repeat and a 64 KiB aggregate texture budget | RGBA/alpha formats, mip levels, mipmap filters, sampler completeness and shader integration |
+| Matrix/clip | Column-major mat4 operations, perspective projection and six-plane homogeneous triangle clipping | Matrix uniform uploads, vertex shader execution and line/point clipping |
+| Raster pipeline | Viewport mapping, top-left-rule triangle coverage, perspective-correct varyings, fragment callback/discard, front/back culling, scissor, depth, stencil, blending and RGB color masks | GLSL execution and standard draw-call integration |
+| Render state | Depth range/function/write, separate RGB/alpha blend factors and equations, blend color, color mask, cull state, and separate front/back stencil state | Remaining GLES state, state-to-query coverage and exact specification edge cases |
+
+The rasterizer is Gint-independent and uses an explicit surface descriptor. The internal `fxgl::draw_clip_triangle()` bridge now converts current GL-style context state into the software pipeline. It is an internal backend entry point, **not** a public GLES draw function.
+
+There is no shader/program API yet. The implementation does not yet expose `glCreateShader`, GLSL compilation/linking, `glUseProgram`, `glDrawArrays`, or `glDrawElements`. This is deliberate: standard GLES 2.0 drawing must execute a linked vertex and fragment program, not substitute a hard-coded color or fixed-function path.
+
+Current limits are intentionally conservative: 128×128 maximum texture dimensions, 64 KiB aggregate RGB565 texture storage, 16 buffer names with a 128 KiB aggregate data budget, eight vertex attributes and two texture units. These are implementation limits, not claims about theoretical calculator limits. They need target memory profiling before being raised.
+
+The host CTest suite contains six targets: legacy triangle rasterizer, benchmark registry/timing, texture sampler, GLES context/state, GLES matrix/clipping, and GLES software pipeline. Passing host tests validates CPU behavior on the host compiler only; it does not validate fxSDK/SH compilation, calculator memory behavior, Gint presentation, or OpenGL ES conformance.
+
 ## 3. Feature roadmap
 
 ### 3.1 Foundation and raster correctness
