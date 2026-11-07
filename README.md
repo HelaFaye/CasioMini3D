@@ -1,28 +1,33 @@
 # CasioMini3D
 
-A small 3D renderer and benchmark prototype for Casio fx-CG calculators, built around the Gint / fxSDK toolchain.
+A small 3D renderer and benchmark prototype for Casio fx-CG calculators built around the Gint / fxSDK toolchain.
 
-## What is in this repo
+## Project status
 
-- `V3/` — current benchmark and demo app
-- `V3/src/` — renderer, benchmark runner, and main loop
-- `docs/fxmark-design.md` — benchmark design and workload roadmap
+This repository is currently in a prototype stage.
 
-## Benchmark architecture
+The active code is in `V3/`, and it includes:
 
-This project follows the same high-level separation used by glmark2:
+- a software rasterizer for triangles and simple geometry
+- a basic 3D world demo
+- a benchmark runner for a small, deterministic benchmark suite
+- a minimal UI for selecting tests and reporting results
 
-- a benchmark runner orchestrates workload selection, warm-up, timing, and reporting
-- each benchmark is a fixed render scene with deterministic inputs
-- the rendering logic stays separate from the control/UI loop
+The current benchmark set is intentionally small and conservative:
 
-The current V3 implementation contains a minimal benchmark suite inspired by glmark2's scene-based layout:
+- `clear-only`
+- `triangle-throughput`
+- `textured-geometry`
 
-- `clear-only` — baseline frame-clear workload
-- `triangle-throughput` — fixed triangle count, fixed transform workload
-- `textured-geometry` — repeated textured or geometry-heavy draw workload
+These are the workloads currently represented in code and documentation. This is not a full desktop OpenGL or glmark2 port.
 
-This is intentionally a target-native benchmark suite, not a desktop OpenGL glmark2 port.
+## Repository layout
+
+- `V3/` — active benchmark/demo application
+- `V3/src/` — renderer, benchmarks, and app entry point
+- `docs/fxmark-design.md` — benchmark design notes and implementation roadmap
+- `ModelRenderer/` — exploratory or legacy rendering work
+- `v1/`, `V2/` — earlier prototype generations
 
 ## Build
 
@@ -36,7 +41,7 @@ cmake -S . -B build-cg
 cmake --build build-cg
 ```
 
-If your fxSDK exposes separate build helpers for the calculator family you are targeting, prefer those wrappers instead of a raw CMake invocation so the correct toolchain file and platform setting are used.
+If your fxSDK exposes calculator-family-specific build helpers, prefer those wrappers so the correct toolchain file and target platform settings are used.
 
 ## Run
 
@@ -47,44 +52,41 @@ The app currently supports:
 - `DEL` — textured-geometry benchmark
 - `MENU` — quit
 
-The benchmark runner reports warm-up time, measured elapsed time, FPS, and average milliseconds per frame.
+The benchmark runner reports warm-up frames, measured elapsed time, FPS, and average milliseconds per frame.
 
-## glmark2-inspired benchmark model
+## Benchmark model
 
-The reference implementation in glmark2 splits a benchmark into two concerns:
+The benchmark structure follows the same basic idea as glmark2:
 
-1. `Benchmark` — configuration and orchestration of a scene
-2. `Scene` — render logic, options, validation, and per-scene timing
+- a benchmark runner selects a fixed workload
+- each workload is a deterministic render scene
+- the timed section is separated from UI and camera controls
+- results are reported as runtime metrics instead of a portable desktop score
 
-This repo follows the same general idea, with a smaller, calculator-native set of workloads and a simpler result report. The benchmark runner is intentionally lightweight and should remain easy to port or extend without dragging the interactive demo code into the timed section.
+This project keeps the scope intentionally smaller and more native to the calculator pipeline than a full glmark2 port.
 
-## Validation checklist for real hardware
+## Validation checklist for hardware testing
 
-Before widening the benchmark suite, validate each benchmark on the target device in the same clock configuration.
+Before expanding the benchmark suite, validate each workload on the target device under the same clock configuration.
 
 1. Build the app with the fxSDK toolchain for the target calculator.
 2. Run each benchmark mode in turn:
    - clear-only
    - triangle-throughput
    - textured-geometry
-3. Record the exact calculator model, clock setting, and warm-up/measurement frame counts.
-4. Repeat each benchmark at least 3 times to check stability.
-5. Keep the result if it is repeatable and not obviously dominated by UI or timing noise.
-6. Remove or mark any benchmark as unsupported if it is inconsistent between runs.
-7. Publish only the workloads that are reproducible on real hardware.
+3. Record the exact calculator model, clock mode, and warm-up/measurement frame counts.
+4. Repeat each benchmark at least three times to check repeatability.
+5. Keep the result only if it is stable and not dominated by UI or timing noise.
+6. Mark any benchmark as unsupported if it behaves inconsistently across runs.
+7. Publish only workloads that are reproducible on real hardware.
 
-## Current status
+## Current limitations
 
-This repository is a working benchmark prototype and a teaching/reference implementation for a target-native renderer, not a complete glmark2 reimplementation.
-
-Current state:
-
-- benchmark runner exists
-- deterministic benchmark scenes exist for the first three workloads
-- scene selection and result display are implemented in the V3 app
-- additional glmark2-style workloads can be added once we validate the target rendering path and timer source
+- This is not a desktop OpenGL port.
+- Rendering and timing are tied to the calculator's native display path and Gint environment.
+- CSV logging is experimental and depends on the target filesystem / OS-world behavior being writable and available at runtime.
+- The benchmark suite is intentionally small until more hardware validation is done.
 
 ## Notes
 
-This is not a desktop OpenGL glmark2 port. It is a target-native benchmark runner for the fx-CG50 rendering path, using the existing Gint display and rasterizer pipeline.
-
+This project is best understood as a target-native graphics benchmark prototype for the fx-CG family, using the Gint display path and the existing software rasterizer pipeline.
