@@ -157,6 +157,14 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_UNSIGNED_BYTE 0x1401
 #define GL_SHORT 0x1402
 #define GL_UNSIGNED_SHORT 0x1403
+#define GL_INT 0x1404
+#define GL_BOOL 0x8B56
+#define GL_FLOAT_VEC2 0x8B50
+#define GL_FLOAT_VEC3 0x8B51
+#define GL_FLOAT_VEC4 0x8B52
+#define GL_FLOAT_MAT4 0x8B5C
+#define GL_SAMPLER_2D 0x8B5E
+
 #define GL_FLOAT 0x1406
 #define GL_FIXED 0x140C
 
@@ -209,6 +217,23 @@ void glShaderSource(GLuint shader, GLsizei count,
     const GLchar *const *string, const GLint *length);
 void glCompileShader(GLuint shader);
 void glGetShaderiv(GLuint shader, GLenum pname, GLint *params);
+void glGetShaderSource(GLuint shader, GLsizei bufsize,
+    GLsizei *length, GLchar *source);
+void glGetAttachedShaders(GLuint program, GLsizei max_count,
+    GLsizei *count, GLuint *shaders);
+void glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufsize,
+    GLsizei *length, GLint *size, GLenum *type, GLchar *name);
+void glGetActiveUniform(GLuint program, GLuint index, GLsizei bufsize,
+    GLsizei *length, GLint *size, GLenum *type, GLchar *name);
+void glValidateProgram(GLuint program);
+
+void glUniform1fv(GLint location, GLsizei count, const GLfloat *value);
+void glUniform2fv(GLint location, GLsizei count, const GLfloat *value);
+void glUniform3fv(GLint location, GLsizei count, const GLfloat *value);
+void glUniform4fv(GLint location, GLsizei count, const GLfloat *value);
+void glGetUniformfv(GLuint program, GLint location, GLfloat *params);
+void glGetUniformiv(GLuint program, GLint location, GLint *params);
+
 void glGetShaderInfoLog(GLuint shader, GLsizei max_length,
     GLsizei *length, GLchar *info_log);
 GLboolean glIsShader(GLuint shader);
