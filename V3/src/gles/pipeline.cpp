@@ -312,6 +312,99 @@ static bool passes_scissor(
            static_cast<int64_t>(y) < top;
 }
 
+static bool process_fragment(
+    const RenderSurface& surface,
+    const PipelineState& state,
+    int x,
+    int y,
+    const float *varyings,
+    size_t varying_count,
+    float ndc_depth,
+    bool front,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats& stats)
+{
+    if (!passes_scissor(x, y, state))
+        return false;
+
+    ++stats.tested_fragments;
+    float source[4] = {};
+    if (!fragment_shader(varyings, varying_count, source, user_data))
+        return false;
+    ++stats.shaded_fragments;
+
+    for (float& component : source)
+        component = clamp01(component);
+
+    const float mapped_depth = clamp01(
+        state.depth_near + (ndc_depth * 0.5f + 0.5f) *
+        (state.depth_far - state.depth_near));
+    const uint16_t incoming_depth = static_cast<uint16_t>(
+        mapped_depth * 65535.0f + 0.5f);
+    const size_t offset = static_cast<size_t>(y) * surface.stride +
+                          static_cast<size_t>(x);
+
+    const StencilFaceState& stencil_face = front
+        ? state.stencil_front : state.stencil_back;
+    if (state.stencil_enabled && surface.stencil)
+    {
+        const uint8_t stored = surface.stencil[offset];
+        const uint32_t masked_reference =
+            static_cast<uint32_t>(stencil_face.reference) &
+            stencil_face.value_mask;
+        const uint32_t masked_stored =
+            static_cast<uint32_t>(stored) & stencil_face.value_mask;
+        const bool stencil_pass = compare_values(
+            stencil_face.function, masked_reference, masked_stored);
+        if (!stencil_pass)
+        {
+            write_stencil(surface.stencil[offset], stencil_face,
+                          stencil_face.stencil_fail);
+            return false;
+        }
+    }
+
+    const bool depth_pass = !state.depth_enabled || !surface.depth ||
+        compare_values(state.depth_function, incoming_depth, surface.depth[offset]);
+    if (!depth_pass)
+    {
+        if (state.stencil_enabled && surface.stencil)
+            write_stencil(surface.stencil[offset], stencil_face,
+                          stencil_face.depth_fail);
+        return false;
+    }
+
+    ++stats.depth_passed_fragments;
+    if (state.stencil_enabled && surface.stencil)
+        write_stencil(surface.stencil[offset], stencil_face,
+                      stencil_face.depth_pass);
+    if (state.depth_enabled && surface.depth && state.depth_write)
+        surface.depth[offset] = incoming_depth;
+
+    if (state.blend_enabled)
+    {
+        blend_pixel(surface.color[offset], source, state);
+    }
+    else if (state.color_write[0] && state.color_write[1] &&
+             state.color_write[2])
+    {
+        surface.color[offset] = pack_rgb565(source);
+    }
+    else
+    {
+        float destination[4] = {};
+        unpack_rgb565(surface.color[offset], destination);
+        for (unsigned channel = 0; channel < 3; ++channel)
+            if (state.color_write[channel])
+                destination[channel] = source[channel];
+        surface.color[offset] = pack_rgb565(destination);
+    }
+
+    ++stats.written_fragments;
+    return true;
+}
+
 static bool rasterize_one(
     const RenderSurface& surface,
     const PipelineState& state,
@@ -408,7 +501,6 @@ static bool rasterize_one(
             if (!passes_scissor(static_cast<int>(x), static_cast<int>(y), state))
                 continue;
 
-            ++stats.tested_fragments;
             const float w0 = e0 / area;
             const float w1 = e1 / area;
             const float w2 = e2 / area;
@@ -429,84 +521,15 @@ static bool rasterize_one(
                 varyings[i] = interpolated / reciprocal_w;
             }
 
-            float source[4] = {};
-            if (!fragment_shader(varyings, varying_count, source, user_data))
-                continue;
-            ++stats.shaded_fragments;
-
-            for (float& component : source)
-                component = clamp01(component);
-
             const float ndc_depth =
                 w0 * vertices[0].z_over_w +
                 w1 * vertices[1].z_over_w +
                 w2 * vertices[2].z_over_w;
-            const float mapped_depth = clamp01(
-                state.depth_near + (ndc_depth * 0.5f + 0.5f) *
-                (state.depth_far - state.depth_near));
-            const uint16_t incoming_depth = static_cast<uint16_t>(
-                mapped_depth * 65535.0f + 0.5f);
-
-            const size_t offset = static_cast<size_t>(y) *
-                surface.stride + static_cast<size_t>(x);
-
-            bool stencil_pass = true;
-            if (state.stencil_enabled && surface.stencil)
-            {
-                const uint8_t stored = surface.stencil[offset];
-                const uint32_t masked_reference =
-                    static_cast<uint32_t>(stencil_face.reference) &
-                    stencil_face.value_mask;
-                const uint32_t masked_stored =
-                    static_cast<uint32_t>(stored) & stencil_face.value_mask;
-                stencil_pass = compare_values(
-                    stencil_face.function, masked_reference, masked_stored);
-                if (!stencil_pass)
-                {
-                    write_stencil(surface.stencil[offset], stencil_face,
-                                  stencil_face.stencil_fail);
-                    continue;
-                }
-            }
-
-            bool depth_pass = true;
-            if (state.depth_enabled && surface.depth)
-            {
-                depth_pass = compare_values(
-                    state.depth_function, incoming_depth, surface.depth[offset]);
-            }
-
-            if (!depth_pass)
-            {
-                if (state.stencil_enabled && surface.stencil)
-                    write_stencil(surface.stencil[offset], stencil_face,
-                                  stencil_face.depth_fail);
-                continue;
-            }
-
-            ++stats.depth_passed_fragments;
-            if (state.stencil_enabled && surface.stencil)
-                write_stencil(surface.stencil[offset], stencil_face,
-                              stencil_face.depth_pass);
-            if (state.depth_enabled && surface.depth && state.depth_write)
-                surface.depth[offset] = incoming_depth;
-
-            if (state.blend_enabled)
-                blend_pixel(surface.color[offset], source, state);
-            else if (state.color_write[0] && state.color_write[1] &&
-                     state.color_write[2])
-                surface.color[offset] = pack_rgb565(source);
-            else
-            {
-                float destination[4] = {};
-                unpack_rgb565(surface.color[offset], destination);
-                for (unsigned channel = 0; channel < 3; ++channel)
-                    if (state.color_write[channel])
-                        destination[channel] = source[channel];
-                surface.color[offset] = pack_rgb565(destination);
-            }
-            ++stats.written_fragments;
-            wrote_any = true;
+            if (process_fragment(surface, state,
+                    static_cast<int>(x), static_cast<int>(y),
+                    varyings, varying_count, ndc_depth, front,
+                    fragment_shader, user_data, stats))
+                wrote_any = true;
         }
     }
 
