@@ -862,6 +862,142 @@ void test_shader_compile_and_program_link_failures()
     fxglReleaseCurrent();
 }
 
+void test_gles_framebuffer_and_renderbuffer_objects()
+{
+    uint16_t default_color[16] = {};
+    fxgl_surface_t surface = {default_color, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    assert(texture != 0 && glIsTexture(texture) == GL_FALSE);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    const uint16_t initial_pixels[16] = {};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, initial_pixels);
+
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    assert(framebuffer != 0 && glIsFramebuffer(framebuffer) == GL_FALSE);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    assert(glIsFramebuffer(framebuffer) == GL_TRUE);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
+        GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT);
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, texture, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+
+    GLint value = -1;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &value);
+    assert(value == static_cast<GLint>(framebuffer));
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &value);
+    assert(value == GL_TEXTURE);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &value);
+    assert(value == static_cast<GLint>(texture));
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &value);
+    assert(value == 0);
+
+    GLuint renderbuffers[3] = {};
+    glGenRenderbuffers(3, renderbuffers);
+    assert(glIsRenderbuffer(renderbuffers[0]) == GL_FALSE);
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffers[0]);
+    assert(glIsRenderbuffer(renderbuffers[0]) == GL_TRUE);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 4, 4);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, renderbuffers[0]);
+
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffers[1]);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, 4, 4);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+        GL_RENDERBUFFER, renderbuffers[1]);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &value);
+    assert(value == static_cast<GLint>(renderbuffers[1]));
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &value);
+    assert(value == 4);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &value);
+    assert(value == 4);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+        GL_RENDERBUFFER_INTERNAL_FORMAT, &value);
+    assert(value == GL_STENCIL_INDEX8);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+        GL_RENDERBUFFER_STENCIL_SIZE, &value);
+    assert(value == 8);
+
+    // Mismatched attachment dimensions make the framebuffer incomplete.
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffers[2]);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 2, 2);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, renderbuffers[2]);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
+        GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS);
+
+    // Restore matching dimensions, then clear the texture-backed FBO.
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 4, 4);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+    gfx::Texture2DView view = {};
+    gfx::TextureSampler sampler = {};
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.width == 4 && view.height == 4);
+    assert(view.pixels[0] == BLUE);
+    assert(view.pixels[5] == BLUE);
+    assert(view.pixels[15] == BLUE);
+
+    // An invalid attachment point is an enum error and does not mutate the FBO.
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, 0x8ce1,
+        GL_RENDERBUFFER, renderbuffers[0]);
+    assert(glGetError() == GL_INVALID_ENUM);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, 0);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &value);
+    assert(value == GL_NONE);
+
+    // Deleting an attached texture detaches it and leaves no dangling storage.
+    glDeleteTextures(1, &texture);
+    assert(glIsTexture(texture) == GL_FALSE);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
+        GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT);
+
+    glDeleteRenderbuffers(3, renderbuffers);
+    assert(glIsRenderbuffer(renderbuffers[0]) == GL_FALSE);
+    assert(glIsRenderbuffer(renderbuffers[1]) == GL_FALSE);
+    assert(glIsRenderbuffer(renderbuffers[2]) == GL_FALSE);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &value);
+    assert(value == 0);
+
+    glDeleteFramebuffers(1, &framebuffer);
+    assert(glIsFramebuffer(framebuffer) == GL_FALSE);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &value);
+    assert(value == 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+
+    // Bad targets, formats and dimensions are rejected with GLES errors.
+    glBindFramebuffer(GL_RENDERBUFFER, 0);
+    assert(glGetError() == GL_INVALID_ENUM);
+    GLuint rb = 0;
+    glGenRenderbuffers(1, &rb);
+    glBindRenderbuffer(GL_RENDERBUFFER, rb);
+    glRenderbufferStorage(GL_RENDERBUFFER, 0xdead, 4, 4);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB565, 129, 4);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glDeleteRenderbuffers(1, &rb);
+
+    fxglReleaseCurrent();
+}
+
 void test_state_validation_and_error_latching()
 {
     uint16_t color[4] = {};
@@ -980,6 +1116,7 @@ int main()
     test_texture_objects_and_uploads();
     test_rgb565_unpack_alignment();
     test_state_validation_and_error_latching();
+    test_gles_framebuffer_and_renderbuffer_objects();
     test_shader_and_program_object_lifecycle();
     test_gles_draw_arrays_and_elements();
     test_shader_compile_and_program_link_failures();
