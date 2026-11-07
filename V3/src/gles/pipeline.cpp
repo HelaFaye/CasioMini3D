@@ -535,6 +535,127 @@ static bool rasterize_one(
 
     return wrote_any;
 }
+
+static float clip_plane_distance(const Vec4& p, unsigned plane)
+{
+    switch (plane)
+    {
+        case 0: return p.x + p.w;
+        case 1: return p.w - p.x;
+        case 2: return p.y + p.w;
+        case 3: return p.w - p.y;
+        case 4: return p.z + p.w;
+        default: return p.w - p.z;
+    }
+}
+
+static ClipVertex interpolate_clip_vertex(
+    const ClipVertex& a,
+    const ClipVertex& b,
+    float t,
+    size_t varying_count)
+{
+    const float inverse = 1.0f - t;
+    ClipVertex result = {};
+    result.position.x = a.position.x * inverse + b.position.x * t;
+    result.position.y = a.position.y * inverse + b.position.y * t;
+    result.position.z = a.position.z * inverse + b.position.z * t;
+    result.position.w = a.position.w * inverse + b.position.w * t;
+    for (size_t i = 0; i < varying_count; ++i)
+        result.varying[i] = a.varying[i] * inverse + b.varying[i] * t;
+    return result;
+}
+
+static bool clip_point(const ClipVertex& point)
+{
+    for (unsigned plane = 0; plane < 6; ++plane)
+        if (clip_plane_distance(point.position, plane) < 0.0f)
+            return false;
+    return true;
+}
+
+static bool clip_line_segment(
+    const ClipVertex input[2],
+    size_t varying_count,
+    ClipVertex output[2])
+{
+    float enter = 0.0f;
+    float leave = 1.0f;
+
+    for (unsigned plane = 0; plane < 6; ++plane)
+    {
+        const float a = clip_plane_distance(input[0].position, plane);
+        const float b = clip_plane_distance(input[1].position, plane);
+        if (!std::isfinite(a) || !std::isfinite(b))
+            return false;
+        if (a < 0.0f && b < 0.0f)
+            return false;
+        if (a < 0.0f || b < 0.0f)
+        {
+            const float denominator = a - b;
+            if (denominator == 0.0f)
+                return false;
+            const float t = a / denominator;
+            if (a < 0.0f)
+                enter = std::max(enter, t);
+            else
+                leave = std::min(leave, t);
+            if (enter > leave)
+                return false;
+        }
+    }
+
+    output[0] = interpolate_clip_vertex(input[0], input[1], enter, varying_count);
+    output[1] = interpolate_clip_vertex(input[0], input[1], leave, varying_count);
+    return true;
+}
+
+/* Clip screen-space line parameters to a bounded integer pixel rectangle.
+   This ensures raster steps are at most max(surface.width,height), even if a
+   caller supplies a very large viewport partially overlapping the surface. */
+static bool clip_screen_line(
+    const ScreenVertex& a,
+    const ScreenVertex& b,
+    float minimum_x,
+    float minimum_y,
+    float maximum_x,
+    float maximum_y,
+    float& enter,
+    float& leave)
+{
+    const float dx = b.x - a.x;
+    const float dy = b.y - a.y;
+    enter = 0.0f;
+    leave = 1.0f;
+
+    const float p[4] = {-dx, dx, -dy, dy};
+    const float q[4] = {
+        a.x - minimum_x,
+        maximum_x - a.x,
+        a.y - minimum_y,
+        maximum_y - a.y
+    };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        if (p[i] == 0.0f)
+        {
+            if (q[i] < 0.0f)
+                return false;
+            continue;
+        }
+
+        const float t = q[i] / p[i];
+        if (p[i] < 0.0f)
+            enter = std::max(enter, t);
+        else
+            leave = std::min(leave, t);
+        if (enter > leave)
+            return false;
+    }
+    return true;
+}
+
 } // namespace
 
 void pipeline_default_state(PipelineState& state, GLsizei width, GLsizei height)
@@ -599,6 +720,209 @@ bool draw_triangle(
         ++stats.generated_triangles;
         if (rasterize_one(surface, state, fan, varying_count,
                           fragment_shader, user_data, stats))
+            wrote_any = true;
+    }
+    return wrote_any;
+}
+
+bool draw_point(
+    const RenderSurface& surface,
+    const PipelineState& state,
+    const ClipVertex& input,
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats_out)
+{
+    RasterStats local_stats = {};
+    RasterStats& stats = stats_out ? *stats_out : local_stats;
+    stats = {};
+
+    if (!valid_surface(surface) || !valid_state(state) ||
+        !fragment_shader || varying_count > MAX_VARYINGS)
+        return false;
+
+    ++stats.input_points;
+    for (size_t i = 0; i < varying_count; ++i)
+        if (!std::isfinite(input.varying[i]))
+            return false;
+    if (!clip_point(input))
+        return false;
+
+    ScreenVertex screen = {};
+    if (!to_screen(input, varying_count, state, screen))
+        return false;
+
+    const float min_x = static_cast<float>(std::max(0, state.viewport[0]));
+    const float min_y = static_cast<float>(std::max(0, state.viewport[1]));
+    const float max_x = static_cast<float>(std::min(
+        surface.width, static_cast<int64_t>(state.viewport[0]) +
+        state.viewport[2]));
+    const float max_y = static_cast<float>(std::min(
+        surface.height, static_cast<int64_t>(state.viewport[1]) +
+        state.viewport[3]));
+    if (state.scissor_enabled)
+    {
+        if (min_x >= max_x || min_y >= max_y)
+            return false;
+        if (screen.x < std::max(min_x, static_cast<float>(state.scissor[0])) ||
+            screen.y < std::max(min_y, static_cast<float>(state.scissor[1])) ||
+            screen.x >= std::min(max_x,
+                static_cast<float>(static_cast<int64_t>(state.scissor[0]) +
+                                   state.scissor[2])) ||
+            screen.y >= std::min(max_y,
+                static_cast<float>(static_cast<int64_t>(state.scissor[1]) +
+                                   state.scissor[3])))
+            return false;
+    }
+
+    if (screen.x < min_x || screen.y < min_y ||
+        screen.x >= max_x || screen.y >= max_y)
+        return false;
+
+    const int x = static_cast<int>(std::floor(screen.x));
+    const int y = static_cast<int>(std::floor(screen.y));
+    float varyings[MAX_VARYINGS] = {};
+    for (size_t i = 0; i < varying_count; ++i)
+        varyings[i] = input.varying[i];
+
+    return process_fragment(surface, state, x, y, varyings,
+        varying_count, screen.z_over_w, true,
+        fragment_shader, user_data, stats);
+}
+
+bool draw_line(
+    const RenderSurface& surface,
+    const PipelineState& state,
+    const ClipVertex input[2],
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats_out)
+{
+    RasterStats local_stats = {};
+    RasterStats& stats = stats_out ? *stats_out : local_stats;
+    stats = {};
+
+    if (!valid_surface(surface) || !valid_state(state) ||
+        !input || !fragment_shader || varying_count > MAX_VARYINGS)
+        return false;
+
+    ++stats.input_lines;
+    for (size_t endpoint = 0; endpoint < 2; ++endpoint)
+    {
+        const Vec4& p = input[endpoint].position;
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) ||
+            !std::isfinite(p.z) || !std::isfinite(p.w))
+            return false;
+        for (size_t i = 0; i < varying_count; ++i)
+            if (!std::isfinite(input[endpoint].varying[i]))
+                return false;
+    }
+
+    ClipVertex clipped[2] = {};
+    if (!clip_line_segment(input, varying_count, clipped))
+        return false;
+
+    ScreenVertex a = {};
+    ScreenVertex b = {};
+    if (!to_screen(clipped[0], varying_count, state, a) ||
+        !to_screen(clipped[1], varying_count, state, b))
+        return false;
+
+    int64_t left = std::max<int64_t>(0, state.viewport[0]);
+    int64_t bottom = std::max<int64_t>(0, state.viewport[1]);
+    int64_t right = std::min<int64_t>(
+        surface.width,
+        static_cast<int64_t>(state.viewport[0]) + state.viewport[2]);
+    int64_t top = std::min<int64_t>(
+        surface.height,
+        static_cast<int64_t>(state.viewport[1]) + state.viewport[3]);
+
+    if (state.scissor_enabled)
+    {
+        left = std::max<int64_t>(left, state.scissor[0]);
+        bottom = std::max<int64_t>(bottom, state.scissor[1]);
+        right = std::min<int64_t>(
+            right, static_cast<int64_t>(state.scissor[0]) + state.scissor[2]);
+        top = std::min<int64_t>(
+            top, static_cast<int64_t>(state.scissor[1]) + state.scissor[3]);
+    }
+    if (left >= right || bottom >= top)
+        return false;
+
+    float enter = 0.0f;
+    float leave = 1.0f;
+    if (!clip_screen_line(a, b,
+            static_cast<float>(left), static_cast<float>(bottom),
+            static_cast<float>(right) - 0.0001f,
+            static_cast<float>(top) - 0.0001f, enter, leave))
+        return false;
+
+    const float original_dx = b.x - a.x;
+    const float original_dy = b.y - a.y;
+    const ScreenVertex original_a = a;
+    const ScreenVertex original_b = b;
+
+    a.x = original_a.x + original_dx * enter;
+    a.y = original_a.y + original_dy * enter;
+    a.inverse_w = original_a.inverse_w +
+        (original_b.inverse_w - original_a.inverse_w) * enter;
+    a.z_over_w = original_a.z_over_w +
+        (original_b.z_over_w - original_a.z_over_w) * enter;
+    for (size_t i = 0; i < varying_count; ++i)
+        a.varying_over_w[i] = original_a.varying_over_w[i] +
+            (original_b.varying_over_w[i] - original_a.varying_over_w[i]) * enter;
+
+    b.x = original_a.x + original_dx * leave;
+    b.y = original_a.y + original_dy * leave;
+    b.inverse_w = original_a.inverse_w +
+        (original_b.inverse_w - original_a.inverse_w) * leave;
+    b.z_over_w = original_a.z_over_w +
+        (original_b.z_over_w - original_a.z_over_w) * leave;
+    for (size_t i = 0; i < varying_count; ++i)
+        b.varying_over_w[i] = original_a.varying_over_w[i] +
+            (original_b.varying_over_w[i] - original_a.varying_over_w[i]) * leave;
+
+    const float dx = b.x - a.x;
+    const float dy = b.y - a.y;
+    const int steps = static_cast<int>(
+        std::ceil(std::max(std::fabs(dx), std::fabs(dy))));
+    const int total_steps = std::max(steps, 1);
+
+    bool wrote_any = false;
+    int previous_x = std::numeric_limits<int>::min();
+    int previous_y = std::numeric_limits<int>::min();
+    float varyings[MAX_VARYINGS] = {};
+
+    for (int step = 0; step <= total_steps; ++step)
+    {
+        const float t = static_cast<float>(step) / total_steps;
+        const float screen_x = a.x + dx * t;
+        const float screen_y = a.y + dy * t;
+        const int x = static_cast<int>(std::floor(screen_x));
+        const int y = static_cast<int>(std::floor(screen_y));
+        if (x == previous_x && y == previous_y)
+            continue;
+        previous_x = x;
+        previous_y = y;
+
+        const float reciprocal_w =
+            a.inverse_w + (b.inverse_w - a.inverse_w) * t;
+        if (!std::isfinite(reciprocal_w) || reciprocal_w <= 0.0f)
+            continue;
+        for (size_t i = 0; i < varying_count; ++i)
+        {
+            const float interpolated = a.varying_over_w[i] +
+                (b.varying_over_w[i] - a.varying_over_w[i]) * t;
+            varyings[i] = interpolated / reciprocal_w;
+        }
+        const float ndc_depth =
+            a.z_over_w + (b.z_over_w - a.z_over_w) * t;
+
+        if (process_fragment(surface, state, x, y,
+                varyings, varying_count, ndc_depth, true,
+                fragment_shader, user_data, stats))
             wrote_any = true;
     }
     return wrote_any;
