@@ -40,3 +40,15 @@ add_executable(texture_tests
 target_compile_features(texture_tests PRIVATE cxx_std_20)
 target_compile_options(texture_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME texture_sampler COMMAND texture_tests)
+
+add_executable(gles_state_tests
+    test_gles_state.cpp
+    ../../src/gles/gles_context.cpp
+)
+
+target_compile_features(gles_state_tests PRIVATE cxx_std_20)
+target_compile_options(gles_state_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(gles_state_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+)
+add_test(NAME gles_context_state COMMAND gles_state_tests)
