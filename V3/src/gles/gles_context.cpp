@@ -479,6 +479,13 @@ void glGetIntegerv(GLenum pname, GLint *data)
         case GL_DEPTH_WRITEMASK:
             data[0] = g_context.depth_mask ? GL_TRUE : GL_FALSE;
             break;
+        case GL_COLOR_WRITEMASK:
+            for (int i = 0; i < 4; ++i)
+                data[i] = g_context.color_mask[i] ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_STENCIL_CLEAR_VALUE:
+            data[0] = g_context.clear_stencil;
+            break;
         case GL_CULL_FACE_MODE:
             data[0] = static_cast<GLint>(g_context.cull_mode);
             break;
@@ -508,6 +515,54 @@ void glGetIntegerv(GLenum pname, GLint *data)
             set_error(GL_INVALID_ENUM);
             break;
     }
+}
+
+void glGetBooleanv(GLenum pname, GLboolean *data)
+{
+    if (!has_context()) return;
+    if (!data)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    GLint values[4] = {};
+    glGetIntegerv(pname, values);
+    if (g_context.error != GL_NO_ERROR)
+        return;
+
+    const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
+                       pname == GL_COLOR_WRITEMASK ||
+                       pname == GL_MAX_VIEWPORT_DIMS) ? 4 : 1;
+    for (int i = 0; i < count; ++i)
+        data[i] = values[i] ? GL_TRUE : GL_FALSE;
+}
+
+void glGetFloatv(GLenum pname, GLfloat *data)
+{
+    if (!has_context()) return;
+    if (!data)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    if (pname == GL_DEPTH_CLEAR_VALUE)
+    {
+        data[0] = g_context.clear_depth;
+        return;
+    }
+
+    GLint values[4] = {};
+    glGetIntegerv(pname, values);
+    if (g_context.error != GL_NO_ERROR)
+        return;
+
+    const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
+                       pname == GL_COLOR_WRITEMASK ||
+                       pname == GL_MAX_VIEWPORT_DIMS) ? 4 : 1;
+    for (int i = 0; i < count; ++i)
+        data[i] = static_cast<GLfloat>(values[i]);
 }
 
 const GLubyte *glGetString(GLenum name)
