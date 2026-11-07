@@ -532,8 +532,8 @@ void glGetBooleanv(GLenum pname, GLboolean *data)
         return;
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
-                       pname == GL_COLOR_WRITEMASK ||
-                       pname == GL_MAX_VIEWPORT_DIMS) ? 4 : 1;
+                       pname == GL_COLOR_WRITEMASK) ? 4 :
+                      (pname == GL_MAX_VIEWPORT_DIMS ? 2 : 1);
     for (int i = 0; i < count; ++i)
         data[i] = values[i] ? GL_TRUE : GL_FALSE;
 }
@@ -559,8 +559,8 @@ void glGetFloatv(GLenum pname, GLfloat *data)
         return;
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
-                       pname == GL_COLOR_WRITEMASK ||
-                       pname == GL_MAX_VIEWPORT_DIMS) ? 4 : 1;
+                       pname == GL_COLOR_WRITEMASK) ? 4 :
+                      (pname == GL_MAX_VIEWPORT_DIMS ? 2 : 1);
     for (int i = 0; i < count; ++i)
         data[i] = static_cast<GLfloat>(values[i]);
 }
