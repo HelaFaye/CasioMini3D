@@ -221,6 +221,8 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
     out->measure_frames = cfg.measure_frames;
     out->repeat_count = cfg.repeat_count;
     out->triangles_per_frame = triangles_per_frame(id, cfg);
+    out->screen_width = SCREEN_WIDTH;
+    out->screen_height = SCREEN_HEIGHT;
     out->clear = summarize_samples(clear_samples, cfg.repeat_count);
     out->raster = summarize_samples(raster_samples, cfg.repeat_count);
     out->present = summarize_samples(present_samples, cfg.repeat_count);
