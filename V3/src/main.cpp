@@ -7,6 +7,7 @@
 
 static const BenchId BENCHMARKS[] = {
     BenchId::ClearOnly,
+    BenchId::SolidFill,
     BenchId::TriangleThroughput,
     BenchId::TexturedGeometry
 };
@@ -241,7 +242,7 @@ static void draw_results()
 
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
     {
-        const int y = 34 + static_cast<int>(i) * 38;
+        const int y = 24 + static_cast<int>(i) * 39;
         dtext(8, y, C_WHITE, bench_name(BENCHMARKS[i]));
         if (benchmark_valid[i])
         {
@@ -269,8 +270,8 @@ static void draw_results()
         }
     }
 
-    dtext(8, 164, C_WHITE, "F6 / EXE / DEL: rerun test");
-    dtext(8, 182, C_WHITE, "MENU: quit");
+    dtext(8, 190, C_WHITE, "F6 clear / F5 solid / EXE triangles / DEL UV");
+    dtext(8, 207, C_WHITE, "MENU: quit");
 }
 
 int main()
@@ -298,10 +299,12 @@ int main()
         size_t selected = BENCHMARK_COUNT;
         if (keydown(KEY_F6))
             selected = 0;
-        else if (keydown(KEY_EXE))
+        else if (keydown(KEY_F5))
             selected = 1;
-        else if (keydown(KEY_DEL))
+        else if (keydown(KEY_EXE))
             selected = 2;
+        else if (keydown(KEY_DEL))
+            selected = 3;
 
         if (selected < BENCHMARK_COUNT)
         {
@@ -310,7 +313,7 @@ int main()
             dtext(8, 28, C_WHITE, bench_name(BENCHMARKS[selected]));
             dupdate();
             run_and_store(selected, cfg);
-            while (keydown(KEY_F6) || keydown(KEY_EXE) || keydown(KEY_DEL))
+            while (keydown(KEY_F6) || keydown(KEY_F5) || keydown(KEY_EXE) || keydown(KEY_DEL))
                 clearevents();
         }
     }
