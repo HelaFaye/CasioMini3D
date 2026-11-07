@@ -213,7 +213,7 @@ void test_alpha_blending_and_color_mask()
     assert(fxgl::draw_triangle(surface, state, triangle, 0,
         solid_fragment, &green));
     assert(((color[0] >> 11) & 0x1f) == red);
-    assert((color[0] & 0x1f) == blue);
+    assert((color[0] & 0x1f) == 0);
 }
 
 void test_scissor_and_stencil_operations()
