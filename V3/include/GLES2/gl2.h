@@ -150,6 +150,7 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_MAX_VIEWPORT_DIMS 0x0D3A
 
 void glPixelStorei(GLenum pname, GLint param);
+GLboolean glIsTexture(GLuint texture);
 void glGenTextures(GLsizei n, GLuint *textures);
 void glDeleteTextures(GLsizei n, const GLuint *textures);
 void glActiveTexture(GLenum texture);
@@ -163,6 +164,7 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
     GLsizei width, GLsizei height, GLenum format, GLenum type,
     const GLvoid *pixels);
 
+GLboolean glIsBuffer(GLuint buffer);
 void glGenBuffers(GLsizei n, GLuint *buffers);
 void glDeleteBuffers(GLsizei n, const GLuint *buffers);
 void glBindBuffer(GLenum target, GLuint buffer);
