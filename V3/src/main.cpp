@@ -3,6 +3,7 @@
 #include "types.hpp"
 #include "world.hpp"
 #include "bench.hpp"
+
 #include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,9 +50,7 @@ static void run_benchmark_suite(const BenchConfig& cfg)
 {
     reset_benchmark_state();
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
-    {
         benchmark_valid[i] = run_benchmark(BENCHMARKS[i], cfg, &benchmark_results[i]);
-    }
 }
 
 static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
@@ -65,26 +64,10 @@ static bool append_benchmark_result_csv(const BenchResult& result, const BenchCo
         file = fopen(kLogPath, "w");
         if (!file)
             return false;
-
         if (fprintf(file, "%s", kCsvHeader) < 0)
         {
             fclose(file);
             return false;
-        }
-    }
-    else
-    {
-        if (fseek(file, 0, SEEK_END) == 0)
-        {
-            const long size = ftell(file);
-            if (size == 0)
-            {
-                if (fprintf(file, "%s", kCsvHeader) < 0)
-                {
-                    fclose(file);
-                    return false;
-                }
-            }
         }
     }
 
@@ -97,14 +80,9 @@ static bool append_benchmark_result_csv(const BenchResult& result, const BenchCo
         result.fps,
         result.avg_ms_per_frame);
 
-    if (written < 0)
-    {
-        fclose(file);
-        return false;
-    }
-
+    const bool ok = written >= 0;
     fclose(file);
-    return true;
+    return ok;
 }
 
 void dclock()
@@ -198,9 +176,7 @@ int main()
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
     {
         if (benchmark_valid[i])
-        {
             append_benchmark_result_csv(benchmark_results[i], cfg);
-        }
     }
 
     AppMode mode = AppMode::Results;

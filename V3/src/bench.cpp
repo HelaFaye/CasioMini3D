@@ -4,7 +4,14 @@
 #include "fixed.hpp"
 #include "shapes/shapes.hpp"
 
-#include <time.h>
+#include <stdint.h>
+
+static inline uint32_t rtc_diff_ticks(uint32_t start, uint32_t end)
+{
+    if (end >= start)
+        return end - start;
+    return (UINT32_MAX - start) + end + 1u;
+}
 
 typedef bool (*BenchSceneFn)(const BenchConfig& cfg, uint32_t frames);
 
@@ -114,14 +121,18 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
     if (!execute_scene(id, cfg, cfg.warmup_frames))
         return false;
 
-    const clock_t start = clock();
+    const uint32_t start = rtc_ticks();
     if (!execute_scene(id, cfg, cfg.measure_frames))
         return false;
-    const clock_t elapsed_ticks = clock() - start;
-    if (elapsed_ticks <= 0 || CLOCKS_PER_SEC <= 0)
+    const uint32_t end = rtc_ticks();
+    const uint32_t elapsed_ticks = rtc_diff_ticks(start, end);
+    if (elapsed_ticks == 0)
         return false;
 
-    const double elapsed_ms = (double)elapsed_ticks * 1000.0 / (double)CLOCKS_PER_SEC;
+    const double elapsed_ms = (double)elapsed_ticks * 1000.0 / 128.0;
+    if (elapsed_ms <= 0.0)
+        return false;
+
     out->name = bench_name(id);
     out->warmup_frames = cfg.warmup_frames;
     out->measure_frames = cfg.measure_frames;
@@ -130,3 +141,4 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
     out->avg_ms_per_frame = elapsed_ms / (double)cfg.measure_frames;
     return true;
 }
+
