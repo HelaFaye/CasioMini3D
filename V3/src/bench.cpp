@@ -48,10 +48,38 @@ static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frame
     return true;
 }
 
+static bool run_textured_geometry_scene(const BenchConfig& cfg, uint32_t frames)
+{
+    for (uint32_t frame = 0; frame < frames; ++frame)
+    {
+        dclear(C_BLACK);
+
+        for (uint32_t i = 0; i < cfg.triangle_count; ++i)
+        {
+            const int x0 = (int)((i * 17u + frame * 2u) % (SCREEN_WIDTH - 48));
+            const int y0 = (int)((i * 19u + frame * 3u) % (SCREEN_HEIGHT - 48));
+            const int w = 16 + (int)(i % 16u);
+            const int h = 16 + (int)((i * 5u) % 16u);
+
+            VertexLocal a = {x0, y0, 0, 0};
+            VertexLocal b = {x0 + w, y0, FLOAT_TO_FIXED(39), 0};
+            VertexLocal c = {x0 + w, y0 + h, FLOAT_TO_FIXED(39), FLOAT_TO_FIXED(39)};
+            VertexLocal d = {x0, y0 + h, 0, FLOAT_TO_FIXED(39)};
+
+            DrawTriangle(a, b, c);
+            DrawTriangle(a, c, d);
+        }
+
+        dupdate();
+    }
+    return true;
+}
+
 static const BenchSceneEntry g_bench_scenes[] =
 {
     {BenchId::ClearOnly, "clear-only", run_clear_only_scene},
-    {BenchId::TriangleThroughput, "triangle-throughput", run_triangle_throughput_scene}
+    {BenchId::TriangleThroughput, "triangle-throughput", run_triangle_throughput_scene},
+    {BenchId::TexturedGeometry, "textured-geometry", run_textured_geometry_scene}
 };
 
 static const int g_bench_scene_count = sizeof(g_bench_scenes) / sizeof(g_bench_scenes[0]);
@@ -80,7 +108,7 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
 {
     if (!out || cfg.measure_frames == 0 || cfg.width <= 0 || cfg.height <= 0)
         return false;
-    if (id == BenchId::TriangleThroughput && cfg.triangle_count == 0)
+    if ((id == BenchId::TriangleThroughput || id == BenchId::TexturedGeometry) && cfg.triangle_count == 0)
         return false;
 
     if (!execute_scene(id, cfg, cfg.warmup_frames))
