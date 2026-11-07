@@ -6,6 +6,15 @@
 
 #include <time.h>
 
+typedef bool (*BenchSceneFn)(const BenchConfig& cfg, uint32_t frames);
+
+struct BenchSceneEntry
+{
+    BenchId id;
+    const char* name;
+    BenchSceneFn run;
+};
+
 static bool run_clear_only_scene(const BenchConfig& cfg, uint32_t frames)
 {
     (void)cfg;
@@ -39,30 +48,32 @@ static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frame
     return true;
 }
 
+static const BenchSceneEntry g_bench_scenes[] =
+{
+    {BenchId::ClearOnly, "clear-only", run_clear_only_scene},
+    {BenchId::TriangleThroughput, "triangle-throughput", run_triangle_throughput_scene}
+};
+
+static const int g_bench_scene_count = sizeof(g_bench_scenes) / sizeof(g_bench_scenes[0]);
+
 static bool execute_scene(BenchId id, const BenchConfig& cfg, uint32_t frames)
 {
-    switch (id)
+    for (int i = 0; i < g_bench_scene_count; ++i)
     {
-        case BenchId::ClearOnly:
-            return run_clear_only_scene(cfg, frames);
-        case BenchId::TriangleThroughput:
-            return run_triangle_throughput_scene(cfg, frames);
-        default:
-            return false;
+        if (g_bench_scenes[i].id == id)
+            return g_bench_scenes[i].run(cfg, frames);
     }
+    return false;
 }
 
 const char* bench_name(BenchId id)
 {
-    switch (id)
+    for (int i = 0; i < g_bench_scene_count; ++i)
     {
-        case BenchId::ClearOnly:
-            return "clear-only";
-        case BenchId::TriangleThroughput:
-            return "triangle-throughput";
-        default:
-            return "unknown";
+        if (g_bench_scenes[i].id == id)
+            return g_bench_scenes[i].name;
     }
+    return "unknown";
 }
 
 bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
