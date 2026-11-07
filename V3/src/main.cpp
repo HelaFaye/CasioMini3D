@@ -54,7 +54,8 @@ static void print_benchmark_legend()
 {
     dtext(UI_TEXT_X, LEGEND_TOP, C_WHITE, "F6: clear-only");
     dtext(UI_TEXT_X, LEGEND_TOP + 14, C_WHITE, "EXE: triangles");
-    dtext(UI_TEXT_X, LEGEND_TOP + 28, C_WHITE, "MENU: quit");
+    dtext(UI_TEXT_X, LEGEND_TOP + 28, C_WHITE, "DEL: textured");
+    dtext(UI_TEXT_X, LEGEND_TOP + 42, C_WHITE, "MENU: quit");
 }
 
 int main(){
@@ -97,6 +98,11 @@ int main(){
         if(keydown(KEY_EXE))
         {
             selected_bench = BenchId::TriangleThroughput;
+            mode = AppMode::Benchmark;
+        }
+        if(keydown(KEY_DEL))
+        {
+            selected_bench = BenchId::TexturedGeometry;
             mode = AppMode::Benchmark;
         }
 
