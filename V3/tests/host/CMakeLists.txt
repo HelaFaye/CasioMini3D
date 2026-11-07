@@ -52,3 +52,12 @@ target_include_directories(gles_state_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
 )
 add_test(NAME gles_context_state COMMAND gles_state_tests)
+
+add_executable(gles_math_tests
+    test_gles_math.cpp
+    ../../src/gles/math.cpp
+)
+
+target_compile_features(gles_math_tests PRIVATE cxx_std_20)
+target_compile_options(gles_math_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME gles_math_pipeline COMMAND gles_math_tests)
