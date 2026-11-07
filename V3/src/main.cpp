@@ -16,6 +16,10 @@ enum class AppMode
     Benchmark = 1
 };
 
+static const int UI_TEXT_X = 8;
+static const int UI_TEXT_TOP = 8;
+static const int LEGEND_TOP = 148;
+
 void dclock()
 {
     clock_t deltaTime = clock() - lastTime;
@@ -24,8 +28,8 @@ void dclock()
         fps = CLOCKS_PER_SEC / deltaTime;
 
     char buffer[20];
-    sprintf(buffer, "FPS: %d", fps);
-    dtext(0, 0, C_WHITE, buffer);
+    sprintf(buffer, "FPS %d", fps);
+    dtext(UI_TEXT_X, UI_TEXT_TOP, C_WHITE, buffer);
     lastTime = clock();
 }
 
@@ -34,23 +38,23 @@ static void print_bench_result(const BenchResult& result)
     char fps_buffer[32];
     char frame_buffer[32];
     char elapsed_buffer[32];
-    snprintf(fps_buffer, sizeof(fps_buffer), "FPS: %.2f", result.fps);
-    snprintf(frame_buffer, sizeof(frame_buffer), "ms/frame: %.3f", result.avg_ms_per_frame);
-    snprintf(elapsed_buffer, sizeof(elapsed_buffer), "Elapsed: %lu ms", (unsigned long)result.elapsed_ms);
+    snprintf(fps_buffer, sizeof(fps_buffer), "FPS %.2f", result.fps);
+    snprintf(frame_buffer, sizeof(frame_buffer), "ms/frame %.3f", result.avg_ms_per_frame);
+    snprintf(elapsed_buffer, sizeof(elapsed_buffer), "Elapsed %lu ms", (unsigned long)result.elapsed_ms);
 
-    dtext(8, 12, C_WHITE, "Benchmark complete");
-    dtext(8, 32, C_WHITE, result.name);
-    dtext(8, 52, C_WHITE, fps_buffer);
-    dtext(8, 72, C_WHITE, frame_buffer);
-    dtext(8, 92, C_WHITE, elapsed_buffer);
-    dtext(8, 116, C_WHITE, "MENU: return");
+    dtext(UI_TEXT_X, 12, C_WHITE, "Benchmark");
+    dtext(UI_TEXT_X, 28, C_WHITE, result.name);
+    dtext(UI_TEXT_X, 44, C_WHITE, fps_buffer);
+    dtext(UI_TEXT_X, 60, C_WHITE, frame_buffer);
+    dtext(UI_TEXT_X, 76, C_WHITE, elapsed_buffer);
+    dtext(UI_TEXT_X, 96, C_WHITE, "MENU: return");
 }
 
 static void print_benchmark_legend()
 {
-    dtext(8, 156, C_WHITE, "F6: clear-only");
-    dtext(8, 170, C_WHITE, "EXE: moving triangles");
-    dtext(8, 184, C_WHITE, "MENU: quit");
+    dtext(UI_TEXT_X, LEGEND_TOP, C_WHITE, "F6: clear-only");
+    dtext(UI_TEXT_X, LEGEND_TOP + 14, C_WHITE, "EXE: triangles");
+    dtext(UI_TEXT_X, LEGEND_TOP + 28, C_WHITE, "MENU: quit");
 }
 
 int main(){
