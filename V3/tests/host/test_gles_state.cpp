@@ -468,7 +468,7 @@ void test_state_validation_and_error_latching()
     glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &value);
     assert(value == GL_DECR);
     glGetIntegerv(GL_STENCIL_WRITEMASK, &value);
-    assert(value == 0xff);
+    assert(value == 0x0f);
     glGetIntegerv(GL_STENCIL_BACK_FUNC, &value);
     assert(value == GL_LESS);
     glGetIntegerv(GL_STENCIL_BACK_REF, &value);
