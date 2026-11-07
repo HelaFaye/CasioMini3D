@@ -2421,6 +2421,79 @@ static StencilFaceState convert_stencil_face(const StencilFace& face)
     return result;
 }
 
+static void build_pipeline_context(
+    RenderSurface& surface,
+    PipelineState& state)
+{
+    surface.color = g_context.surface.color;
+    surface.depth = g_context.surface.depth;
+    surface.stencil = g_context.surface.stencil;
+    surface.width = g_context.surface.width;
+    surface.height = g_context.surface.height;
+    surface.stride = g_context.surface.stride;
+
+    pipeline_default_state(state, surface.width, surface.height);
+    for (int i = 0; i < 4; ++i)
+    {
+        state.viewport[i] = g_context.viewport[i];
+        state.scissor[i] = g_context.scissor[i];
+        state.color_write[i] = g_context.color_mask[i] != GL_FALSE;
+        state.blend_color[i] = g_context.blend_color[i];
+    }
+
+    state.scissor_enabled = g_context.scissor_test;
+    state.cull_enabled = g_context.cull_face;
+    state.cull_face = g_context.cull_mode;
+    state.front_face = g_context.front_face;
+    state.depth_enabled = g_context.depth_test;
+    state.depth_function = g_context.depth_func;
+    state.depth_write = g_context.depth_mask;
+    state.depth_near = g_context.depth_near;
+    state.depth_far = g_context.depth_far;
+    state.stencil_enabled = g_context.stencil_test;
+    state.stencil_front = convert_stencil_face(g_context.stencil_front);
+    state.stencil_back = convert_stencil_face(g_context.stencil_back);
+    state.blend_enabled = g_context.blend;
+    state.blend_src_rgb = g_context.blend_src;
+    state.blend_dst_rgb = g_context.blend_dst;
+    state.blend_src_alpha = g_context.blend_src_alpha;
+    state.blend_dst_alpha = g_context.blend_dst_alpha;
+    state.blend_equation_rgb = g_context.blend_equation;
+    state.blend_equation_alpha = g_context.blend_equation_alpha;
+}
+
+bool draw_clip_point(
+    const ClipVertex& input,
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats)
+{
+    if (!g_context.current)
+        return false;
+    RenderSurface surface = {};
+    PipelineState state = {};
+    build_pipeline_context(surface, state);
+    return fxgl::draw_point(surface, state, input, varying_count,
+                            fragment_shader, user_data, stats);
+}
+
+bool draw_clip_line(
+    const ClipVertex input[2],
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats)
+{
+    if (!g_context.current)
+        return false;
+    RenderSurface surface = {};
+    PipelineState state = {};
+    build_pipeline_context(surface, state);
+    return fxgl::draw_line(surface, state, input, varying_count,
+                           fragment_shader, user_data, stats);
+}
+
 bool draw_clip_triangle(
     const ClipVertex input[3],
     size_t varying_count,
