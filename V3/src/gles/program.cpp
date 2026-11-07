@@ -160,6 +160,23 @@ static int find_bound_attribute(
     return -1;
 }
 
+static size_t shader_component_count(fxgl::ShaderType type)
+{
+    switch (type)
+    {
+        case fxgl::ShaderType::Float:
+        case fxgl::ShaderType::Int:
+        case fxgl::ShaderType::Bool:
+        case fxgl::ShaderType::Sampler2D:
+            return 1;
+        case fxgl::ShaderType::Vec2: return 2;
+        case fxgl::ShaderType::Vec3: return 3;
+        case fxgl::ShaderType::Vec4: return 4;
+        case fxgl::ShaderType::Mat4: return 16;
+        default: return 0;
+    }
+}
+
 static bool link_program(ProgramObject& program)
 {
     program.linked = false;
@@ -316,23 +333,6 @@ static ProgramObject *current_program()
         return nullptr;
     ProgramObject *program = find_program(g_current_program);
     return program && program->linked ? program : nullptr;
-}
-
-static size_t shader_component_count(fxgl::ShaderType type)
-{
-    switch (type)
-    {
-        case fxgl::ShaderType::Float:
-        case fxgl::ShaderType::Int:
-        case fxgl::ShaderType::Bool:
-        case fxgl::ShaderType::Sampler2D:
-            return 1;
-        case fxgl::ShaderType::Vec2: return 2;
-        case fxgl::ShaderType::Vec3: return 3;
-        case fxgl::ShaderType::Vec4: return 4;
-        case fxgl::ShaderType::Mat4: return 16;
-        default: return 0;
-    }
 }
 
 static bool valid_uniform_location(
