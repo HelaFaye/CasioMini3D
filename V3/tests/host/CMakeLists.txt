@@ -11,7 +11,7 @@ add_executable(triangle_tests
 target_compile_features(triangle_tests PRIVATE cxx_std_20)
 target_compile_options(triangle_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(triangle_tests PRIVATE
-    \${CMAKE_CURRENT_SOURCE_DIR}/stubs
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs
 )
 
 add_test(NAME triangle_rasterizer COMMAND triangle_tests)
