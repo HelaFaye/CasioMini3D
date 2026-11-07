@@ -45,9 +45,20 @@ static uint16_t address_index(
     }
 
     const int64_t extent = static_cast<int64_t>(size);
-    int64_t wrapped = index % extent;
+    if (mode == TextureAddressMode::Repeat)
+    {
+        int64_t wrapped = index % extent;
+        if (wrapped < 0)
+            wrapped += extent;
+        return static_cast<uint16_t>(wrapped);
+    }
+
+    const int64_t period = extent * 2;
+    int64_t wrapped = index % period;
     if (wrapped < 0)
-        wrapped += extent;
+        wrapped += period;
+    if (wrapped >= extent)
+        wrapped = period - wrapped - 1;
     return static_cast<uint16_t>(wrapped);
 }
 
@@ -100,10 +111,12 @@ bool sampler_valid(const TextureSampler& sampler)
         sampler.filter == TextureFilter::Bilinear;
     const bool address_u_ok =
         sampler.address_u == TextureAddressMode::Clamp ||
-        sampler.address_u == TextureAddressMode::Repeat;
+        sampler.address_u == TextureAddressMode::Repeat ||
+        sampler.address_u == TextureAddressMode::MirroredRepeat;
     const bool address_v_ok =
         sampler.address_v == TextureAddressMode::Clamp ||
-        sampler.address_v == TextureAddressMode::Repeat;
+        sampler.address_v == TextureAddressMode::Repeat ||
+        sampler.address_v == TextureAddressMode::MirroredRepeat;
     return filter_ok && address_u_ok && address_v_ok;
 }
 
