@@ -132,11 +132,11 @@ static void test_crossing_left_plane_preserves_varying_interpolation()
     for (size_t i = 0; i < count; ++i)
     {
         assert_inside_clip_volume(output[i]);
-        if (near(output[i].position.y, -1.0f / 3.0f) &&
-            near(output[i].varying[0], 10.0f / 3.0f))
+        if (near(output[i].position.y, -0.25f) &&
+            near(output[i].varying[0], 5.0f))
             found_low = true;
-        if (near(output[i].position.y, 1.0f / 3.0f) &&
-            near(output[i].varying[0], 20.0f / 3.0f))
+        if (near(output[i].position.y, 0.25f) &&
+            near(output[i].varying[0], 10.0f))
             found_high = true;
     }
     assert(found_low && found_high);
