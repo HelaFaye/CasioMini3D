@@ -1417,7 +1417,10 @@ void glStencilMaskSeparate(GLenum face, GLuint mask)
     }
 
     if (face == GL_FRONT || face == GL_FRONT_AND_BACK)
+    {
         g_context.stencil_front.write_mask = mask;
+        g_context.stencil_mask = mask;
+    }
     if (face == GL_BACK || face == GL_FRONT_AND_BACK)
         g_context.stencil_back.write_mask = mask;
 }
@@ -1560,7 +1563,7 @@ void glGetIntegerv(GLenum pname, GLint *data)
             data[0] = static_cast<GLint>(g_context.blend_equation_alpha);
             break;
         case GL_STENCIL_WRITEMASK:
-            data[0] = static_cast<GLint>(g_context.stencil_mask);
+            data[0] = static_cast<GLint>(g_context.stencil_front.write_mask);
             break;
         case GL_STENCIL_FUNC:
             data[0] = static_cast<GLint>(g_context.stencil_front.function);
