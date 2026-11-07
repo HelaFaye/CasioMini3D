@@ -33,13 +33,9 @@ static void utf16_from_cstr(const char* src, uint16_t* out, size_t max_chars)
     out[i] = 0;
 }
 
-static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
+static bool open_or_create_results_log(uint16_t filename[32], int* out_handle)
 {
-    static const char kLogPath[] = "fls0:benchmarks.csv";
     static const char kCsvHeader[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
-
-    uint16_t filename[32];
-    utf16_from_cstr(kLogPath, filename, sizeof(filename) / sizeof(filename[0]));
 
     int handle = Bfile_OpenFile(filename, BFile_ReadWrite);
     if (handle < 0)
@@ -59,14 +55,14 @@ static bool append_benchmark_result_csv(const BenchResult& result, const BenchCo
     }
     else
     {
-        long file_size = Bfile_SeekFile(handle, 0, BFile_SeekEnd);
-        if (file_size < 0)
+        const long current_size = Bfile_SeekFile(handle, 0, BFile_SeekEnd);
+        if (current_size < 0)
         {
             Bfile_CloseFile(handle);
             return false;
         }
 
-        if (file_size == 0)
+        if (current_size == 0)
         {
             const size_t header_len = strlen(kCsvHeader);
             if (Bfile_WriteFile(handle, kCsvHeader, (int)header_len) < 0)
@@ -83,8 +79,22 @@ static bool append_benchmark_result_csv(const BenchResult& result, const BenchCo
         }
     }
 
+    *out_handle = handle;
+    return true;
+}
+
+static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
+{
+    static const char kLogPath[] = "fls0:benchmarks.csv";
+    uint16_t filename[32];
+    utf16_from_cstr(kLogPath, filename, sizeof(filename) / sizeof(filename[0]));
+
+    int handle = -1;
+    if (!open_or_create_results_log(filename, &handle))
+        return false;
+
     char line[256];
-    int written = snprintf(line, sizeof(line),
+    const int written = snprintf(line, sizeof(line),
         "%s,%u,%u,%u,%.2f,%.3f\n",
         result.name,
         cfg.warmup_frames,
