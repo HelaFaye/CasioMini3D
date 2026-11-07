@@ -16,6 +16,7 @@ typedef short GLshort;
 typedef int GLint;
 typedef int GLsizei;
 typedef unsigned char GLubyte;
+typedef char GLchar;
 typedef unsigned short GLushort;
 typedef unsigned int GLuint;
 typedef float GLfloat;
@@ -62,6 +63,24 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_FRONT_AND_BACK 0x0408
 #define GL_CW 0x0900
 #define GL_CCW 0x0901
+
+#define GL_VERTEX_SHADER 0x8B31
+#define GL_FRAGMENT_SHADER 0x8B30
+#define GL_SHADER_TYPE 0x8B4F
+#define GL_DELETE_STATUS 0x8B80
+#define GL_COMPILE_STATUS 0x8B81
+#define GL_LINK_STATUS 0x8B82
+#define GL_VALIDATE_STATUS 0x8B83
+#define GL_INFO_LOG_LENGTH 0x8B84
+#define GL_SHADER_SOURCE_LENGTH 0x8B88
+#define GL_ATTACHED_SHADERS 0x8B85
+#define GL_ACTIVE_UNIFORMS 0x8B86
+#define GL_ACTIVE_UNIFORM_MAX_LENGTH 0x8B87
+#define GL_ACTIVE_ATTRIBUTES 0x8B89
+#define GL_ACTIVE_ATTRIBUTE_MAX_LENGTH 0x8B8A
+#define GL_CURRENT_PROGRAM 0x8B8D
+#define GL_MAX_VERTEX_UNIFORM_VECTORS 0x8DFB
+#define GL_MAX_FRAGMENT_UNIFORM_VECTORS 0x8DFD
 
 #define GL_KEEP 0x1E00
 #define GL_REPLACE 0x1E01
@@ -175,6 +194,38 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_STENCIL_WRITEMASK 0x0B98
 #define GL_MAX_TEXTURE_SIZE 0x0D33
 #define GL_MAX_VIEWPORT_DIMS 0x0D3A
+
+GLuint glCreateShader(GLenum type);
+void glDeleteShader(GLuint shader);
+void glShaderSource(GLuint shader, GLsizei count,
+    const GLchar *const *string, const GLint *length);
+void glCompileShader(GLuint shader);
+void glGetShaderiv(GLuint shader, GLenum pname, GLint *params);
+void glGetShaderInfoLog(GLuint shader, GLsizei max_length,
+    GLsizei *length, GLchar *info_log);
+GLboolean glIsShader(GLuint shader);
+
+GLuint glCreateProgram(void);
+void glDeleteProgram(GLuint program);
+void glAttachShader(GLuint program, GLuint shader);
+void glDetachShader(GLuint program, GLuint shader);
+void glLinkProgram(GLuint program);
+void glUseProgram(GLuint program);
+void glGetProgramiv(GLuint program, GLenum pname, GLint *params);
+void glGetProgramInfoLog(GLuint program, GLsizei max_length,
+    GLsizei *length, GLchar *info_log);
+GLboolean glIsProgram(GLuint program);
+void glBindAttribLocation(GLuint program, GLuint index, const GLchar *name);
+GLint glGetAttribLocation(GLuint program, const GLchar *name);
+GLint glGetUniformLocation(GLuint program, const GLchar *name);
+
+void glUniform1f(GLint location, GLfloat v0);
+void glUniform2f(GLint location, GLfloat v0, GLfloat v1);
+void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
+void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+void glUniform1i(GLint location, GLint v0);
+void glUniformMatrix4fv(GLint location, GLsizei count,
+    GLboolean transpose, const GLfloat *value);
 
 void glPixelStorei(GLenum pname, GLint param);
 GLboolean glIsTexture(GLuint texture);
