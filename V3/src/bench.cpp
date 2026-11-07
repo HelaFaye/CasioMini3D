@@ -6,42 +6,50 @@
 
 #include <time.h>
 
-static bool measure_frames(BenchId id, const BenchConfig& cfg, uint32_t frames)
+static bool run_clear_only_scene(const BenchConfig& cfg, uint32_t frames)
+{
+    (void)cfg;
+    for (uint32_t frame = 0; frame < frames; ++frame)
+    {
+        dclear(C_BLACK);
+        dupdate();
+    }
+    return true;
+}
+
+static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frames)
+{
+    for (uint32_t frame = 0; frame < frames; ++frame)
+    {
+        dclear(C_BLACK);
+        for (uint32_t i = 0; i < cfg.triangle_count; ++i)
+        {
+            const int x = (int)((i * 37u + frame * 3u) % (SCREEN_WIDTH - 32));
+            const int y = (int)((i * 23u + frame * 2u) % (SCREEN_HEIGHT - 32));
+            const int w = 12 + (int)(i % 20u);
+            const int h = 12 + (int)((i * 3u) % 20u);
+
+            VertexLocal a = {x, y, 0, 0};
+            VertexLocal b = {x + w, y + h / 2, FLOAT_TO_FIXED(39), 0};
+            VertexLocal c = {x, y + h, 0, FLOAT_TO_FIXED(39)};
+            DrawTriangle(a, b, c);
+        }
+        dupdate();
+    }
+    return true;
+}
+
+static bool execute_scene(BenchId id, const BenchConfig& cfg, uint32_t frames)
 {
     switch (id)
     {
         case BenchId::ClearOnly:
-            for (uint32_t frame = 0; frame < frames; ++frame)
-            {
-                dclear(C_BLACK);
-                dupdate();
-            }
-            return true;
-
+            return run_clear_only_scene(cfg, frames);
         case BenchId::TriangleThroughput:
-        {
-            for (uint32_t frame = 0; frame < frames; ++frame)
-            {
-                dclear(C_BLACK);
-                for (uint32_t i = 0; i < cfg.triangle_count; ++i)
-                {
-                    const int x = (int)((i * 37u + frame * 3u) % (SCREEN_WIDTH - 32));
-                    const int y = (int)((i * 23u + frame * 2u) % (SCREEN_HEIGHT - 32));
-                    const int w = 12 + (int)(i % 20u);
-                    const int h = 12 + (int)((i * 3u) % 20u);
-
-                    VertexLocal a = {x, y, 0, 0};
-                    VertexLocal b = {x + w, y + h / 2, FLOAT_TO_FIXED(39), 0};
-                    VertexLocal c = {x, y + h, 0, FLOAT_TO_FIXED(39)};
-                    DrawTriangle(a, b, c);
-                }
-                dupdate();
-            }
-            return true;
-        }
+            return run_triangle_throughput_scene(cfg, frames);
+        default:
+            return false;
     }
-
-    return false;
 }
 
 const char* bench_name(BenchId id)
@@ -64,11 +72,11 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
     if (id == BenchId::TriangleThroughput && cfg.triangle_count == 0)
         return false;
 
-    if (!measure_frames(id, cfg, cfg.warmup_frames))
+    if (!execute_scene(id, cfg, cfg.warmup_frames))
         return false;
 
     const clock_t start = clock();
-    if (!measure_frames(id, cfg, cfg.measure_frames))
+    if (!execute_scene(id, cfg, cfg.measure_frames))
         return false;
     const clock_t elapsed_ticks = clock() - start;
     if (elapsed_ticks <= 0 || CLOCKS_PER_SEC <= 0)
