@@ -54,6 +54,17 @@ struct VertexAttribute
     GLuint buffer_binding = 0;
 };
 
+struct StencilFace
+{
+    GLenum function = GL_ALWAYS;
+    GLint reference = 0;
+    GLuint value_mask = 0xff;
+    GLuint write_mask = 0xff;
+    GLenum stencil_fail = GL_KEEP;
+    GLenum depth_fail = GL_KEEP;
+    GLenum depth_pass = GL_KEEP;
+};
+
 struct Context
 {
     bool current = false;
@@ -88,13 +99,21 @@ struct Context
 
     GLenum depth_func = GL_LESS;
     bool depth_mask = true;
+    GLfloat depth_near = 0.0f;
+    GLfloat depth_far = 1.0f;
     GLenum cull_mode = GL_BACK;
     GLenum front_face = GL_CCW;
     GLenum blend_src = GL_ONE;
     GLenum blend_dst = GL_ZERO;
     GLenum blend_equation = GL_FUNC_ADD;
+    GLenum blend_src_alpha = GL_ONE;
+    GLenum blend_dst_alpha = GL_ZERO;
+    GLenum blend_equation_alpha = GL_FUNC_ADD;
+    GLfloat blend_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     GLboolean color_mask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     GLuint stencil_mask = 0xff;
+    StencilFace stencil_front = {};
+    StencilFace stencil_back = {};
 
     GLenum error = GL_NO_ERROR;
 };
@@ -293,6 +312,33 @@ static bool valid_blend_equation(GLenum value)
 {
     return value == GL_FUNC_ADD || value == GL_FUNC_SUBTRACT ||
            value == GL_FUNC_REVERSE_SUBTRACT;
+}
+
+static bool valid_blend_pair(GLenum source, GLenum destination,
+                              bool alpha_channel)
+{
+    if (!valid_blend_factor(source) || !valid_blend_factor(destination) ||
+        destination == GL_SRC_ALPHA_SATURATE)
+        return false;
+    if (alpha_channel && source == GL_SRC_ALPHA_SATURATE)
+        return false;
+    return true;
+}
+
+static bool valid_stencil_operation(GLenum value)
+{
+    return value == GL_ZERO || value == GL_KEEP || value == GL_REPLACE ||
+           value == GL_INCR || value == GL_DECR || value == GL_INVERT ||
+           value == GL_INCR_WRAP || value == GL_DECR_WRAP;
+}
+
+static StencilFace *stencil_face(GLenum face)
+{
+    if (face == GL_FRONT)
+        return &g_context.stencil_front;
+    if (face == GL_BACK)
+        return &g_context.stencil_back;
+    return nullptr;
 }
 
 static bool *capability(GLenum cap)
@@ -1237,6 +1283,135 @@ GLboolean glIsEnabled(GLenum cap)
     return *state ? GL_TRUE : GL_FALSE;
 }
 
+void glDepthRangef(GLclampf near_value, GLclampf far_value)
+{
+    if (!has_context()) return;
+    g_context.depth_near = clamp01(near_value);
+    g_context.depth_far = clamp01(far_value);
+}
+
+void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
+{
+    if (!has_context()) return;
+    g_context.blend_color[0] = clamp01(red);
+    g_context.blend_color[1] = clamp01(green);
+    g_context.blend_color[2] = clamp01(blue);
+    g_context.blend_color[3] = clamp01(alpha);
+}
+
+void glBlendFuncSeparate(
+    GLenum src_rgb,
+    GLenum dst_rgb,
+    GLenum src_alpha,
+    GLenum dst_alpha)
+{
+    if (!has_context()) return;
+    if (!valid_blend_pair(src_rgb, dst_rgb, false) ||
+        !valid_blend_pair(src_alpha, dst_alpha, true))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    g_context.blend_src = src_rgb;
+    g_context.blend_dst = dst_rgb;
+    g_context.blend_src_alpha = src_alpha;
+    g_context.blend_dst_alpha = dst_alpha;
+}
+
+void glBlendEquationSeparate(GLenum mode_rgb, GLenum mode_alpha)
+{
+    if (!has_context()) return;
+    if (!valid_blend_equation(mode_rgb) ||
+        !valid_blend_equation(mode_alpha))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    g_context.blend_equation = mode_rgb;
+    g_context.blend_equation_alpha = mode_alpha;
+}
+
+void glStencilFuncSeparate(
+    GLenum face,
+    GLenum func,
+    GLint ref,
+    GLuint mask)
+{
+    if (!has_context()) return;
+    if (face != GL_FRONT && face != GL_BACK && face != GL_FRONT_AND_BACK)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!valid_depth_func(func))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    if (face == GL_FRONT || face == GL_FRONT_AND_BACK)
+    {
+        g_context.stencil_front.function = func;
+        g_context.stencil_front.reference = ref;
+        g_context.stencil_front.value_mask = mask;
+    }
+    if (face == GL_BACK || face == GL_FRONT_AND_BACK)
+    {
+        g_context.stencil_back.function = func;
+        g_context.stencil_back.reference = ref;
+        g_context.stencil_back.value_mask = mask;
+    }
+}
+
+void glStencilOpSeparate(
+    GLenum face,
+    GLenum stencil_fail,
+    GLenum depth_fail,
+    GLenum depth_pass)
+{
+    if (!has_context()) return;
+    if (face != GL_FRONT && face != GL_BACK && face != GL_FRONT_AND_BACK)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!valid_stencil_operation(stencil_fail) ||
+        !valid_stencil_operation(depth_fail) ||
+        !valid_stencil_operation(depth_pass))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    if (face == GL_FRONT || face == GL_FRONT_AND_BACK)
+    {
+        g_context.stencil_front.stencil_fail = stencil_fail;
+        g_context.stencil_front.depth_fail = depth_fail;
+        g_context.stencil_front.depth_pass = depth_pass;
+    }
+    if (face == GL_BACK || face == GL_FRONT_AND_BACK)
+    {
+        g_context.stencil_back.stencil_fail = stencil_fail;
+        g_context.stencil_back.depth_fail = depth_fail;
+        g_context.stencil_back.depth_pass = depth_pass;
+    }
+}
+
+void glStencilMaskSeparate(GLenum face, GLuint mask)
+{
+    if (!has_context()) return;
+    if (face != GL_FRONT && face != GL_BACK && face != GL_FRONT_AND_BACK)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    if (face == GL_FRONT || face == GL_FRONT_AND_BACK)
+        g_context.stencil_front.write_mask = mask;
+    if (face == GL_BACK || face == GL_FRONT_AND_BACK)
+        g_context.stencil_back.write_mask = mask;
+}
+
 void glDepthFunc(GLenum func)
 {
     if (!has_context()) return;
@@ -1279,13 +1454,16 @@ void glFrontFace(GLenum mode)
 void glBlendFunc(GLenum sfactor, GLenum dfactor)
 {
     if (!has_context()) return;
-    if (!valid_blend_factor(sfactor) || !valid_blend_factor(dfactor))
+    if (!valid_blend_pair(sfactor, dfactor, false) ||
+        !valid_blend_pair(sfactor, dfactor, true))
     {
         set_error(GL_INVALID_ENUM);
         return;
     }
     g_context.blend_src = sfactor;
     g_context.blend_dst = dfactor;
+    g_context.blend_src_alpha = sfactor;
+    g_context.blend_dst_alpha = dfactor;
 }
 
 void glBlendEquation(GLenum mode)
@@ -1297,6 +1475,7 @@ void glBlendEquation(GLenum mode)
         return;
     }
     g_context.blend_equation = mode;
+    g_context.blend_equation_alpha = mode;
 }
 
 void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)
@@ -1312,6 +1491,8 @@ void glStencilMask(GLuint mask)
 {
     if (!has_context()) return;
     g_context.stencil_mask = mask;
+    g_context.stencil_front.write_mask = mask;
+    g_context.stencil_back.write_mask = mask;
 }
 
 void glGetIntegerv(GLenum pname, GLint *data)
