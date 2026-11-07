@@ -988,6 +988,35 @@ GLint glGetUniformLocation(GLuint program_name, const GLchar *name)
     return find_uniform(*program, name);
 }
 
+void glGetAttachedShaders(
+    GLuint program_name,
+    GLsizei max_count,
+    GLsizei *count,
+    GLuint *shaders)
+{
+    if (!fxglHasCurrentContext())
+        return;
+    ProgramObject *program = find_program(program_name);
+    if (!program)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (max_count < 0 || (max_count > 0 && !shaders))
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    GLsizei written = 0;
+    if (program->vertex_shader != 0 && written < max_count)
+        shaders[written++] = program->vertex_shader;
+    if (program->fragment_shader != 0 && written < max_count)
+        shaders[written++] = program->fragment_shader;
+    if (count)
+        *count = written;
+}
+
 void glGetActiveAttrib(
     GLuint program_name,
     GLuint index,
