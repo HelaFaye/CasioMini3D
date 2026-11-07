@@ -66,3 +66,5 @@ test/*
 /v1/src/.vscode
 src/.vscode/settings.json
 /V2/.vscode
+/V3/build-cg/
+.documentation-backups/

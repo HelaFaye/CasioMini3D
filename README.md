@@ -1,6 +1,6 @@
 # CasioMini3D
 
-A small 3D renderer and benchmark prototype for Casio fx-CG calculators built around the Gint / fxSDK toolchain.
+A small 3D renderer and benchmark prototype for Casio fx-CG calculators, built around the Gint / fxSDK toolchain.
 
 ## Project status
 
@@ -8,86 +8,100 @@ This repository is currently in a prototype stage.
 
 The active code is in `V3/`, and it includes:
 
-- a software rasterizer for triangles and simple geometry
-- a basic 3D world demo
-- a benchmark runner for a small, deterministic benchmark suite
-- a minimal UI for selecting tests and reporting results
+- a software scanline rasterizer for triangles and related 2D primitives;
+- a basic 3D block-world demo;
+- a benchmark runner for three deterministic, target-native workloads;
+- a minimal UI for selecting tests and reporting results;
+- experimental CSV result appending through the Gint OS-world/Fugue filesystem boundary.
 
-The current benchmark set is intentionally small and conservative:
+The current benchmark set is intentionally small:
 
-- `clear-only`
-- `triangle-throughput`
-- `textured-geometry`
+- `clear-only` — repeated framebuffer clear and display update;
+- `triangle-throughput` — repeated screen-space triangle drawing (the current triangle rasterizer samples the generated UV lookup map);
+- `textured-geometry` — repeated two-triangle quads using the generated UV lookup map.
 
-These are the workloads currently represented in code and documentation. This is not a full desktop OpenGL or glmark2 port.
+These are not a full desktop OpenGL or glmark2 port. In particular, the benchmark suite does not yet measure a general 3D mesh pipeline, per-pixel depth testing, or perspective-correct texture mapping.
 
 ## Repository layout
 
 - `V3/` — active benchmark/demo application
+<<<<<<< HEAD
 - `V3/src/` — renderer, benchmarks, and app entry point
 - `docs/fxmark-design.md` — benchmark design notes and implementation roadmap
 - `docs/THIRD_PARTY_NOTICES.md` — third-party references and attribution notes
 - `ModelRenderer/` — exploratory or legacy rendering work
+=======
+- `V3/src/` — rasterizer, benchmark runner, and app entry point
+- `docs/fxmark-design.md` — current implementation audit and benchmark roadmap
+- `docs/THIRD_PARTY_NOTICES.md` — third-party references and attribution notes
+- `ModelRenderer/` — exploratory or legacy mesh-oriented rendering work
+>>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
 - `v1/`, `V2/` — earlier prototype generations
 
 ## Build
 
-Use the fxSDK toolchain that provides the Gint package and the fx conversion utilities.
+Use the fxSDK wrapper for the target so the correct toolchain file, platform settings, and fxSDK CMake modules are selected.
 
-From the repository root:
+For an fx-CG50 build, from the repository root:
 
-```bash
+```sh
 cd V3
-cmake -S . -B build-cg
-cmake --build build-cg
+fxsdk build-cg
 ```
 
-If your fxSDK exposes calculator-family-specific build helpers, prefer those wrappers so the correct toolchain file and target platform settings are used.
+The V3 CMake project requires Gint 2.11 or newer, enables C++20, and generates `3D.g3a` for the CG target. Inspect the generated add-in with `fxgxa -d 3D.g3a` before transferring it to a calculator.
+
+A raw CMake invocation is only appropriate when the equivalent fxSDK toolchain and module configuration is supplied. Do not assume `cmake -S . -B build-cg` by itself selects the SH cross-compiler.
 
 ## Run
 
 The app currently supports:
 
-- `F6` — clear-only benchmark
-- `EXE` — triangle-throughput benchmark
-- `DEL` — textured-geometry benchmark
-- `MENU` — quit
+- `F6` — rerun clear-only benchmark;
+- `EXE` — rerun triangle-throughput benchmark;
+- `DEL` — rerun textured-geometry benchmark;
+- `MENU` — quit.
 
-The benchmark runner reports warm-up frames, measured elapsed time, FPS, and average milliseconds per frame.
+On startup, the app runs the configured suite. The current default configuration is 5 warm-up frames, 60 measured frames, and `triangle_count = 64`. The result view reports FPS and average milliseconds per frame.
 
 ## Benchmark model
 
-The benchmark structure follows the same basic idea as glmark2:
+The benchmark runner selects a named workload, runs warm-up frames, measures a fixed number of frames, and reports runtime metrics. The current scene implementations are deterministic with respect to their frame/index formulas; the main loop's random seed is not used to generate the benchmark geometry.
 
-- a benchmark runner selects a fixed workload
-- each workload is a deterministic render scene
-- the timed section is separated from UI and camera controls
-- results are reported as runtime metrics instead of a portable desktop score
+The exact workload semantics and measurement limitations are documented in [docs/fxmark-design.md](docs/fxmark-design.md). Results measure this calculator's software drawing and display path. They are not directly comparable to desktop/mobile glmark2 scores.
 
+<<<<<<< HEAD
 This project keeps the scope intentionally smaller and more native to the calculator pipeline than a full glmark2 port. glmark2 is credited as a conceptual and source-reference project; see [third-party notices](docs/THIRD_PARTY_NOTICES.md). No glmark2 source code is intentionally copied into the current benchmark implementation. This statement covers the work documented here, not an exhaustive audit of every historical file in the repository.
+=======
+## CSV logging
+>>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
 
-## Validation checklist for hardware testing
+The active V3 entry point contains an experimental CSV appender. It switches to Gint's OS world before using the Fugue filesystem, and appends rows to `\\fls0\benchmarks.csv`. The logger checks file operations, flush, stream error state, and close status, and the UI reports `CSV OK` or `CSV FAIL`.
 
-Before expanding the benchmark suite, validate each workload on the target device under the same clock configuration.
+This is source-level implementation, not yet a claim of validated persistence. The repository still needs a physical-device test that confirms the file is created, contains the expected rows, can be read back/exported, and remains usable after a restart. See the validation checklist in [docs/fxmark-design.md](docs/fxmark-design.md).
 
-1. Build the app with the fxSDK toolchain for the target calculator.
-2. Run each benchmark mode in turn:
-   - clear-only
-   - triangle-throughput
-   - textured-geometry
-3. Record the exact calculator model, clock mode, and warm-up/measurement frame counts.
-4. Repeat each benchmark at least three times to check repeatability.
-5. Keep the result only if it is stable and not dominated by UI or timing noise.
-6. Mark any benchmark as unsupported if it behaves inconsistently across runs.
-7. Publish only workloads that are reproducible on real hardware.
+## Hardware validation
+
+Before widening the benchmark suite:
+
+1. Build with the fxSDK wrapper for the exact calculator target.
+2. Record calculator model, OS version, clock configuration, Gint/fxSDK versions, benchmark configuration, and build revision.
+3. Run every benchmark at least three times with unchanged settings.
+4. Confirm output stability and inspect the CSV file on the calculator or after export.
+5. Do not publish results dominated by display presentation or timer quantization as renderer-only performance.
+6. Publish only workloads that are repeatable on real hardware, with their exact measurement semantics.
+
+The current maintainer test target is an fx-CG50 running OS 3.20.0202. That identifies the intended physical test environment; it does not imply that every workload or the CSV logger has already passed validation on that OS.
 
 ## Current limitations
 
-- This is not a desktop OpenGL port.
-- Rendering and timing are tied to the calculator's native display path and Gint environment.
-- CSV logging is experimental and depends on the target filesystem / OS-world behavior being writable and available at runtime.
-- The benchmark suite is intentionally small until more hardware validation is done.
+- This is not a desktop OpenGL or OpenGL ES port.
+- The V3 benchmark's triangle workloads are screen-space 2D raster tests, not general 3D mesh benchmarks.
+- The current timer is Gint RTC at 128 ticks/second; the measured interval is quantized and the subtraction does not handle midnight rollover.
+- Scene timing includes `dclear()` and `dupdate()` because both are called inside the measured scene loop. It is therefore an end-to-end frame-path measurement, not an isolated rasterizer measurement.
+- `BenchConfig.width` and `.height` are validated but the active scenes use `SCREEN_WIDTH` and `SCREEN_HEIGHT` constants.
+- The UV lookup map is initialized as a generated 40x40 gradient. The active `DrawTriangle()` path samples that map; the benchmark does not currently exercise the fxconv image asset as a loaded texture.
+- CSV logging is experimental and still requires physical storage validation.
+- The exploratory `ModelRenderer/` code is not yet a general-purpose, visibility-correct 3D pipeline. See the design audit for its current depth/clipping limitations.
 
-## Notes
-
-This project is best understood as a target-native graphics benchmark prototype for the fx-CG family, using the Gint display path and the existing software rasterizer pipeline.
+This project is best understood as a target-native graphics benchmark and software-rendering prototype for the fx-CG family, using Gint and fxSDK.

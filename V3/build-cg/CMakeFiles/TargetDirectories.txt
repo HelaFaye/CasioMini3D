@@ -1,3 +1,0 @@
-/mnt/c/Users/leo/Desktop/CASIO/Projets/CasioMini3D/V3/build-cg/CMakeFiles/myaddin.dir
-/mnt/c/Users/leo/Desktop/CASIO/Projets/CasioMini3D/V3/build-cg/CMakeFiles/edit_cache.dir
-/mnt/c/Users/leo/Desktop/CASIO/Projets/CasioMini3D/V3/build-cg/CMakeFiles/rebuild_cache.dir
