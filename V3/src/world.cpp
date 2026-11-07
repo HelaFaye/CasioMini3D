@@ -80,7 +80,7 @@ void Camera::SortQuads()
 {
     std::sort(quads, quads + quad_count, [](const RenderQuad& lhs, const RenderQuad& rhs) {
         return lhs.z > rhs.z; // Pour un tri décroissant
-    }); 
+    });
 }
 
 void DrawWireframeQuad(RenderQuad quad, int color)
@@ -108,6 +108,7 @@ void DebugText(const char *text)
 
 void DrawColoredQuad(RenderQuad quad, int color)
 {
+    (void)color;
     VertexLocal verts[4];
     constexpr fixed_t texW_minus1 = FLOAT_TO_FIXED(39);
     constexpr fixed_t texH_minus1 = FLOAT_TO_FIXED(39);
@@ -128,16 +129,13 @@ void DrawColoredQuad(RenderQuad quad, int color)
     if (verts[0].y == verts[1].y && verts[2].y == verts[3].y)
     {
         if (verts[0].x == verts[3].x && verts[1].x == verts[2].x)
-            //DrawRect(verts[0], verts[1], verts[2], verts[3]);
-            DrawRectUV(verts[0], verts[2]);
+            DrawRectUV(verts[0], verts[1], verts[2], verts[3]);
         else
-            //DrawHorzParallelogramUV(verts[0], verts[1], verts[2], verts[3]);
             DrawHorzParallelogram(verts[0], verts[1], verts[2], verts[3]);
     }
     else
     {
         if (verts[0].x == verts[3].x && verts[1].x == verts[2].x)
-            //DrawVertParallelogramUV(verts[0], verts[1], verts[2], verts[3]);
             DrawVertParallelogram(verts[0], verts[1], verts[2], verts[3]);
         else
         {
