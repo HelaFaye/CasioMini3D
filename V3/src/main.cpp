@@ -25,11 +25,13 @@ typedef struct CsvWriteArgs
     const BenchConfig* config;
 } CsvWriteArgs;
 
-// Fugue files live under the flash volume root, not a POSIX-style path.
+// Fugue filesystem operations run in the OS world, not in Gint's world.
 static int append_csv_in_os_world(void* opaque)
 {
     const CsvWriteArgs* args = (const CsvWriteArgs*)opaque;
-    static const char path[] = "\\fls0\\benchmarks.csv";
+    // Runtime path: \\fls0\benchmarks.csv. Escape the leading backslashes
+    // so C does not interpret \f or \b as form-feed/backspace characters.
+    static const char path[] = "\\\\fls0\\benchmarks.csv";
     static const char header[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
 
     FILE* file = fopen(path, "a+");
@@ -40,9 +42,10 @@ static int append_csv_in_os_world(void* opaque)
     if (fseek(file, 0, SEEK_END) != 0)
         ok = false;
 
-    long size = ok ? ftell(file) : -1;
+    const long size = ok ? ftell(file) : -1;
     if (size < 0)
         ok = false;
+
     if (ok && size == 0 && fprintf(file, "%s", header) < 0)
         ok = false;
 
@@ -55,8 +58,13 @@ static int append_csv_in_os_world(void* opaque)
             args->result->avg_ms_per_frame) < 0)
         ok = false;
 
+    if (ok && fflush(file) != 0)
+        ok = false;
+    if (ferror(file))
+        ok = false;
     if (fclose(file) != 0)
         ok = false;
+
     return ok ? 0 : -1;
 }
 
