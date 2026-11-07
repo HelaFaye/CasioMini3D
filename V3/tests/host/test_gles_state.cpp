@@ -964,7 +964,27 @@ void test_gles_framebuffer_and_renderbuffer_objects()
         GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &value);
     assert(value == GL_NONE);
 
-    // Deleting an attached texture detaches it and leaves no dangling storage.
+    // Depth-only and stencil-only targets are complete and clearable.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, 0, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glClearStencil(0x35);
+    glClear(GL_STENCIL_BUFFER_BIT);
+
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+        GL_RENDERBUFFER, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, renderbuffers[0]);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glClearDepthf(0.25f);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    // Restore the texture attachment, then deleting it must detach it.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, texture, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
     glDeleteTextures(1, &texture);
     assert(glIsTexture(texture) == GL_FALSE);
     assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
