@@ -237,39 +237,40 @@ static bool link_program(ProgramObject& program)
     }
 
     bool occupied[fxgl::GLSL_MAX_ATTRIBUTES] = {};
+    /* Reserve every explicitly bound location before assigning defaults;
+       otherwise an earlier unbound attribute could steal a later binding. */
     for (size_t i = 0; i < program.vertex_module.attribute_count; ++i)
     {
         const fxgl::ShaderVariable& attribute =
             program.vertex_module.attributes[i];
-        int location = find_bound_attribute(program, attribute.name);
-        if (location >= static_cast<int>(fxgl::GLSL_MAX_ATTRIBUTES))
-        {
-            set_log(program.info_log, sizeof(program.info_log),
-                    "Link failed: bound attribute location exceeds implementation limit");
-            return false;
-        }
-
+        const int location = find_bound_attribute(program, attribute.name);
         if (location < 0)
-        {
-            for (size_t candidate = 0;
-                 candidate < fxgl::GLSL_MAX_ATTRIBUTES; ++candidate)
-            {
-                if (!occupied[candidate])
-                {
-                    location = static_cast<int>(candidate);
-                    break;
-                }
-            }
-        }
-
-        if (location < 0 || occupied[static_cast<size_t>(location)])
+            continue;
+        if (location >= static_cast<int>(fxgl::GLSL_MAX_ATTRIBUTES) ||
+            occupied[static_cast<size_t>(location)])
         {
             set_log(program.info_log, sizeof(program.info_log),
-                    "Link failed: duplicate or exhausted attribute locations");
+                    "Link failed: duplicate or out-of-range attribute binding");
             return false;
         }
-
         occupied[static_cast<size_t>(location)] = true;
+        program.attribute_locations[i] = static_cast<uint8_t>(location);
+    }
+
+    for (size_t i = 0; i < program.vertex_module.attribute_count; ++i)
+    {
+        if (program.attribute_locations[i] != 0xff)
+            continue;
+        size_t location = 0;
+        while (location < fxgl::GLSL_MAX_ATTRIBUTES && occupied[location])
+            ++location;
+        if (location >= fxgl::GLSL_MAX_ATTRIBUTES)
+        {
+            set_log(program.info_log, sizeof(program.info_log),
+                    "Link failed: vertex attribute limit exceeded");
+            return false;
+        }
+        occupied[location] = true;
         program.attribute_locations[i] = static_cast<uint8_t>(location);
     }
 
