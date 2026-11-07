@@ -15,6 +15,20 @@ bool get_texture_binding(
     gfx::Texture2DView& view,
     gfx::TextureSampler& sampler);
 
+bool draw_clip_point(
+    const ClipVertex& input,
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats = nullptr);
+
+bool draw_clip_line(
+    const ClipVertex input[2],
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats = nullptr);
+
 bool draw_clip_triangle(
     const ClipVertex input[3],
     size_t varying_count,
