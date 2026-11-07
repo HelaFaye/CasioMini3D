@@ -47,7 +47,7 @@ int main(){
     init_uv_map();
 
     AppMode mode = AppMode::Demo;
-    BenchId selected_bench = BenchId::TriangleThroughput;
+    BenchId selected_bench = BenchId::ClearOnly;
 
     BenchConfig cfg;
     cfg.warmup_frames = 5;
@@ -75,8 +75,13 @@ int main(){
             clock_set_speed(CLOCK_SPEED_F5);
         if(keydown(KEY_F6))
         {
+            selected_bench = BenchId::ClearOnly;
             mode = AppMode::Benchmark;
+        }
+        if(keydown(KEY_F7))
+        {
             selected_bench = BenchId::TriangleThroughput;
+            mode = AppMode::Benchmark;
         }
 
         if (mode == AppMode::Benchmark)
