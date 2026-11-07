@@ -11,9 +11,9 @@ find_package(Gint 2.11 REQUIRED)
 
 add_compile_options(${CPPFLAGS} ${CFLAGS} -Wall -Wextra -Os -std=c++20 -fno-freestanding)
 
-
 set(SOURCES
     src/main.cpp
+    src/bench.cpp
     src/world.cpp
     src/display.cpp
     src/shapes/parallelogram.cpp
@@ -40,7 +40,5 @@ target_link_libraries(myaddin Gint::Gint "${CMAKE_CURRENT_SOURCE_DIR}/libsupc++.
 
 set(NAME_APP "3D")
 
-
 generate_g3a(TARGET myaddin OUTPUT "${NAME_APP}.g3a"
     NAME "3D" ICONS assets/icon-uns.png assets/icon-sel.png)
-
