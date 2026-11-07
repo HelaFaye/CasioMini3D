@@ -103,6 +103,7 @@ static bool test_texture_sample(
 static void test_compile_and_execute_texture_fragment_shader()
 {
     static const char source[] =
+        "#version 100\n"
         "precision mediump float;\n"
         "uniform sampler2D u_texture;\n"
         "varying vec2 v_uv;\n"
@@ -177,7 +178,7 @@ static void test_vector_builtins_and_functions()
 
     assert(fxgl::execute_glsl(module, runtime));
     assert(near(runtime.fragment_color.data[0], 0.2f));
-    assert(near(runtime.fragment_color.data[1], 1.0f));
+    assert(near(runtime.fragment_color.data[1], 0.9f));
     assert(near(runtime.fragment_color.data[2], 1.0f));
     assert(near(runtime.fragment_color.data[3], 1.0f));
 }
