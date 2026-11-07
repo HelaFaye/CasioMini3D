@@ -236,6 +236,21 @@ static bool link_program(ProgramObject& program)
         program.fragment_uniform_map[i] = location;
     }
 
+    for (size_t i = 0; i < program.vertex_module.attribute_count; ++i)
+    {
+        const fxgl::ShaderType type =
+            program.vertex_module.attributes[i].type;
+        if (type != fxgl::ShaderType::Float &&
+            type != fxgl::ShaderType::Vec2 &&
+            type != fxgl::ShaderType::Vec3 &&
+            type != fxgl::ShaderType::Vec4)
+        {
+            set_log(program.info_log, sizeof(program.info_log),
+                    "Link failed: vertex attributes must be float or vec2/vec3/vec4");
+            return false;
+        }
+    }
+
     bool occupied[fxgl::GLSL_MAX_ATTRIBUTES] = {};
     /* Reserve every explicitly bound location before assigning defaults;
        otherwise an earlier unbound attribute could steal a later binding. */
