@@ -611,6 +611,116 @@ void test_shader_and_program_object_lifecycle()
     fxglReleaseCurrent();
 }
 
+void test_gles_draw_arrays_and_elements()
+{
+    uint16_t color[64] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 8, 8, 8};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "#version 100\n"
+        "attribute vec4 a_position;\n"
+        "uniform mat4 u_mvp;\n"
+        "void main() { gl_Position = u_mvp * a_position; }";
+    static const GLchar fragment_source[] =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "uniform vec4 u_color;\n"
+        "void main() { gl_FragColor = u_color; }";
+
+    const GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *vertex_strings[] = {vertex_source};
+    const GLchar *fragment_strings[] = {fragment_source};
+    glShaderSource(vertex_shader, 1, vertex_strings, nullptr);
+    glShaderSource(fragment_shader, 1, fragment_strings, nullptr);
+    glCompileShader(vertex_shader);
+    glCompileShader(fragment_shader);
+
+    GLint status = GL_FALSE;
+    glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+    glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vertex_shader);
+    glAttachShader(program, fragment_shader);
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &status);
+    assert(status == GL_TRUE);
+    glUseProgram(program);
+
+    const GLint position_location = glGetAttribLocation(program, "a_position");
+    const GLint matrix_location = glGetUniformLocation(program, "u_mvp");
+    const GLint color_location = glGetUniformLocation(program, "u_color");
+    assert(position_location >= 0 && matrix_location >= 0 && color_location >= 0);
+
+    const GLfloat identity[16] = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+    };
+    glUniformMatrix4fv(matrix_location, 1, GL_FALSE, identity);
+    glUniform4f(color_location, 1.0f, 0.0f, 0.0f, 1.0f);
+
+    const GLfloat vertices[12] = {
+        -1.0f, -1.0f, 0.0f, 1.0f,
+         1.0f, -1.0f, 0.0f, 1.0f,
+        -1.0f,  1.0f, 0.0f, 1.0f
+    };
+    glVertexAttribPointer(
+        static_cast<GLuint>(position_location), 4, GL_FLOAT, GL_FALSE,
+        0, vertices);
+    glEnableVertexAttribArray(static_cast<GLuint>(position_location));
+
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(color[0] == RED);
+    size_t red_pixels = 0;
+    for (uint16_t pixel : color)
+        if (pixel == RED) ++red_pixels;
+    assert(red_pixels > 0);
+
+    for (uint16_t& pixel : color)
+        pixel = 0;
+    glUniform4f(color_location, 0.0f, 1.0f, 0.0f, 1.0f);
+
+    GLuint buffers[2] = {};
+    glGenBuffers(2, buffers);
+    glBindBuffer(GL_ARRAY_BUFFER, buffers[0]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(
+        static_cast<GLuint>(position_location), 4, GL_FLOAT, GL_FALSE,
+        0, nullptr);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers[1]);
+    const uint8_t indices[3] = {0, 1, 2};
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_BYTE, nullptr);
+    assert(color[0] == GREEN);
+
+    // Element offsets are bounds-checked against the bound index buffer.
+    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, nullptr);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    // A recognized but not-yet-implemented primitive mode is rejected
+    // explicitly rather than misinterpreted as triangles.
+    glDrawArrays(GL_LINES, 0, 3);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    // The current program and all bound object names remain queryable.
+    GLint current = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &current);
+    assert(current == static_cast<GLint>(program));
+
+    glDeleteBuffers(2, buffers);
+    glDeleteProgram(program);
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
+    fxglReleaseCurrent();
+}
+
 void test_shader_compile_and_program_link_failures()
 {
     uint16_t color[4] = {};
@@ -805,6 +915,7 @@ int main()
     test_rgb565_unpack_alignment();
     test_state_validation_and_error_latching();
     test_shader_and_program_object_lifecycle();
+    test_gles_draw_arrays_and_elements();
     test_shader_compile_and_program_link_failures();
     test_context_drives_software_pipeline();
 
