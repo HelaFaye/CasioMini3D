@@ -2,12 +2,19 @@
 #include "fixed.hpp"
 #include "types.hpp"
 #include "world.hpp"
+#include "bench.hpp"
 #include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
 clock_t lastTime = 0;
+
+enum class AppMode
+{
+    Demo = 0,
+    Benchmark = 1
+};
 
 void dclock()
 {
@@ -21,30 +28,36 @@ void dclock()
     dtext(0, 0, C_WHITE, buffer);
     lastTime = clock();
 }
+
+static void print_bench_result(const BenchResult& result)
+{
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer),
+             "bench:%s fps:%.2f ms/frame:%.3f",
+             result.name,
+             result.fps,
+             result.avg_ms_per_frame);
+
+    dtext(0, 0, C_WHITE, buffer);
+}
+
 int main(){
     //clock_set_speed(CLOCK_SPEED_F5);
     srand(time(NULL));
     init_uv_map();
-    /*Quad quad;
-    quad.points[0] = Vector2<int>(100, 100);
-    quad.points[1] = Vector2<int>(200, 100);
-    quad.points[2] = Vector2<int>(200, 200);
-    quad.points[3] = Vector2<int>(100, 200);
-    quad.uv[0] = Vector2<float>(0, 0);
-    quad.uv[1] = Vector2<float>(1, 0);
-    quad.uv[2] = Vector2<float>(1, 1);
-    quad.uv[3] = Vector2<float>(0, 1);
-    while (true)
-    {
-        dclear(C_BLACK);
-        clearevents();
-        for (size_t i = 0; i < 100; i++)
-            DrawQuad(quad);
-        dclock();
-        dupdate();
-    }*/
+
+    AppMode mode = AppMode::Demo;
+    BenchId selected_bench = BenchId::TriangleThroughput;
+
+    BenchConfig cfg;
+    cfg.warmup_frames = 5;
+    cfg.measure_frames = 30;
+    cfg.triangle_count = 64;
+    cfg.width = SCREEN_WIDTH;
+    cfg.height = SCREEN_HEIGHT;
+
     Camera *camera = new Camera(Vector3<int>(0, 100, -300), 0);
-    World *world = new World(16, 16, 16, new Block*[2]{nullptr,new Cube()});
+    World *world = new World(16, 16, 16, new Block*[2]{nullptr, new Cube()});
     world->set_id_unsafe(0, 0, 0, 1);
     world->set_id_unsafe(1, 0, 0, 1);
     for (size_t i = 0; i < 200; i++)
@@ -60,36 +73,55 @@ int main(){
             clock_set_speed(CLOCK_SPEED_F1);
         if(keydown(KEY_F5))
             clock_set_speed(CLOCK_SPEED_F5);
+        if(keydown(KEY_F6))
+        {
+            mode = AppMode::Benchmark;
+            selected_bench = BenchId::TriangleThroughput;
+        }
 
-        if(keydown(KEY_LEFT))
-            camera->position.x -= 10;
-        if(keydown(KEY_RIGHT))
-            camera->position.x += 10;
-        if(keydown(KEY_UP))
-            camera->position.z += 10;
-        if(keydown(KEY_DOWN))
-            camera->position.z -= 10;
+        if (mode == AppMode::Benchmark)
+        {
+            BenchResult result;
+            if (run_benchmark(selected_bench, cfg, &result))
+            {
+                print_bench_result(result);
+                dupdate();
+                while (!keydown(KEY_MENU))
+                    clearevents();
+                mode = AppMode::Demo;
+            }
+        }
+        else
+        {
+            if(keydown(KEY_LEFT))
+                camera->position.x -= 10;
+            if(keydown(KEY_RIGHT))
+                camera->position.x += 10;
+            if(keydown(KEY_UP))
+                camera->position.z += 10;
+            if(keydown(KEY_DOWN))
+                camera->position.z -= 10;
 
+            if(keydown(KEY_8))
+                camera->position.y += 10;
+            if(keydown(KEY_2))
+                camera->position.y -= 10;
 
-        if(keydown(KEY_8))
-            camera->position.y += 10;
-        if(keydown(KEY_2))
-            camera->position.y -= 10;
+            if(keydown(KEY_7))
+                camera->angle += 3;
+            if(keydown(KEY_1))
+                camera->angle -= 3;
 
-        if(keydown(KEY_7))
-            camera->angle += 3;
-        if(keydown(KEY_1))
-            camera->angle -= 3;
+            if(keydown(KEY_9))
+                camera->offset.y -= 10;
+            if(keydown(KEY_3))
+                camera->offset.y += 10;
 
-        if(keydown(KEY_9))
-            camera->offset.y -= 10;
-        if(keydown(KEY_3))
-            camera->offset.y += 10;
-
-        world->Render();
-        camera->Render();
-        dclock();
-        dupdate();
+            world->Render();
+            camera->Render();
+            dclock();
+            dupdate();
+        }
     }
     return 0;
 }
