@@ -97,6 +97,19 @@ Implement the remaining feasible glmark2-inspired workloads as target-native sce
 
 Run tests on actual fx-CG50 hardware, repeat runs, record model/clock/settings, and publish sample output and known limitations.
 
+## Deferred follow-up: upstream backport and contributions
+
+No upstream contribution or backport is planned as part of the current work. Keep this section as a reminder to revisit that possibility later.
+
+When ready, track the following follow-up tasks here:
+
+- [ ] Review the original `leofarhi/CasioMini3D` repository's current state and contribution guidelines before proposing changes.
+- [ ] Separate generally useful renderer or benchmark improvements from fork-specific experiments.
+- [ ] Keep changes small and self-contained; add build/run instructions and test evidence for fx-CG50 hardware where available.
+- [ ] Check licensing and attribution for any glmark2-inspired or reused code/assets.
+- [ ] Decide whether to open an upstream issue or discussion first, then prepare a focused pull request if appropriate.
+- [ ] Record upstream feedback and any changes needed to maintain a backportable fork.
+
 ## Scope and licensing note
 
 A workload-inspired reimplementation is distinct from copying glmark2 implementation code. If code, assets, or other materials are copied or adapted from glmark2, review the upstream license and preserve required notices and terms. Identify the source of any reused assets and ensure their licenses permit redistribution.
