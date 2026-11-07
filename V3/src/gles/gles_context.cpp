@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <cstring>
 #include <limits>
 
@@ -52,6 +53,7 @@ struct VertexAttribute
     GLsizei stride = 0;
     const GLvoid *pointer = nullptr;
     GLuint buffer_binding = 0;
+    GLfloat current[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 struct StencilFace
@@ -381,6 +383,368 @@ static void clear_rect(GLint rect[4], GLint bounds[4])
     bounds[1] = static_cast<GLint>(std::min(y0, y1));
     bounds[2] = static_cast<GLint>(std::max(x0, x1));
     bounds[3] = static_cast<GLint>(std::max(y0, y1));
+}
+
+static size_t shader_components(fxgl::ShaderType type)
+{
+    switch (type)
+    {
+        case fxgl::ShaderType::Float: return 1;
+        case fxgl::ShaderType::Vec2: return 2;
+        case fxgl::ShaderType::Vec3: return 3;
+        case fxgl::ShaderType::Vec4: return 4;
+        default: return 0;
+    }
+}
+
+static size_t attribute_component_bytes(GLenum type)
+{
+    switch (type)
+    {
+        case GL_BYTE:
+        case GL_UNSIGNED_BYTE: return 1;
+        case GL_SHORT:
+        case GL_UNSIGNED_SHORT: return 2;
+        case GL_FIXED:
+        case GL_FLOAT: return 4;
+        default: return 0;
+    }
+}
+
+static float decode_attribute_value(
+    const uint8_t *source,
+    GLenum type,
+    bool normalized)
+{
+    switch (type)
+    {
+        case GL_BYTE:
+        {
+            int8_t value = 0;
+            std::memcpy(&value, source, sizeof(value));
+            if (!normalized) return static_cast<float>(value);
+            return std::max(-1.0f, static_cast<float>(value) / 127.0f);
+        }
+        case GL_UNSIGNED_BYTE:
+        {
+            uint8_t value = 0;
+            std::memcpy(&value, source, sizeof(value));
+            return normalized ? static_cast<float>(value) / 255.0f
+                              : static_cast<float>(value);
+        }
+        case GL_SHORT:
+        {
+            int16_t value = 0;
+            std::memcpy(&value, source, sizeof(value));
+            if (!normalized) return static_cast<float>(value);
+            return std::max(-1.0f, static_cast<float>(value) / 32767.0f);
+        }
+        case GL_UNSIGNED_SHORT:
+        {
+            uint16_t value = 0;
+            std::memcpy(&value, source, sizeof(value));
+            return normalized ? static_cast<float>(value) / 65535.0f
+                              : static_cast<float>(value);
+        }
+        case GL_FIXED:
+        {
+            int32_t value = 0;
+            std::memcpy(&value, source, sizeof(value));
+            return static_cast<float>(value) / 65536.0f;
+        }
+        case GL_FLOAT:
+        {
+            float value = 0.0f;
+            std::memcpy(&value, source, sizeof(value));
+            return value;
+        }
+        default:
+            return 0.0f;
+    }
+}
+
+static bool fetch_vertex_attribute(
+    GLuint location,
+    uint32_t vertex_index,
+    fxgl::ShaderType shader_type,
+    fxgl::ShaderValue& value)
+{
+    if (location >= FXGL_MAX_VERTEX_ATTRIBS)
+        return false;
+
+    const VertexAttribute& attribute = g_context.attributes[location];
+    const size_t components = shader_components(shader_type);
+    if (components == 0)
+        return false;
+
+    value = {};
+    value.type = shader_type;
+    value.data[0] = attribute.current[0];
+    value.data[1] = attribute.current[1];
+    value.data[2] = attribute.current[2];
+    value.data[3] = attribute.current[3];
+
+    if (!attribute.enabled)
+        return true;
+
+    const size_t component_bytes = attribute_component_bytes(attribute.type);
+    if (component_bytes == 0 || attribute.size < 1 || attribute.size > 4)
+        return false;
+
+    const size_t element_bytes =
+        static_cast<size_t>(attribute.size) * component_bytes;
+    const size_t stride = attribute.stride == 0
+        ? element_bytes : static_cast<size_t>(attribute.stride);
+
+    const uint8_t *element = nullptr;
+    if (attribute.buffer_binding != 0)
+    {
+        BufferObject *buffer = find_buffer(attribute.buffer_binding);
+        if (!buffer)
+            return false;
+
+        const uintptr_t base_offset =
+            reinterpret_cast<uintptr_t>(attribute.pointer);
+        if (vertex_index > (std::numeric_limits<size_t>::max() - base_offset) /
+                           std::max<size_t>(stride, 1))
+            return false;
+        const size_t offset = static_cast<size_t>(base_offset) +
+                              static_cast<size_t>(vertex_index) * stride;
+        if (offset > buffer->size || element_bytes > buffer->size - offset)
+            return false;
+        element = buffer->data + offset;
+    }
+    else
+    {
+        if (!attribute.pointer)
+            return false;
+        if (vertex_index > std::numeric_limits<size_t>::max() /
+                           std::max<size_t>(stride, 1))
+            return false;
+        const size_t offset = static_cast<size_t>(vertex_index) * stride;
+        element = static_cast<const uint8_t *>(attribute.pointer) + offset;
+    }
+
+    const size_t fetch_components =
+        std::min(components, static_cast<size_t>(attribute.size));
+    for (size_t i = 0; i < fetch_components; ++i)
+    {
+        value.data[i] = decode_attribute_value(
+            element + i * component_bytes,
+            attribute.type,
+            attribute.normalized);
+        if (!std::isfinite(value.data[i]))
+            return false;
+    }
+    return true;
+}
+
+struct DrawInvocation
+{
+    fxgl::LinkedProgramView program;
+    bool fragment_failed;
+};
+
+static bool sample_bound_texture(
+    int unit,
+    float u,
+    float v,
+    float rgba[4],
+    void *)
+{
+    if (unit < 0 || !std::isfinite(u) || !std::isfinite(v))
+        return false;
+
+    gfx::Texture2DView texture = {};
+    gfx::TextureSampler sampler = {};
+    if (!fxgl::get_texture_binding(static_cast<size_t>(unit), texture, sampler))
+        return false;
+
+    /* Shader coordinates are normalized. For bilinear filtering, move the
+       origin to texel centers; nearest filtering floors u*dimension. */
+    double texel_u = static_cast<double>(u) * texture.width;
+    double texel_v = static_cast<double>(v) * texture.height;
+    if (sampler.filter == gfx::TextureFilter::Bilinear)
+    {
+        texel_u -= 0.5;
+        texel_v -= 0.5;
+    }
+
+    const double scale = 65536.0;
+    const double scaled_u = std::floor(texel_u * scale);
+    const double scaled_v = std::floor(texel_v * scale);
+    const double minimum = static_cast<double>(
+        std::numeric_limits<int64_t>::min());
+    const double maximum = static_cast<double>(
+        std::numeric_limits<int64_t>::max());
+    if (scaled_u < minimum || scaled_u >= maximum ||
+        scaled_v < minimum || scaled_v >= maximum)
+        return false;
+
+    const uint16_t pixel = gfx::sample_texture(
+        texture,
+        static_cast<int64_t>(scaled_u),
+        static_cast<int64_t>(scaled_v),
+        sampler);
+    rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
+    rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
+    rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
+    rgba[3] = 1.0f;
+    return true;
+}
+
+static bool execute_fragment(
+    const float *varyings,
+    size_t varying_count,
+    float rgba[4],
+    void *user_data)
+{
+    DrawInvocation& invocation = *static_cast<DrawInvocation *>(user_data);
+    const fxgl::ShaderModule& module = *invocation.program.fragment_shader;
+    fxgl::ShaderRuntime runtime = {};
+
+    for (size_t i = 0; i < module.uniform_count; ++i)
+    {
+        const uint8_t location = invocation.program.fragment_uniform_map[i];
+        if (location >= invocation.program.uniform_count)
+        {
+            invocation.fragment_failed = true;
+            return false;
+        }
+        runtime.uniforms[i] = invocation.program.uniform_values[location];
+    }
+
+    for (size_t i = 0; i < module.varying_count; ++i)
+    {
+        const fxgl::ShaderVariable& variable = module.varyings[i];
+        const size_t components = shader_components(variable.type);
+        const size_t offset = invocation.program.fragment_varying_offsets[i];
+        if (components == 0 || offset + components > varying_count)
+        {
+            invocation.fragment_failed = true;
+            return false;
+        }
+        runtime.varyings[i] = {};
+        runtime.varyings[i].type = variable.type;
+        for (size_t component = 0; component < components; ++component)
+            runtime.varyings[i].data[component] = varyings[offset + component];
+    }
+
+    if (!fxgl::execute_glsl(module, runtime, sample_bound_texture, nullptr) ||
+        runtime.fragment_color.type != fxgl::ShaderType::Vec4)
+    {
+        invocation.fragment_failed = true;
+        return false;
+    }
+
+    for (size_t i = 0; i < 4; ++i)
+        rgba[i] = runtime.fragment_color.data[i];
+    return true;
+}
+
+static bool execute_vertex(
+    const fxgl::LinkedProgramView& program,
+    uint32_t vertex_index,
+    fxgl::ClipVertex& output)
+{
+    const fxgl::ShaderModule& module = *program.vertex_shader;
+    fxgl::ShaderRuntime runtime = {};
+
+    for (size_t i = 0; i < module.attribute_count; ++i)
+    {
+        const uint8_t location = program.attribute_locations[i];
+        if (!fetch_vertex_attribute(
+                location, vertex_index, module.attributes[i].type,
+                runtime.attributes[i]))
+        {
+            set_error(GL_INVALID_OPERATION);
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < module.uniform_count; ++i)
+    {
+        const uint8_t location = program.vertex_uniform_map[i];
+        if (location >= program.uniform_count)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return false;
+        }
+        runtime.uniforms[i] = program.uniform_values[location];
+    }
+
+    if (!fxgl::execute_glsl(module, runtime) ||
+        runtime.position.type != fxgl::ShaderType::Vec4)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return false;
+    }
+
+    output = {};
+    output.position = {
+        runtime.position.data[0],
+        runtime.position.data[1],
+        runtime.position.data[2],
+        runtime.position.data[3]
+    };
+
+    for (size_t i = 0; i < module.varying_count; ++i)
+    {
+        const fxgl::ShaderVariable& variable = module.varyings[i];
+        const size_t components = shader_components(variable.type);
+        const size_t offset = program.vertex_varying_offsets[i];
+        if (components == 0 ||
+            offset + components > fxgl::GLSL_MAX_VARYINGS)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return false;
+        }
+        for (size_t component = 0; component < components; ++component)
+            output.varying[offset + component] =
+                runtime.varyings[i].data[component];
+    }
+    return true;
+}
+
+static bool draw_vertex_triangle(
+    const fxgl::LinkedProgramView& program,
+    uint32_t first,
+    uint32_t second,
+    uint32_t third)
+{
+    fxgl::ClipVertex vertices[3] = {};
+    if (!execute_vertex(program, first, vertices[0]) ||
+        !execute_vertex(program, second, vertices[1]) ||
+        !execute_vertex(program, third, vertices[2]))
+        return false;
+
+    DrawInvocation invocation = {program, false};
+    fxgl::draw_clip_triangle(
+        vertices,
+        program.varying_scalar_count,
+        execute_fragment,
+        &invocation);
+    if (invocation.fragment_failed)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return false;
+    }
+    return true;
+}
+
+static bool supported_draw_mode(GLenum mode)
+{
+    return mode == GL_TRIANGLES ||
+           mode == GL_TRIANGLE_STRIP ||
+           mode == GL_TRIANGLE_FAN;
+}
+
+static bool valid_draw_mode(GLenum mode)
+{
+    return mode == GL_POINTS || mode == GL_LINES ||
+           mode == GL_LINE_LOOP || mode == GL_LINE_STRIP ||
+           mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP ||
+           mode == GL_TRIANGLE_FAN;
 }
 
 static void clear_color_buffer(GLint x0, GLint y0, GLint x1, GLint y1)
