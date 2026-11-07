@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 
@@ -9,7 +10,6 @@ namespace
 {
 constexpr uint16_t RED = 0xf800;
 constexpr uint16_t GREEN = 0x07e0;
-constexpr uint16_t BLUE = 0x001f;
 constexpr uint16_t SENTINEL = 0x5a5a;
 
 void reset_buffers(uint16_t* color, uint16_t* depth, uint8_t* stencil, size_t count)
@@ -47,6 +47,16 @@ void test_surface_binding_and_default_state()
     assert(glIsEnabled(GL_BLEND) == GL_FALSE);
     assert(glIsEnabled(GL_DEPTH_TEST) == GL_FALSE);
     assert(glGetError() == GL_NO_ERROR);
+
+    GLboolean color_mask[4] = {};
+    glGetBooleanv(GL_COLOR_WRITEMASK, color_mask);
+    assert(color_mask[0] == GL_TRUE && color_mask[1] == GL_TRUE);
+    assert(color_mask[2] == GL_TRUE && color_mask[3] == GL_TRUE);
+
+    GLfloat clear_depth = 0.0f;
+    glClearDepthf(0.375f);
+    glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
+    assert(clear_depth > 0.374f && clear_depth < 0.376f);
 
     assert(glGetString(GL_VENDOR) != nullptr);
     assert(glGetString(GL_RENDERER) != nullptr);
