@@ -9,6 +9,7 @@
 struct VertexLocal { int x, y; fixed_t u, v; };
 
 void DrawTriangle(VertexLocal v0, VertexLocal v1, VertexLocal v2);
+void DrawTriangleSolid(VertexLocal v0, VertexLocal v1, VertexLocal v2, int color);
 void DrawRectUV(VertexLocal &tl, VertexLocal &tr, VertexLocal &br, VertexLocal &bl);
 void DrawRect(VertexLocal &tl, VertexLocal &br);
 void DrawHorzParallelogramUV(VertexLocal &tl, VertexLocal &tr, VertexLocal &br, VertexLocal &bl);

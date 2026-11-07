@@ -10,14 +10,15 @@ The active code is in `V3/`, and it includes:
 
 - a software scanline rasterizer for triangles and related 2D primitives;
 - a basic 3D block-world demo;
-- a benchmark runner for three deterministic, target-native workloads;
+- a benchmark runner for four deterministic, target-native workloads;
 - a minimal UI for selecting tests and reporting results;
 - experimental CSV result appending through the Gint OS-world/Fugue filesystem boundary.
 
 The current benchmark set is intentionally small:
 
 - `clear-only` — repeated framebuffer clear and display update;
-- `triangle-throughput` — repeated screen-space triangle drawing (the current triangle rasterizer samples the generated UV lookup map);
+- `solid-fill` — screen-space triangles filled with one color, without UV interpolation or texture lookup;
+- `triangle-throughput` — screen-space triangles with interpolated UV coordinates and generated-map lookups;
 - `textured-geometry` — repeated two-triangle quads using the generated UV lookup map.
 
 These are not a full desktop OpenGL or glmark2 port. In particular, the benchmark suite does not yet measure a general 3D mesh pipeline, per-pixel depth testing, or perspective-correct texture mapping.
@@ -51,6 +52,7 @@ A raw CMake invocation is only appropriate when the equivalent fxSDK toolchain a
 The app currently supports:
 
 - `F6` — rerun clear-only benchmark;
+- `F5` — rerun solid-fill benchmark;
 - `EXE` — rerun triangle-throughput benchmark;
 - `DEL` — rerun textured-geometry benchmark;
 - `MENU` — quit.
@@ -60,6 +62,18 @@ On startup, the app runs the configured suite. The current default configuration
 ## Benchmark model
 
 The benchmark runner selects a named workload, runs warm-up frames, measures a fixed number of frames, and reports runtime metrics. The current scene implementations are deterministic with respect to their frame/index formulas; the main loop's random seed is not used to generate the benchmark geometry.
+
+The solid-fill and textured triangle paths share the same scan conversion. The solid path uses a compile-time specialization that skips UV interpolation and map reads. Host regression tests cover winding, flat edges, degenerate triangles, clipping, large coordinates, and the fact that solid fill performs no texture lookup.
+
+From `V3/`, run the host rasterizer tests with:
+
+```sh
+cmake -S tests/host -B /tmp/casiomini3d-host-tests
+cmake --build /tmp/casiomini3d-host-tests
+ctest --test-dir /tmp/casiomini3d-host-tests --output-on-failure
+```
+
+These tests compile the production triangle rasterizer and benchmark runner with minimal Gint header stubs. They validate CPU-side behavior, not the target display driver, filesystem, or SH cross-build.
 
 The exact workload semantics and measurement limitations are documented in [docs/fxmark-design.md](docs/fxmark-design.md). Results measure this calculator's software drawing and display path. They are not directly comparable to desktop/mobile glmark2 scores.
 

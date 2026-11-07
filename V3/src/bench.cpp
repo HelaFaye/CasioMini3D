@@ -27,6 +27,29 @@ static bool run_clear_only_scene(const BenchConfig& cfg, uint32_t frames)
     return true;
 }
 
+// Solid-color fill baseline. This path deliberately avoids UV work.
+static bool run_solid_fill_scene(const BenchConfig& cfg, uint32_t frames)
+{
+    for (uint32_t frame = 0; frame < frames; ++frame)
+    {
+        dclear(C_BLACK);
+        for (uint32_t i = 0; i < cfg.triangle_count; ++i)
+        {
+            const int x = static_cast<int>((i * 37u + frame * 3u) % (SCREEN_WIDTH - 32));
+            const int y = static_cast<int>((i * 23u + frame * 2u) % (SCREEN_HEIGHT - 32));
+            const int w = 12 + static_cast<int>(i % 20u);
+            const int h = 12 + static_cast<int>((i * 3u) % 20u);
+
+            VertexLocal a = {x, y, 0, 0};
+            VertexLocal b = {x + w, y + h / 2, 0, 0};
+            VertexLocal c = {x, y + h, 0, 0};
+            DrawTriangleSolid(a, b, c, C_WHITE);
+        }
+        dupdate();
+    }
+    return true;
+}
+
 static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frames)
 {
     for (uint32_t frame = 0; frame < frames; ++frame)
@@ -77,6 +100,7 @@ static bool run_textured_geometry_scene(const BenchConfig& cfg, uint32_t frames)
 static const BenchSceneEntry g_bench_scenes[] =
 {
     {BenchId::ClearOnly, "clear-only", run_clear_only_scene},
+    {BenchId::SolidFill, "solid-fill", run_solid_fill_scene},
     {BenchId::TriangleThroughput, "triangle-throughput", run_triangle_throughput_scene},
     {BenchId::TexturedGeometry, "textured-geometry", run_textured_geometry_scene}
 };
@@ -107,7 +131,7 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
 {
     if (!out || cfg.measure_frames == 0 || cfg.width <= 0 || cfg.height <= 0)
         return false;
-    if ((id == BenchId::TriangleThroughput || id == BenchId::TexturedGeometry) && cfg.triangle_count == 0)
+    if ((id == BenchId::SolidFill || id == BenchId::TriangleThroughput || id == BenchId::TexturedGeometry) && cfg.triangle_count == 0)
         return false;
 
     if (!execute_scene(id, cfg, cfg.warmup_frames))
