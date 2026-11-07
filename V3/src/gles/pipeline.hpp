@@ -65,8 +65,11 @@ struct PipelineState
 struct RasterStats
 {
     size_t input_triangles;
+    size_t input_points;
+    size_t input_lines;
     size_t clipped_polygons;
     size_t generated_triangles;
+    size_t generated_lines;
     size_t tested_fragments;
     size_t shaded_fragments;
     size_t depth_passed_fragments;
@@ -89,6 +92,28 @@ bool draw_triangle(
     const RenderSurface& surface,
     const PipelineState& state,
     const ClipVertex input[3],
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats = nullptr);
+
+
+/* Render one homogeneous point or line segment through the same clip,
+   perspective interpolation, fragment, depth, stencil and blend stages.
+   Point coverage is a single pixel; line coverage uses a one-pixel DDA rule. */
+bool draw_point(
+    const RenderSurface& surface,
+    const PipelineState& state,
+    const ClipVertex& input,
+    size_t varying_count,
+    FragmentShader fragment_shader,
+    void *user_data,
+    RasterStats *stats = nullptr);
+
+bool draw_line(
+    const RenderSurface& surface,
+    const PipelineState& state,
+    const ClipVertex input[2],
     size_t varying_count,
     FragmentShader fragment_shader,
     void *user_data,
