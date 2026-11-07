@@ -1032,6 +1032,292 @@ void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
     }
 }
 
+void glVertexAttrib1f(GLuint index, GLfloat x)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    VertexAttribute& attribute = g_context.attributes[index];
+    attribute.current[0] = x;
+    attribute.current[1] = 0.0f;
+    attribute.current[2] = 0.0f;
+    attribute.current[3] = 1.0f;
+}
+
+void glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    VertexAttribute& attribute = g_context.attributes[index];
+    attribute.current[0] = x;
+    attribute.current[1] = y;
+    attribute.current[2] = 0.0f;
+    attribute.current[3] = 1.0f;
+}
+
+void glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    VertexAttribute& attribute = g_context.attributes[index];
+    attribute.current[0] = x;
+    attribute.current[1] = y;
+    attribute.current[2] = z;
+    attribute.current[3] = 1.0f;
+}
+
+void glVertexAttrib4f(
+    GLuint index,
+    GLfloat x,
+    GLfloat y,
+    GLfloat z,
+    GLfloat w)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    VertexAttribute& attribute = g_context.attributes[index];
+    attribute.current[0] = x;
+    attribute.current[1] = y;
+    attribute.current[2] = z;
+    attribute.current[3] = w;
+}
+
+void glVertexAttrib4fv(GLuint index, const GLfloat *values)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!values)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    VertexAttribute& attribute = g_context.attributes[index];
+    for (int i = 0; i < 4; ++i)
+        attribute.current[i] = values[i];
+}
+
+void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+{
+    if (!has_context()) return;
+    if (!valid_draw_mode(mode))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!supported_draw_mode(mode))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (first < 0 || count < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (count < 3)
+        return;
+
+    fxgl::LinkedProgramView program = {};
+    if (!fxgl::get_current_program_view(program))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    const uint64_t final_vertex =
+        static_cast<uint64_t>(static_cast<uint32_t>(first)) +
+        static_cast<uint64_t>(static_cast<uint32_t>(count - 1));
+    if (final_vertex > std::numeric_limits<uint32_t>::max())
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    if (mode == GL_TRIANGLES)
+    {
+        for (GLsizei i = 0; i + 2 < count; i += 3)
+        {
+            if (!draw_vertex_triangle(
+                    program,
+                    static_cast<uint32_t>(first + i),
+                    static_cast<uint32_t>(first + i + 1),
+                    static_cast<uint32_t>(first + i + 2)))
+                return;
+        }
+    }
+    else if (mode == GL_TRIANGLE_STRIP)
+    {
+        for (GLsizei i = 0; i + 2 < count; ++i)
+        {
+            const uint32_t a = static_cast<uint32_t>(first + i);
+            const uint32_t b = static_cast<uint32_t>(first + i + 1);
+            const uint32_t c = static_cast<uint32_t>(first + i + 2);
+            if ((i & 1) == 0)
+            {
+                if (!draw_vertex_triangle(program, a, b, c))
+                    return;
+            }
+            else if (!draw_vertex_triangle(program, b, a, c))
+                return;
+        }
+    }
+    else /* GL_TRIANGLE_FAN */
+    {
+        const uint32_t center = static_cast<uint32_t>(first);
+        for (GLsizei i = 1; i + 1 < count; ++i)
+        {
+            if (!draw_vertex_triangle(
+                    program,
+                    center,
+                    static_cast<uint32_t>(first + i),
+                    static_cast<uint32_t>(first + i + 1)))
+                return;
+        }
+    }
+}
+
+void glDrawElements(
+    GLenum mode,
+    GLsizei count,
+    GLenum type,
+    const GLvoid *indices)
+{
+    if (!has_context()) return;
+    if (!valid_draw_mode(mode))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!supported_draw_mode(mode))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (count < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    const size_t index_bytes =
+        type == GL_UNSIGNED_BYTE ? 1 :
+        type == GL_UNSIGNED_SHORT ? 2 : 0;
+    if (index_bytes == 0)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (count == 0)
+        return;
+
+    fxgl::LinkedProgramView program = {};
+    if (!fxgl::get_current_program_view(program))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    const uint64_t byte_count =
+        static_cast<uint64_t>(static_cast<uint32_t>(count)) * index_bytes;
+    if (byte_count > std::numeric_limits<size_t>::max())
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    const uint8_t *index_data = nullptr;
+    if (g_context.element_buffer_binding != 0)
+    {
+        BufferObject *buffer = find_buffer(g_context.element_buffer_binding);
+        if (!buffer)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        const uintptr_t offset = reinterpret_cast<uintptr_t>(indices);
+        if (offset > buffer->size ||
+            static_cast<size_t>(byte_count) > buffer->size - offset)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        index_data = buffer->data + offset;
+    }
+    else
+    {
+        if (!indices)
+        {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        index_data = static_cast<const uint8_t *>(indices);
+    }
+
+    const auto get_index = [index_data, index_bytes, type](GLsizei i) -> uint32_t
+    {
+        if (type == GL_UNSIGNED_BYTE)
+            return index_data[static_cast<size_t>(i)];
+        uint16_t value = 0;
+        std::memcpy(&value, index_data + static_cast<size_t>(i) * index_bytes,
+                    sizeof(value));
+        return value;
+    };
+
+    if (mode == GL_TRIANGLES)
+    {
+        for (GLsizei i = 0; i + 2 < count; i += 3)
+        {
+            if (!draw_vertex_triangle(
+                    program, get_index(i), get_index(i + 1), get_index(i + 2)))
+                return;
+        }
+    }
+    else if (mode == GL_TRIANGLE_STRIP)
+    {
+        for (GLsizei i = 0; i + 2 < count; ++i)
+        {
+            const uint32_t a = get_index(i);
+            const uint32_t b = get_index(i + 1);
+            const uint32_t c = get_index(i + 2);
+            if ((i & 1) == 0)
+            {
+                if (!draw_vertex_triangle(program, a, b, c))
+                    return;
+            }
+            else if (!draw_vertex_triangle(program, b, a, c))
+                return;
+        }
+    }
+    else
+    {
+        const uint32_t center = get_index(0);
+        for (GLsizei i = 1; i + 1 < count; ++i)
+        {
+            if (!draw_vertex_triangle(
+                    program, center, get_index(i), get_index(i + 1)))
+                return;
+        }
+    }
+}
+
 void glEnableVertexAttribArray(GLuint index)
 {
     if (!has_context()) return;
