@@ -5,7 +5,7 @@
 constexpr uint32_t BENCH_MAX_REPEATS = 9;
 constexpr uint32_t BENCH_TIMER_RESOLUTION_US = 1;
 constexpr const char* BENCH_VERSION = "fxmark-2.0";
-constexpr const char* BENCH_TIMER_SOURCE = "libprof-2.4.0/TMU";
+constexpr const char* BENCH_TIMER_SOURCE = "libprof>=2.4/TMU";
 
 enum class BenchId : uint8_t
 {
@@ -41,6 +41,8 @@ struct BenchResult
     uint32_t measure_frames;
     uint32_t repeat_count;
     uint32_t triangles_per_frame;
+    uint32_t screen_width;
+    uint32_t screen_height;
     BenchMetricStats clear;
     BenchMetricStats raster;
     BenchMetricStats present;
