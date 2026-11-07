@@ -34,6 +34,7 @@ struct ProgramObject
     bool alive = false;
     bool delete_pending = false;
     bool linked = false;
+    bool validated = false;
     GLuint vertex_shader = 0;
     GLuint fragment_shader = 0;
     fxgl::ShaderModule vertex_module = {};
@@ -109,6 +110,42 @@ static void copy_log(
         *length = static_cast<GLsizei>(copy_length);
 }
 
+static GLenum gl_type_for_shader_type(fxgl::ShaderType type)
+{
+    switch (type)
+    {
+        case fxgl::ShaderType::Float: return GL_FLOAT;
+        case fxgl::ShaderType::Int: return GL_INT;
+        case fxgl::ShaderType::Bool: return GL_BOOL;
+        case fxgl::ShaderType::Vec2: return GL_FLOAT_VEC2;
+        case fxgl::ShaderType::Vec3: return GL_FLOAT_VEC3;
+        case fxgl::ShaderType::Vec4: return GL_FLOAT_VEC4;
+        case fxgl::ShaderType::Mat4: return GL_FLOAT_MAT4;
+        case fxgl::ShaderType::Sampler2D: return GL_SAMPLER_2D;
+        default: return 0;
+    }
+}
+
+static void copy_name(
+    const char *source,
+    GLsizei bufsize,
+    GLsizei *length,
+    GLchar *destination)
+{
+    if (length)
+        *length = 0;
+    if (!destination || bufsize <= 0)
+        return;
+    const size_t source_length = source ? std::strlen(source) : 0;
+    const size_t copied = std::min(
+        source_length, static_cast<size_t>(bufsize - 1));
+    if (copied > 0)
+        std::memcpy(destination, source, copied);
+    destination[copied] = '\0';
+    if (length)
+        *length = static_cast<GLsizei>(copied);
+}
+
 static int find_uniform(const ProgramObject& program, const char *name)
 {
     for (size_t i = 0; i < program.uniform_count; ++i)
@@ -181,6 +218,7 @@ static size_t shader_component_count(fxgl::ShaderType type)
 static bool link_program(ProgramObject& program)
 {
     program.linked = false;
+    program.validated = false;
     program.info_log[0] = '\0';
     program.uniform_count = 0;
     program.varying_scalar_count = 0;
@@ -640,6 +678,28 @@ void glGetShaderInfoLog(
     copy_log(shader->module.info_log, max_length, length, info_log);
 }
 
+void glGetShaderSource(
+    GLuint shader_name,
+    GLsizei bufsize,
+    GLsizei *length,
+    GLchar *source)
+{
+    if (!fxglHasCurrentContext())
+        return;
+    ShaderObject *shader = find_shader(shader_name);
+    if (!shader)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (bufsize < 0)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    copy_log(shader->source, bufsize, length, source);
+}
+
 GLboolean glIsShader(GLuint shader_name)
 {
     if (!fxglHasCurrentContext())
@@ -787,6 +847,9 @@ void glGetProgramiv(GLuint program_name, GLenum pname, GLint *params)
         case GL_LINK_STATUS:
             *params = program->linked ? GL_TRUE : GL_FALSE;
             break;
+        case GL_VALIDATE_STATUS:
+            *params = program->validated ? GL_TRUE : GL_FALSE;
+            break;
         case GL_DELETE_STATUS:
             *params = program->delete_pending ? GL_TRUE : GL_FALSE;
             break;
@@ -925,6 +988,89 @@ GLint glGetUniformLocation(GLuint program_name, const GLchar *name)
     return find_uniform(*program, name);
 }
 
+void glGetActiveAttrib(
+    GLuint program_name,
+    GLuint index,
+    GLsizei bufsize,
+    GLsizei *length,
+    GLint *size,
+    GLenum *type,
+    GLchar *name)
+{
+    if (!fxglHasCurrentContext())
+        return;
+    ProgramObject *program = find_program(program_name);
+    if (!program)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!program->linked)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (index >= program->vertex_module.attribute_count || bufsize < 0)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    const fxgl::ShaderVariable& variable =
+        program->vertex_module.attributes[index];
+    if (size) *size = 1;
+    if (type) *type = gl_type_for_shader_type(variable.type);
+    copy_name(variable.name, bufsize, length, name);
+}
+
+void glGetActiveUniform(
+    GLuint program_name,
+    GLuint index,
+    GLsizei bufsize,
+    GLsizei *length,
+    GLint *size,
+    GLenum *type,
+    GLchar *name)
+{
+    if (!fxglHasCurrentContext())
+        return;
+    ProgramObject *program = find_program(program_name);
+    if (!program)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!program->linked)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (index >= program->uniform_count || bufsize < 0)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    const fxgl::ShaderVariable& variable = program->uniforms[index];
+    if (size) *size = 1;
+    if (type) *type = gl_type_for_shader_type(variable.type);
+    copy_name(variable.name, bufsize, length, name);
+}
+
+void glValidateProgram(GLuint program_name)
+{
+    if (!fxglHasCurrentContext())
+        return;
+    ProgramObject *program = find_program(program_name);
+    if (!program)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    program->validated = program->linked;
+    if (!program->validated)
+        set_log(program->info_log, sizeof(program->info_log),
+                "Validation failed: program is not successfully linked");
+}
+
 void glUniform1f(GLint location, GLfloat v0)
 {
     set_uniform(location, fxgl::ShaderType::Float, &v0, 1);
@@ -978,6 +1124,96 @@ void glUniform1i(GLint location, GLint v0)
     program->uniform_values[location] = {};
     program->uniform_values[location].type = type;
     program->uniform_values[location].data[0] = static_cast<float>(v0);
+}
+
+void glUniform1fv(GLint location, GLsizei count, const GLfloat *value)
+{
+    if (!fxglHasCurrentContext()) return;
+    if (location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform(location, fxgl::ShaderType::Float, value, 1);
+}
+
+void glUniform2fv(GLint location, GLsizei count, const GLfloat *value)
+{
+    if (!fxglHasCurrentContext()) return;
+    if (location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform(location, fxgl::ShaderType::Vec2, value, 2);
+}
+
+void glUniform3fv(GLint location, GLsizei count, const GLfloat *value)
+{
+    if (!fxglHasCurrentContext()) return;
+    if (location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform(location, fxgl::ShaderType::Vec3, value, 3);
+}
+
+void glUniform4fv(GLint location, GLsizei count, const GLfloat *value)
+{
+    if (!fxglHasCurrentContext()) return;
+    if (location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform(location, fxgl::ShaderType::Vec4, value, 4);
+}
+
+void glGetUniformfv(GLuint program_name, GLint location, GLfloat *params)
+{
+    if (!fxglHasCurrentContext()) return;
+    ProgramObject *program = find_program(program_name);
+    if (!program || !program->linked)
+    {
+        fxgl::report_error(program ? GL_INVALID_OPERATION : GL_INVALID_VALUE);
+        return;
+    }
+    if (!params || location < 0 ||
+        static_cast<size_t>(location) >= program->uniform_count)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    const fxgl::ShaderValue& value = program->uniform_values[location];
+    const size_t components = shader_component_count(value.type);
+    for (size_t i = 0; i < components; ++i)
+        params[i] = value.data[i];
+}
+
+void glGetUniformiv(GLuint program_name, GLint location, GLint *params)
+{
+    if (!fxglHasCurrentContext()) return;
+    ProgramObject *program = find_program(program_name);
+    if (!program || !program->linked)
+    {
+        fxgl::report_error(program ? GL_INVALID_OPERATION : GL_INVALID_VALUE);
+        return;
+    }
+    if (!params || location < 0 ||
+        static_cast<size_t>(location) >= program->uniform_count)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    const fxgl::ShaderValue& value = program->uniform_values[location];
+    const size_t components = shader_component_count(value.type);
+    for (size_t i = 0; i < components; ++i)
+        params[i] = static_cast<GLint>(value.data[i]);
 }
 
 void glUniformMatrix4fv(
