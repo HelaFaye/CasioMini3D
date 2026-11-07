@@ -4,15 +4,45 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
 namespace
 {
+constexpr size_t FXGL_MAX_BUFFERS = 16;
+constexpr size_t FXGL_MAX_BUFFER_BYTES = 128u * 1024u;
+constexpr GLuint FXGL_MAX_VERTEX_ATTRIBS = 8;
+
+struct BufferObject
+{
+    uint8_t *data = nullptr;
+    size_t size = 0;
+    GLenum usage = GL_STATIC_DRAW;
+    bool alive = false;
+};
+
+struct VertexAttribute
+{
+    bool enabled = false;
+    GLint size = 4;
+    GLenum type = GL_FLOAT;
+    bool normalized = false;
+    GLsizei stride = 0;
+    const GLvoid *pointer = nullptr;
+    GLuint buffer_binding = 0;
+};
+
 struct Context
 {
     bool current = false;
     fxgl_surface_t surface = {};
+
+    BufferObject buffers[FXGL_MAX_BUFFERS] = {};
+    size_t buffer_bytes = 0;
+    GLuint array_buffer_binding = 0;
+    GLuint element_buffer_binding = 0;
+    VertexAttribute attributes[FXGL_MAX_VERTEX_ATTRIBS] = {};
 
     GLint viewport[4] = {};
     GLint scissor[4] = {};
@@ -54,6 +84,65 @@ static bool has_context()
     if (!g_context.current)
         return false;
     return true;
+}
+
+static BufferObject *find_buffer(GLuint name)
+{
+    if (name == 0 || name > FXGL_MAX_BUFFERS)
+        return nullptr;
+    BufferObject& object = g_context.buffers[name - 1];
+    return object.alive ? &object : nullptr;
+}
+
+static BufferObject *bound_buffer(GLenum target)
+{
+    GLuint name = 0;
+    if (target == GL_ARRAY_BUFFER)
+        name = g_context.array_buffer_binding;
+    else if (target == GL_ELEMENT_ARRAY_BUFFER)
+        name = g_context.element_buffer_binding;
+    else
+    {
+        set_error(GL_INVALID_ENUM);
+        return nullptr;
+    }
+
+    if (name == 0)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+
+    BufferObject *object = find_buffer(name);
+    if (!object)
+        set_error(GL_INVALID_OPERATION);
+    return object;
+}
+
+static bool valid_buffer_usage(GLenum usage)
+{
+    return usage == GL_STATIC_DRAW ||
+           usage == GL_DYNAMIC_DRAW ||
+           usage == GL_STREAM_DRAW;
+}
+
+static size_t buffer_size_budget_used_without(const BufferObject& object)
+{
+    return g_context.buffer_bytes - object.size;
+}
+
+static void destroy_buffers(Context& context)
+{
+    for (BufferObject& object : context.buffers)
+    {
+        std::free(object.data);
+        object = {};
+    }
+    context.buffer_bytes = 0;
+    context.array_buffer_binding = 0;
+    context.element_buffer_binding = 0;
+    for (VertexAttribute& attribute : context.attributes)
+        attribute = {};
 }
 
 static bool valid_depth_func(GLenum value)
@@ -201,6 +290,9 @@ GLboolean fxglMakeCurrent(const fxgl_surface_t *surface)
         surface->stride < surface->width)
         return GL_FALSE;
 
+    if (g_context.current)
+        destroy_buffers(g_context);
+
     Context next = {};
     next.current = true;
     next.surface = *surface;
@@ -226,12 +318,316 @@ GLboolean fxglMakeCurrent(const fxgl_surface_t *surface)
 
 void fxglReleaseCurrent(void)
 {
+    destroy_buffers(g_context);
     g_context = {};
 }
 
 GLboolean fxglHasCurrentContext(void)
 {
     return g_context.current ? GL_TRUE : GL_FALSE;
+}
+
+void glGenBuffers(GLsizei n, GLuint *buffers)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !buffers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    size_t available = 0;
+    for (const BufferObject& object : g_context.buffers)
+        if (!object.alive) ++available;
+    if (available < static_cast<size_t>(n))
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+
+    GLsizei generated = 0;
+    for (size_t i = 0; i < FXGL_MAX_BUFFERS && generated < n; ++i)
+    {
+        if (!g_context.buffers[i].alive)
+        {
+            g_context.buffers[i] = {};
+            g_context.buffers[i].alive = true;
+            buffers[generated++] = static_cast<GLuint>(i + 1);
+        }
+    }
+}
+
+void glDeleteBuffers(GLsizei n, const GLuint *buffers)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !buffers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    for (GLsizei i = 0; i < n; ++i)
+    {
+        BufferObject *object = find_buffer(buffers[i]);
+        if (!object)
+            continue;
+
+        const GLuint name = buffers[i];
+        if (g_context.array_buffer_binding == name)
+            g_context.array_buffer_binding = 0;
+        if (g_context.element_buffer_binding == name)
+            g_context.element_buffer_binding = 0;
+
+        for (VertexAttribute& attribute : g_context.attributes)
+        {
+            if (attribute.buffer_binding == name)
+            {
+                attribute.buffer_binding = 0;
+                attribute.pointer = nullptr;
+            }
+        }
+
+        g_context.buffer_bytes -= object->size;
+        std::free(object->data);
+        *object = {};
+    }
+}
+
+void glBindBuffer(GLenum target, GLuint buffer)
+{
+    if (!has_context()) return;
+    GLuint *binding = nullptr;
+    if (target == GL_ARRAY_BUFFER)
+        binding = &g_context.array_buffer_binding;
+    else if (target == GL_ELEMENT_ARRAY_BUFFER)
+        binding = &g_context.element_buffer_binding;
+    else
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    if (buffer != 0 && !find_buffer(buffer))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    *binding = buffer;
+}
+
+void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
+{
+    if (!has_context()) return;
+    if (size < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!valid_buffer_usage(usage))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    BufferObject *object = bound_buffer(target);
+    if (!object) return;
+
+    const size_t new_size = static_cast<size_t>(size);
+    const size_t retained = buffer_size_budget_used_without(*object);
+    if (new_size > FXGL_MAX_BUFFER_BYTES - retained)
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+
+    uint8_t *new_data = nullptr;
+    if (new_size > 0)
+    {
+        new_data = static_cast<uint8_t *>(std::malloc(new_size));
+        if (!new_data)
+        {
+            set_error(GL_OUT_OF_MEMORY);
+            return;
+        }
+        if (data)
+            std::memcpy(new_data, data, new_size);
+        else
+            std::memset(new_data, 0, new_size);
+    }
+
+    std::free(object->data);
+    object->data = new_data;
+    object->size = new_size;
+    object->usage = usage;
+    g_context.buffer_bytes = retained + new_size;
+}
+
+void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data)
+{
+    if (!has_context()) return;
+    if (offset < 0 || size < 0 || (size > 0 && !data))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    BufferObject *object = bound_buffer(target);
+    if (!object) return;
+
+    const size_t start = static_cast<size_t>(offset);
+    const size_t count = static_cast<size_t>(size);
+    if (start > object->size || count > object->size - start)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (count > 0)
+        std::memcpy(object->data + start, data, count);
+}
+
+void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    BufferObject *object = bound_buffer(target);
+    if (!object) return;
+
+    switch (pname)
+    {
+        case GL_BUFFER_SIZE:
+            *params = static_cast<GLint>(object->size);
+            break;
+        case GL_BUFFER_USAGE:
+            *params = static_cast<GLint>(object->usage);
+            break;
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
+    }
+}
+
+void glEnableVertexAttribArray(GLuint index)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    g_context.attributes[index].enabled = true;
+}
+
+void glDisableVertexAttribArray(GLuint index)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    g_context.attributes[index].enabled = false;
+}
+
+static bool valid_vertex_attrib_type(GLenum type)
+{
+    return type == GL_BYTE || type == GL_UNSIGNED_BYTE ||
+           type == GL_SHORT || type == GL_UNSIGNED_SHORT ||
+           type == GL_FLOAT;
+}
+
+void glVertexAttribPointer(
+    GLuint index,
+    GLint size,
+    GLenum type,
+    GLboolean normalized,
+    GLsizei stride,
+    const GLvoid *pointer)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS || size < 1 || size > 4 || stride < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!valid_vertex_attrib_type(type))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    VertexAttribute& attribute = g_context.attributes[index];
+    attribute.size = size;
+    attribute.type = type;
+    attribute.normalized = normalized != GL_FALSE;
+    attribute.stride = stride;
+    attribute.pointer = pointer;
+    attribute.buffer_binding = g_context.array_buffer_binding;
+}
+
+void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    const VertexAttribute& attribute = g_context.attributes[index];
+    switch (pname)
+    {
+        case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
+            *params = attribute.enabled ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_SIZE:
+            *params = attribute.size;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
+            *params = attribute.stride;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_TYPE:
+            *params = static_cast<GLint>(attribute.type);
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
+            *params = attribute.normalized ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
+            *params = static_cast<GLint>(attribute.buffer_binding);
+            break;
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
+    }
+}
+
+void glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid **pointer)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!pointer)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (pname != GL_VERTEX_ATTRIB_ARRAY_POINTER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    *pointer = const_cast<GLvoid *>(g_context.attributes[index].pointer);
 }
 
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
