@@ -11,8 +11,11 @@ static bool measure_frames(BenchId id, const BenchConfig& cfg, uint32_t frames)
     switch (id)
     {
         case BenchId::ClearOnly:
-            for (uint32_t i = 0; i < frames; ++i)
+            for (uint32_t frame = 0; frame < frames; ++frame)
+            {
                 dclear(C_BLACK);
+                dupdate();
+            }
             return true;
 
         case BenchId::TriangleThroughput:
@@ -22,8 +25,8 @@ static bool measure_frames(BenchId id, const BenchConfig& cfg, uint32_t frames)
                 dclear(C_BLACK);
                 for (uint32_t i = 0; i < cfg.triangle_count; ++i)
                 {
-                    const int x = (int)((i * 37u) % (SCREEN_WIDTH - 32));
-                    const int y = (int)((i * 23u) % (SCREEN_HEIGHT - 32));
+                    const int x = (int)((i * 37u + frame * 3u) % (SCREEN_WIDTH - 32));
+                    const int y = (int)((i * 23u + frame * 2u) % (SCREEN_HEIGHT - 32));
                     const int w = 12 + (int)(i % 20u);
                     const int h = 12 + (int)((i * 3u) % 20u);
 
@@ -32,6 +35,7 @@ static bool measure_frames(BenchId id, const BenchConfig& cfg, uint32_t frames)
                     VertexLocal c = {x, y + h, 0, FLOAT_TO_FIXED(39)};
                     DrawTriangle(a, b, c);
                 }
+                dupdate();
             }
             return true;
         }
