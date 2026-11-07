@@ -141,6 +141,24 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING 0x889F
 #define GL_VERTEX_ATTRIB_ARRAY_POINTER 0x8645
 
+#define GL_BLEND_COLOR 0x8005
+#define GL_BLEND_EQUATION_ALPHA 0x883D
+#define GL_BLEND_SRC_ALPHA 0x80CB
+#define GL_BLEND_DST_ALPHA 0x80CA
+#define GL_DEPTH_RANGE 0x0B70
+#define GL_STENCIL_FUNC 0x0B92
+#define GL_STENCIL_VALUE_MASK 0x0B93
+#define GL_STENCIL_FAIL 0x0B94
+#define GL_STENCIL_PASS_DEPTH_FAIL 0x0B95
+#define GL_STENCIL_PASS_DEPTH_PASS 0x0B96
+#define GL_STENCIL_BACK_FUNC 0x8800
+#define GL_STENCIL_BACK_FAIL 0x8801
+#define GL_STENCIL_BACK_PASS_DEPTH_FAIL 0x8802
+#define GL_STENCIL_BACK_PASS_DEPTH_PASS 0x8803
+#define GL_STENCIL_BACK_REF 0x8CA3
+#define GL_STENCIL_BACK_VALUE_MASK 0x8CA4
+#define GL_STENCIL_BACK_WRITEMASK 0x8CA5
+
 #define GL_VIEWPORT 0x0BA2
 #define GL_SCISSOR_BOX 0x0C10
 #define GL_DEPTH_FUNC 0x0B74
@@ -185,6 +203,16 @@ void glVertexAttribPointer(GLuint index, GLint size, GLenum type,
     GLboolean normalized, GLsizei stride, const GLvoid *pointer);
 void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params);
 void glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid **pointer);
+
+void glDepthRangef(GLclampf near_value, GLclampf far_value);
+void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
+void glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb,
+    GLenum src_alpha, GLenum dst_alpha);
+void glBlendEquationSeparate(GLenum mode_rgb, GLenum mode_alpha);
+void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask);
+void glStencilOpSeparate(GLenum face, GLenum stencil_fail,
+    GLenum depth_fail, GLenum depth_pass);
+void glStencilMaskSeparate(GLenum face, GLuint mask);
 
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
