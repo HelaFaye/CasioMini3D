@@ -83,6 +83,30 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_FUNC_SUBTRACT 0x800A
 #define GL_FUNC_REVERSE_SUBTRACT 0x800B
 
+#define GL_ARRAY_BUFFER 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_STATIC_DRAW 0x88E4
+#define GL_DYNAMIC_DRAW 0x88E8
+#define GL_STREAM_DRAW 0x88E0
+#define GL_BUFFER_SIZE 0x8764
+#define GL_BUFFER_USAGE 0x8765
+#define GL_ARRAY_BUFFER_BINDING 0x8894
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING 0x8895
+#define GL_MAX_VERTEX_ATTRIBS 0x8869
+
+#define GL_BYTE 0x1400
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_SHORT 0x1402
+#define GL_UNSIGNED_SHORT 0x1403
+#define GL_FLOAT 0x1406
+
+#define GL_VERTEX_ATTRIB_ARRAY_ENABLED 0x8622
+#define GL_VERTEX_ATTRIB_ARRAY_SIZE 0x8623
+#define GL_VERTEX_ATTRIB_ARRAY_STRIDE 0x8624
+#define GL_VERTEX_ATTRIB_ARRAY_TYPE 0x8625
+#define GL_VERTEX_ATTRIB_ARRAY_NORMALIZED 0x886A
+#define GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING 0x889F
+
 #define GL_VIEWPORT 0x0BA2
 #define GL_SCISSOR_BOX 0x0C10
 #define GL_DEPTH_FUNC 0x0B74
@@ -98,6 +122,19 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_STENCIL_WRITEMASK 0x0B98
 #define GL_MAX_TEXTURE_SIZE 0x0D33
 #define GL_MAX_VIEWPORT_DIMS 0x0D3A
+
+void glGenBuffers(GLsizei n, GLuint *buffers);
+void glDeleteBuffers(GLsizei n, const GLuint *buffers);
+void glBindBuffer(GLenum target, GLuint buffer);
+void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage);
+void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data);
+void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params);
+void glEnableVertexAttribArray(GLuint index);
+void glDisableVertexAttribArray(GLuint index);
+void glVertexAttribPointer(GLuint index, GLint size, GLenum type,
+    GLboolean normalized, GLsizei stride, const GLvoid *pointer);
+void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params);
+void glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid **pointer);
 
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
