@@ -11,6 +11,7 @@ namespace
 {
 constexpr uint16_t RED = 0xf800;
 constexpr uint16_t GREEN = 0x07e0;
+constexpr uint16_t BLUE = 0x001f;
 constexpr uint16_t SENTINEL = 0x5a5a;
 
 void reset_buffers(uint16_t* color, uint16_t* depth, uint8_t* stencil, size_t count)
@@ -345,6 +346,53 @@ void test_texture_objects_and_uploads()
     fxglReleaseCurrent();
 }
 
+void test_rgb565_unpack_alignment()
+{
+    uint16_t color[1] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 1, 1, 1};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    // Default unpack alignment is four bytes. Two RGB565 pixels occupy four
+    // bytes per row; an odd-width row occupies two bytes but starts each next
+    // row at a four-byte boundary.
+    const uint8_t aligned_rows[8] = {
+        0xf8, 0x00, 0xaa, 0xaa,
+        0x07, 0xe0, 0xbb, 0xbb
+    };
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 2, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, aligned_rows);
+
+    gfx::Texture2DView view = {};
+    gfx::TextureSampler sampler = {};
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.width == 1 && view.height == 2);
+    assert(gfx::sample_texture(view, 0, 0, sampler) == RED);
+    assert(gfx::sample_texture(view, 0, 1LL << 16, sampler) == GREEN);
+
+    GLint alignment = 0;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+    assert(alignment == 4);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+    assert(alignment == 1);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 3);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    const uint8_t tight_rows[4] = {0x00, 0x1f, 0xff, 0xff};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 2, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, tight_rows);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(gfx::sample_texture(view, 0, 0, sampler) == BLUE);
+    assert(gfx::sample_texture(view, 0, 1LL << 16, sampler) == 0xffff);
+
+    glDeleteTextures(1, &texture);
+    fxglReleaseCurrent();
+}
+
 void test_state_validation_and_error_latching()
 {
     uint16_t color[4] = {};
@@ -392,6 +440,7 @@ int main()
     test_outside_scissor_is_safe_noop();
     test_buffer_objects_and_vertex_attributes();
     test_texture_objects_and_uploads();
+    test_rgb565_unpack_alignment();
     test_state_validation_and_error_latching();
 
     std::puts("GLES-style context/state tests: PASS");
