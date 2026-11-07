@@ -64,6 +64,14 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_CW 0x0900
 #define GL_CCW 0x0901
 
+#define GL_POINTS 0x0000
+#define GL_LINES 0x0001
+#define GL_LINE_LOOP 0x0002
+#define GL_LINE_STRIP 0x0003
+#define GL_TRIANGLES 0x0004
+#define GL_TRIANGLE_STRIP 0x0005
+#define GL_TRIANGLE_FAN 0x0006
+
 #define GL_VERTEX_SHADER 0x8B31
 #define GL_FRAGMENT_SHADER 0x8B30
 #define GL_SHADER_TYPE 0x8B4F
@@ -249,6 +257,14 @@ void glBindBuffer(GLenum target, GLuint buffer);
 void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage);
 void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data);
 void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params);
+void glVertexAttrib1f(GLuint index, GLfloat x);
+void glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y);
+void glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z);
+void glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+void glVertexAttrib4fv(GLuint index, const GLfloat *values);
+void glDrawArrays(GLenum mode, GLint first, GLsizei count);
+void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices);
+
 void glEnableVertexAttribArray(GLuint index);
 void glDisableVertexAttribArray(GLuint index);
 void glVertexAttribPointer(GLuint index, GLint size, GLenum type,
