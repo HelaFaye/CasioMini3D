@@ -1,0 +1,23 @@
+name: Host regression tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure host tests
+        run: cmake -S V3/tests/host -B build/host-tests
+
+      - name: Build host tests
+        run: cmake --build build/host-tests --parallel 2
+
+      - name: Run regression tests
+        run: ctest --test-dir build/host-tests --output-on-failure
