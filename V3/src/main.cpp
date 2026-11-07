@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <libprof.h>
 #include <gint/gint.h>
 
 static const BenchId BENCHMARKS[] = {
@@ -37,22 +38,26 @@ static int benchmark_csv_errno[BENCHMARK_COUNT];
 struct CsvWriteArgs
 {
     const BenchResult* result;
-    const BenchConfig* config;
     CsvErrorStage error;
     int error_number;
 };
 
-// Gint's POSIX/C99 filesystem API uses normalized paths. "/" is the
-// Fugue storage root; the raw "\\\\fls0\\..." prefix belongs to BFile.
-// File operations must run in the OS world on fx-CG targets.
+// Schema v2 is deliberately written to a new file. Existing v1 logs remain
+// intact rather than receiving rows with a different column layout.
 static int append_csv_in_os_world(void* opaque)
 {
     CsvWriteArgs* args = static_cast<CsvWriteArgs*>(opaque);
     args->error = CsvErrorStage::None;
     args->error_number = 0;
 
-    static const char path[] = "/benchmarks.csv";
-    static const char header[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
+    static const char path[] = "/benchmarks-v2.csv";
+    static const char header[] =
+        "schema_version,benchmark_version,scene,timer_source,timer_resolution_us,"
+        "warmup_frames,measure_frames,repeat_count,triangles_per_frame,"
+        "clear_mean_us_per_frame,clear_median_us_per_frame,clear_min_us_per_frame,clear_max_us_per_frame,clear_spread_us_per_frame,"
+        "raster_mean_us_per_frame,raster_median_us_per_frame,raster_min_us_per_frame,raster_max_us_per_frame,raster_spread_us_per_frame,"
+        "present_mean_us_per_frame,present_median_us_per_frame,present_min_us_per_frame,present_max_us_per_frame,present_spread_us_per_frame,"
+        "frame_mean_us_per_frame,frame_median_us_per_frame,frame_min_us_per_frame,frame_max_us_per_frame,frame_spread_us_per_frame\n";
 
     errno = 0;
     FILE* file = fopen(path, "r+");
@@ -66,8 +71,6 @@ static int append_csv_in_os_world(void* opaque)
             return static_cast<int>(args->error);
         }
 
-        // Avoid relying on append-mode behavior: create only if absent,
-        // then explicitly seek to the end before writing.
         errno = 0;
         file = fopen(path, "w+");
         if (!file)
@@ -110,16 +113,45 @@ static int append_csv_in_os_world(void* opaque)
         }
     }
 
+    const BenchResult& r = *args->result;
     if (failure == CsvErrorStage::None)
     {
         errno = 0;
-        if (fprintf(file, "%s,%lu,%lu,%lu,%.2f,%.3f\n",
-                args->result->name,
-                static_cast<unsigned long>(args->config->warmup_frames),
-                static_cast<unsigned long>(args->config->measure_frames),
-                static_cast<unsigned long>(args->result->elapsed_ms),
-                args->result->fps,
-                args->result->avg_ms_per_frame) < 0)
+        const int written = fprintf(file,
+            "2,%s,%s,%s,%u,%lu,%lu,%lu,%lu,"
+            "%.3f,%.3f,%.3f,%.3f,%.3f,"
+            "%.3f,%.3f,%.3f,%.3f,%.3f,"
+            "%.3f,%.3f,%.3f,%.3f,%.3f,"
+            "%.3f,%.3f,%.3f,%.3f,%.3f\n",
+            BENCH_VERSION,
+            r.name,
+            BENCH_TIMER_SOURCE,
+            BENCH_TIMER_RESOLUTION_US,
+            static_cast<unsigned long>(r.warmup_frames),
+            static_cast<unsigned long>(r.measure_frames),
+            static_cast<unsigned long>(r.repeat_count),
+            static_cast<unsigned long>(r.triangles_per_frame),
+            r.clear.mean_us_per_frame,
+            r.clear.median_us_per_frame,
+            r.clear.min_us_per_frame,
+            r.clear.max_us_per_frame,
+            r.clear.spread_us_per_frame,
+            r.raster.mean_us_per_frame,
+            r.raster.median_us_per_frame,
+            r.raster.min_us_per_frame,
+            r.raster.max_us_per_frame,
+            r.raster.spread_us_per_frame,
+            r.present.mean_us_per_frame,
+            r.present.median_us_per_frame,
+            r.present.min_us_per_frame,
+            r.present.max_us_per_frame,
+            r.present.spread_us_per_frame,
+            r.frame_total.mean_us_per_frame,
+            r.frame_total.median_us_per_frame,
+            r.frame_total.min_us_per_frame,
+            r.frame_total.max_us_per_frame,
+            r.frame_total.spread_us_per_frame);
+        if (written < 0)
         {
             failure = CsvErrorStage::RowWrite;
             failure_errno = errno;
@@ -175,13 +207,11 @@ static const char* csv_error_name(CsvErrorStage error)
 
 static bool append_benchmark_result_csv(
     const BenchResult& result,
-    const BenchConfig& cfg,
     CsvErrorStage* error,
     int* error_number)
 {
     CsvWriteArgs args = {
         &result,
-        &cfg,
         CsvErrorStage::WorldSwitch,
         0
     };
@@ -189,8 +219,6 @@ static bool append_benchmark_result_csv(
     const int switch_result = gint_world_switch(
         GINT_CALL(append_csv_in_os_world, &args));
 
-    // If the callback did not run, retain the world-switch failure as the
-    // stage and preserve the switch result as its diagnostic code.
     if (args.error == CsvErrorStage::WorldSwitch)
         args.error_number = switch_result;
 
@@ -216,7 +244,7 @@ static bool run_and_store(size_t index, const BenchConfig& cfg)
     benchmark_results[index] = result;
     benchmark_valid[index] = true;
     benchmark_logged[index] = append_benchmark_result_csv(
-        result, cfg, &benchmark_csv_error[index], &benchmark_csv_errno[index]);
+        result, &benchmark_csv_error[index], &benchmark_csv_errno[index]);
     return true;
 }
 
@@ -235,65 +263,83 @@ static void run_suite(const BenchConfig& cfg)
         run_and_store(i, cfg);
 }
 
-static void draw_results()
+static void draw_results(const BenchConfig& cfg)
 {
     dclear(C_BLACK);
-    dtext(8, 8, C_WHITE, "Benchmark results");
+    dtext(8, 8, C_WHITE, "fxmark 2.0 | mean/median us per frame");
 
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
     {
-        const int y = 24 + static_cast<int>(i) * 39;
+        const int y = 22 + static_cast<int>(i) * 40;
         dtext(8, y, C_WHITE, bench_name(BENCHMARKS[i]));
-        if (benchmark_valid[i])
+
+        if (!benchmark_valid[i])
         {
-            char fps[32];
-            char ms[32];
-            char error_number[20];
-            snprintf(fps, sizeof(fps), "FPS %.2f", benchmark_results[i].fps);
-            snprintf(ms, sizeof(ms), "%.2f ms/frame", benchmark_results[i].avg_ms_per_frame);
-            dtext(8, y + 15, C_WHITE, fps);
-            dtext(145, y + 15, C_WHITE, ms);
-            dtext(300, y + 15, C_WHITE,
-                benchmark_logged[i] ? "CSV OK" : csv_error_name(benchmark_csv_error[i]));
-            if (!benchmark_logged[i])
-            {
-                if (benchmark_csv_error[i] == CsvErrorStage::WorldSwitch)
-                    snprintf(error_number, sizeof(error_number), "code %d", benchmark_csv_errno[i]);
-                else
-                    snprintf(error_number, sizeof(error_number), "errno %d", benchmark_csv_errno[i]);
-                dtext(300, y + 27, C_WHITE, error_number);
-            }
+            dtext(8, y + 13, C_WHITE, "FAILED (profile or scene)");
+            continue;
         }
-        else
+
+        const BenchResult& r = benchmark_results[i];
+        char raster_present[64];
+        char total[64];
+        char csv_number[20];
+
+        snprintf(raster_present, sizeof(raster_present),
+            "R %.1f/%.1f us  P %.1f/%.1f us",
+            r.raster.mean_us_per_frame,
+            r.raster.median_us_per_frame,
+            r.present.mean_us_per_frame,
+            r.present.median_us_per_frame);
+        snprintf(total, sizeof(total),
+            "F %.1f us +/- %.1f  %.1f FPS",
+            r.frame_total.mean_us_per_frame,
+            r.frame_total.spread_us_per_frame,
+            r.frame_total.mean_us_per_frame > 0.0
+                ? 1000000.0 / r.frame_total.mean_us_per_frame
+                : 0.0);
+
+        dtext(8, y + 12, C_WHITE, raster_present);
+        dtext(8, y + 24, C_WHITE, total);
+        dtext(300, y, C_WHITE,
+            benchmark_logged[i] ? "CSV OK" : csv_error_name(benchmark_csv_error[i]));
+
+        if (!benchmark_logged[i])
         {
-            dtext(8, y + 15, C_WHITE, "FAILED (timer or scene)");
+            if (benchmark_csv_error[i] == CsvErrorStage::WorldSwitch)
+                snprintf(csv_number, sizeof(csv_number), "code %d", benchmark_csv_errno[i]);
+            else
+                snprintf(csv_number, sizeof(csv_number), "errno %d", benchmark_csv_errno[i]);
+            dtext(300, y + 12, C_WHITE, csv_number);
         }
     }
 
-    dtext(8, 190, C_WHITE, "F6 clear / F5 solid / EXE triangles / DEL UV");
-    dtext(8, 207, C_WHITE, "MENU: quit");
+    dtext(8, 188, C_WHITE, "R raster / P dupdate / F full frame");
+    dtext(8, 205, C_WHITE, "F6 clear F5 solid EXE tri DEL UV | MENU quit");
+    (void)cfg;
 }
 
 int main()
 {
+    prof_init();
     init_uv_map();
 
     BenchConfig cfg;
     cfg.warmup_frames = 5;
     cfg.measure_frames = 60;
+    cfg.repeat_count = 5;
     cfg.triangle_count = 64;
     cfg.width = SCREEN_WIDTH;
     cfg.height = SCREEN_HEIGHT;
 
     dclear(C_BLACK);
-    dtext(8, 8, C_WHITE, "Running benchmark suite...");
+    dtext(8, 8, C_WHITE, "Running fxmark 2.0...");
     dupdate();
     run_suite(cfg);
 
     while (!keydown(KEY_MENU))
     {
         clearevents();
-        draw_results();
+        draw_results(cfg);
         dupdate();
 
         size_t selected = BENCHMARK_COUNT;
@@ -309,7 +355,7 @@ int main()
         if (selected < BENCHMARK_COUNT)
         {
             dclear(C_BLACK);
-            dtext(8, 8, C_WHITE, "Running selected benchmark...");
+            dtext(8, 8, C_WHITE, "Running repeated benchmark...");
             dtext(8, 28, C_WHITE, bench_name(BENCHMARKS[selected]));
             dupdate();
             run_and_store(selected, cfg);
@@ -318,5 +364,6 @@ int main()
         }
     }
 
+    prof_quit();
     return 0;
 }
