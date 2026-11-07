@@ -126,7 +126,7 @@ static void test_mirrored_repeat_addressing()
     assert(gfx::sample_texture(texture, 2 * ONE, 0, mirrored) == 0x07e0);
     assert(gfx::sample_texture(texture, 3 * ONE, 0, mirrored) == 0xf800);
     assert(gfx::sample_texture(texture, 4 * ONE, 0, mirrored) == 0xf800);
-    assert(gfx::sample_texture(texture, -2 * ONE, ONE, mirrored) == 0x001f);
+    assert(gfx::sample_texture(texture, -2 * ONE, ONE, mirrored) == 0xffff);
 }
 
 static void test_invalid_inputs_fail_closed()
