@@ -5,6 +5,7 @@
 
 #include <GLES2/gl2.h>
 #include <fxgl/platform.h>
+#include "../../src/gles/context_internal.hpp"
 
 namespace
 {
@@ -253,6 +254,97 @@ void test_buffer_objects_and_vertex_attributes()
     fxglReleaseCurrent();
 }
 
+void test_texture_objects_and_uploads()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    GLuint textures[2] = {};
+    glGenTextures(2, textures);
+    assert(textures[0] != 0 && textures[1] != 0 && textures[0] != textures[1]);
+
+    GLint value = 0;
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, textures[1]);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &value);
+    assert(value == GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &value);
+    assert(value == static_cast<GLint>(textures[1]));
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &value);
+    assert(value == GL_LINEAR);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &value);
+    assert(value == GL_LINEAR);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &value);
+    assert(value == GL_REPEAT);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &value);
+    assert(value == GL_MIRRORED_REPEAT);
+
+    const uint16_t source[4] = {RED, 0x001f, GREEN, 0xffff};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, source);
+
+    gfx::Texture2DView view = {};
+    gfx::TextureSampler sampler = {};
+    assert(fxgl::get_texture_binding(1, view, sampler));
+    assert(view.width == 2 && view.height == 2 && view.stride == 2);
+    assert(sampler.filter == gfx::TextureFilter::Bilinear);
+    assert(sampler.address_u == gfx::TextureAddressMode::Repeat);
+    assert(sampler.address_v == gfx::TextureAddressMode::MirroredRepeat);
+    assert(gfx::sample_texture(view, 0, 0, sampler) == RED);
+
+    const uint16_t update = BLUE;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 1, 1, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, &update);
+    assert(fxgl::get_texture_binding(1, view, sampler));
+    const gfx::TextureSampler nearest = {
+        gfx::TextureFilter::Nearest,
+        gfx::TextureAddressMode::Clamp,
+        gfx::TextureAddressMode::Clamp
+    };
+    assert(gfx::sample_texture(view, 1LL << 16, 0, nearest) == BLUE);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textures[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, nullptr);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.width == 1 && view.height == 1);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+        GL_LINEAR_MIPMAP_LINEAR);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 1, 1, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 129, 1, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB,
+        GL_UNSIGNED_BYTE, nullptr);
+    assert(glGetError() == GL_INVALID_ENUM);
+
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 1, 1, GL_RGB,
+        GL_UNSIGNED_SHORT_5_6_5, &update);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    glDeleteTextures(2, textures);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &value);
+    assert(value == 0);
+    assert(!fxgl::get_texture_binding(0, view, sampler));
+
+    glActiveTexture(GL_TEXTURE1 + 1);
+    assert(glGetError() == GL_INVALID_ENUM);
+
+    fxglReleaseCurrent();
+}
+
 void test_state_validation_and_error_latching()
 {
     uint16_t color[4] = {};
@@ -299,6 +391,7 @@ int main()
     test_scissor_color_mask_and_depth_stencil_clear();
     test_outside_scissor_is_safe_noop();
     test_buffer_objects_and_vertex_attributes();
+    test_texture_objects_and_uploads();
     test_state_validation_and_error_latching();
 
     std::puts("GLES-style context/state tests: PASS");
