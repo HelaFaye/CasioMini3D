@@ -9,7 +9,7 @@
 
 `fxmark` is a calculator-native graphics benchmark inspired by the workload organization of glmark2. It measures the Gint/fxSDK rendering path and the software rasterizer implemented by CasioMini3D. It is **not** a desktop OpenGL/OpenGL ES port, an OpenGL conformance suite, or a score that can be compared directly with glmark2 results.
 
-The V3 application has a benchmark runner, a three-entry scene registry, scene selection, warm-up and measured frame loops, an on-screen result summary, and an experimental CSV append path. These pieces are implemented in source. The benchmark suite remains a prototype: timing resolution, scene semantics, configuration, storage behavior, and repeatability need further validation before publishing stable scores.
+The V3 application has a benchmark runner, a four-entry scene registry, scene selection, warm-up and measured frame loops, an on-screen result summary, and an experimental CSV append path. These pieces are implemented in source. The benchmark suite remains a prototype: timing resolution, scene semantics, configuration, storage behavior, and repeatability need further validation before publishing stable scores.
 
 ## 2. Current implementation (V3)
 
@@ -20,6 +20,7 @@ V3/src/main.cpp
   -> benchmark registry / suite control
   -> V3/src/bench.cpp
        -> clear-only
+       -> solid-fill
        -> triangle-throughput
        -> textured-geometry
   -> V3/src/shapes/triangle.cpp
@@ -30,7 +31,7 @@ V3/src/main.cpp
 
 ### 2.1 Runner and controls
 
-`main.cpp` registers three `BenchId` values: `ClearOnly`, `TriangleThroughput`, and `TexturedGeometry`. On startup it runs the suite once. The result screen allows individual tests to be rerun with `F6` (clear-only), `EXE` (triangle-throughput), and `DEL` (textured-geometry); `MENU` exits.
+`main.cpp` registers four `BenchId` values: `ClearOnly`, `SolidFill`, `TriangleThroughput`, and `TexturedGeometry`. On startup it runs the suite once. The result screen allows individual tests to be rerun with `F6` (clear-only), `F5` (solid-fill), `EXE` (triangle-throughput), and `DEL` (textured-geometry); `MENU` exits.
 
 The default configuration is 5 warm-up frames, 60 measured frames, and `triangle_count = 64`. `BenchConfig` also contains width and height fields. At present, `bench.cpp` validates that these fields are positive, but the scene and rasterizer use compile-time `SCREEN_WIDTH` and `SCREEN_HEIGHT` constants. Those fields do not currently provide configurable render resolution.
 
@@ -39,10 +40,13 @@ The default configuration is 5 warm-up frames, 60 measured frames, and `triangle
 | Scene | Current operation | What the result includes | Important limitation |
 |---|---|---|---|
 | `clear-only` | `dclear(C_BLACK)` followed by `dupdate()` for each frame | Framebuffer clear plus display presentation | Not a clear-only CPU measurement. |
+| `solid-fill` | Clears the frame, submits `triangle_count` screen-space triangles through `DrawTriangleSolid()` using `C_WHITE`, then calls `dupdate()` | Scanline rasterization, solid pixel writes, clear, and presentation | Skips UV interpolation and texture lookup; remains a 2D screen-space test. |
 | `triangle-throughput` | Clears the frame, submits `triangle_count` screen-space triangles through `DrawTriangle()`, then calls `dupdate()` | Scanline rasterization, UV lookup/pixel writes, clear, and presentation | 2D screen-space triangles; no 3D transform pipeline. |
 | `textured-geometry` | Clears the frame, submits two `DrawTriangle()` calls per configured item, then calls `dupdate()` | Triangle rasterization, UV interpolation and lookup, clear, and presentation | Samples the generated 40×40 UV map, not the loaded image asset. |
 
-The two geometry workloads use deterministic coordinate formulas based on item index and frame number. With the default `triangle_count` of 64, the triangle workload submits 64 triangles per measured frame; the textured-geometry workload submits 128 triangles per measured frame. These are scene counts, not triangles transformed from a 3D mesh.
+The three geometry workloads use deterministic coordinate formulas based on item index and frame number. With the default `triangle_count` of 64, `solid-fill` and `triangle-throughput` each submit 64 triangles per measured frame; `textured-geometry` submits 128 triangles per measured frame. These are scene counts, not triangles transformed from a 3D mesh.
+
+`DrawTriangle()` and `DrawTriangleSolid()` share the same scan-conversion traversal. The solid specialization computes edge positions and writes the supplied color directly; it does not interpolate UV coordinates or call `get_uv_map()`. This makes `solid-fill` a baseline for the same triangle geometry without texture sampling work.
 
 `display.cpp` initializes `uv_map` as a 40×40 generated color gradient. `triangle.cpp` performs scanline filling and linearly interpolates UV coordinates across screen-space edges and spans before calling `get_uv_map()`. Image/palette helper functions also exist, but the current `DrawTriangle()` sampling path reads `uv_map`; it does not exercise a complete loaded-image texture pipeline.
 
@@ -53,6 +57,28 @@ The two geometry workloads use deterministic coordinate formulas based on item i
 The interactive block-world demo in `V3/src/world.cpp` is separate from the three benchmark scenes. It applies a camera transform/projection, collects visible cube quads, sorts them by average depth, and draws them. Average-depth face sorting is a painter-order approximation; it can fail for intersecting or cyclically overlapping geometry. The camera now converts degree input to radians before evaluating its fixed-point trigonometric approximation, but the projection still clamps near/small Z values rather than clipping geometry against a near plane.
 
 `ModelRenderer/` is a separate exploratory/legacy implementation. It should not be treated as the V3 benchmark backend or as a validated general-purpose renderer without separate source review and tests.
+
+## 3. Host-side rasterizer regression tests
+
+The host test target compiles the production `V3/src/shapes/triangle.cpp` source with minimal Gint header stubs. It checks:
+
+- solid-fill color output and the current 230-pixel coverage for a known right-triangle fixture;
+- all six vertex permutations for the same triangle coverage;
+- flat-top and flat-bottom triangles;
+- horizontal, vertical, and collinear degenerate triangles;
+- fully off-screen and partially clipped triangles, including extreme integer coordinates;
+- that `DrawTriangleSolid()` performs zero UV-map reads;
+- that `DrawTriangle()` continues sampling the UV map without out-of-range coordinates for the fixture.
+
+Run it from `V3/`:
+
+```sh
+cmake -S tests/host -B /tmp/casiomini3d-host-tests
+cmake --build /tmp/casiomini3d-host-tests
+ctest --test-dir /tmp/casiomini3d-host-tests --output-on-failure
+```
+
+These host tests validate CPU rasterization behavior; they do not replace an fxSDK/SH build or a physical calculator test.
 
 ## 3. Timing and result reporting
 
@@ -68,7 +94,7 @@ The interactive block-world demo in `V3/src/world.cpp` is separate from the thre
 
 The runner accounts for `rtc_ticks()` resetting at midnight by calculating elapsed ticks with a 24-hour modulus. The RTC is still 128 Hz, so one tick is 7.8125 ms. A zero-tick interval is treated as a failed measurement.
 
-The timed scene functions call `dupdate()` inside every measured frame. Therefore, all three benchmark results include display presentation. This is an end-to-end frame workload, not an isolated software-render time. In particular, `clear-only` includes both clearing and presentation.
+The timed scene functions call `dupdate()` inside every measured frame. Therefore, all four benchmark results include display presentation. This is an end-to-end frame workload, not an isolated software-render time. In particular, `clear-only` includes both clearing and presentation.
 
 ### 3.2 Higher-resolution timing
 
@@ -108,15 +134,15 @@ The audit patch makes the following targeted corrections:
 
 1. **CSV path and diagnostics:** use the normalized `/benchmarks.csv` path and expose the failed filesystem stage plus its error code on the results screen. The OS-world boundary is retained.
 2. **CSV open modes:** open an existing log with `r+`, create with `w+` only when `r+` fails with `ENOENT`, and explicitly seek to EOF instead of relying on append mode.
-2. **RTC rollover:** calculate the elapsed tick count across the RTC's midnight reset using the 24-hour tick modulus.
-3. **Framebuffer bounds:** reject `DrawPixel()` coordinates outside the active screen dimensions before writing Gint VRAM.
-4. **UV-map bounds:** validate writes to the 40×40 map and define out-of-range sampling as clamp-to-edge.
-5. **P8 image access:** validate image/data pointers, pixel coordinates, and palette indices before dereferencing.
-6. **Fixed-point conversion:** replace signed left shifts used for integer scaling/division with multiplication by the fixed-point scale.
-7. **Triangle interpolation:** promote coordinate deltas and interpolation math before subtraction/multiplication to reduce signed-int overflow risk.
-8. **World ownership:** delete copy construction and copy assignment because `World` owns its `ids` allocation and shallow copying would cause aliasing/double-free risks.
-9. **Camera trigonometry:** convert camera degrees to radians, wrap the angle to the approximation's domain, and shift cosine by π/2 rather than 4/π.
-10. **Documentation integrity:** replace unresolved merge-conflict markers in the README and this design document.
+3. **RTC rollover:** calculate the elapsed tick count across the RTC's midnight reset using the 24-hour tick modulus.
+4. **Framebuffer bounds:** reject `DrawPixel()` coordinates outside the active screen dimensions before writing Gint VRAM.
+5. **UV-map bounds:** validate writes to the 40×40 map and define out-of-range sampling as clamp-to-edge.
+6. **P8 image access:** validate image/data pointers, pixel coordinates, and palette indices before dereferencing.
+7. **Fixed-point conversion:** replace signed left shifts used for integer scaling/division with multiplication by the fixed-point scale.
+8. **Triangle interpolation:** promote coordinate deltas and interpolation math before subtraction/multiplication to reduce signed-int overflow risk.
+9. **World ownership:** delete copy construction and copy assignment because `World` owns its `ids` allocation and shallow copying would cause aliasing/double-free risks.
+10. **Camera trigonometry:** convert camera degrees to radians, wrap the angle to the approximation's domain, and shift cosine by π/2 rather than 4/π.
+11. **Documentation integrity:** replace unresolved merge-conflict markers in the README and this design document.
 
 ### Findings not silently redesigned
 
@@ -144,7 +170,8 @@ The audit patch makes the following targeted corrections:
 
 ### Milestone 3 — Make scene definitions precise
 
-- Add a solid-color triangle path if `triangle-throughput` is intended to be untextured.
+- Keep `solid-fill` as the solid-color baseline and verify that it performs no UV interpolation or texture-map lookups.
+- Preserve `triangle-throughput` as the UV-interpolated triangle workload; it is intentionally distinct from solid fill.
 - Keep the synthetic-gradient test clearly named and add a separate embedded-asset texture test.
 - Record exact primitive counts and texture format/dimensions.
 - Make width/height configuration effective or remove those parameters until it is.
@@ -164,9 +191,10 @@ Publish workload definitions, result schema, device/clock/OS settings, timer sou
 ## 7. Source map
 
 - `V3/src/main.cpp` — scene registry, startup suite, controls, result display, and CSV logging.
-- `V3/src/bench.cpp` — three scene implementations and RTC-based timing.
+- `V3/src/bench.cpp` — four scene implementations and RTC-based timing.
 - `V3/src/bench.hpp` — scene IDs, configuration, and result structures.
-- `V3/src/shapes/triangle.cpp` — scanline triangle rasterization and screen-space UV interpolation.
+- `V3/src/shapes/triangle.cpp` — shared scan conversion with specialized solid-fill and UV-interpolated triangle paths.
+- `V3/tests/host/` — host-side rasterizer regression tests using minimal Gint header stubs.
 - `V3/src/display.cpp` — Gint VRAM writes, generated UV map, and image/palette helpers.
 - `V3/src/world.cpp` — separate block-world camera/projection and average-depth quad sorting.
 - `THIRD_PARTY_NOTICES.md` — glmark2, Gint, and fxSDK reference/attribution notes.
