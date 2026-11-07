@@ -397,14 +397,16 @@ static void set_uniform(
     const GLfloat *values,
     size_t components)
 {
+    if (!fxglHasCurrentContext())
+        return;
+    if (location == -1)
+        return;
     ProgramObject *program = current_program();
     if (!program)
     {
         fxgl::report_error(GL_INVALID_OPERATION);
         return;
     }
-    if (location == -1)
-        return;
     if (!values ||
         !valid_uniform_location(*program, location, type, components))
     {
@@ -948,14 +950,16 @@ void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)
 
 void glUniform1i(GLint location, GLint v0)
 {
+    if (!fxglHasCurrentContext())
+        return;
+    if (location == -1)
+        return;
     ProgramObject *program = current_program();
     if (!program)
     {
         fxgl::report_error(GL_INVALID_OPERATION);
         return;
     }
-    if (location == -1)
-        return;
     if (location < 0 || static_cast<size_t>(location) >= program->uniform_count)
     {
         fxgl::report_error(GL_INVALID_OPERATION);
@@ -984,14 +988,14 @@ void glUniformMatrix4fv(
 {
     if (!fxglHasCurrentContext())
         return;
+    if (location == -1)
+        return;
     ProgramObject *program = current_program();
     if (!program)
     {
         fxgl::report_error(GL_INVALID_OPERATION);
         return;
     }
-    if (location == -1)
-        return;
     if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
