@@ -44,6 +44,8 @@ add_test(NAME texture_sampler COMMAND texture_tests)
 add_executable(gles_state_tests
     test_gles_state.cpp
     ../../src/gles/gles_context.cpp
+    ../../src/gles/math.cpp
+    ../../src/gles/pipeline.cpp
     ../../src/gfx/texture.cpp
 )
 
