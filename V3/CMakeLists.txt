@@ -8,6 +8,7 @@ include(GenerateG1A)
 include(GenerateG3A)
 include(Fxconv)
 find_package(Gint 2.11 REQUIRED)
+find_package(LibProf 2.4 REQUIRED)
 
 add_compile_options(${CPPFLAGS} ${CFLAGS} -Wall -Wextra -Os -std=c++20 -fno-freestanding)
 
@@ -36,7 +37,7 @@ fxconv_declare_assets(${ASSETS} ${ASSETS_fx} ${ASSETS_cg} WITH_METADATA)
 
 add_executable(myaddin ${SOURCES} ${ASSETS} ${ASSETS_${FXSDK_PLATFORM}})
 target_compile_options(myaddin PRIVATE -Wall -Wextra -Os)
-target_link_libraries(myaddin Gint::Gint stdc++)
+target_link_libraries(myaddin PRIVATE Gint::Gint LibProf::LibProf stdc++)
 
 set(NAME_APP "3D")
 
