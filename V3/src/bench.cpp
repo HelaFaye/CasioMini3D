@@ -4,16 +4,10 @@
 #include "fixed.hpp"
 #include "shapes/shapes.hpp"
 
+#include <gint/rtc.h>
 #include <stdint.h>
 
-static inline uint32_t rtc_diff_ticks(uint32_t start, uint32_t end)
-{
-    if (end >= start)
-        return end - start;
-    return (UINT32_MAX - start) + end + 1u;
-}
-
-typedef bool (*BenchSceneFn)(const BenchConfig& cfg, uint32_t frames);
+using BenchSceneFn = bool (*)(const BenchConfig& cfg, uint32_t frames);
 
 struct BenchSceneEntry
 {
@@ -60,7 +54,6 @@ static bool run_textured_geometry_scene(const BenchConfig& cfg, uint32_t frames)
     for (uint32_t frame = 0; frame < frames; ++frame)
     {
         dclear(C_BLACK);
-
         for (uint32_t i = 0; i < cfg.triangle_count; ++i)
         {
             const int x0 = (int)((i * 17u + frame * 2u) % (SCREEN_WIDTH - 48));
@@ -76,7 +69,6 @@ static bool run_textured_geometry_scene(const BenchConfig& cfg, uint32_t frames)
             DrawTriangle(a, b, c);
             DrawTriangle(a, c, d);
         }
-
         dupdate();
     }
     return true;
@@ -121,14 +113,14 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
     if (!execute_scene(id, cfg, cfg.warmup_frames))
         return false;
 
-    const uint32_t start = rtc_ticks();
+    const uint32_t start_ticks = rtc_ticks();
     if (!execute_scene(id, cfg, cfg.measure_frames))
         return false;
-    const uint32_t end = rtc_ticks();
-    const uint32_t elapsed_ticks = rtc_diff_ticks(start, end);
+    const uint32_t elapsed_ticks = rtc_ticks() - start_ticks;
     if (elapsed_ticks == 0)
         return false;
 
+    // Gint's RTC counter advances at 128 ticks per second.
     const double elapsed_ms = (double)elapsed_ticks * 1000.0 / 128.0;
     if (elapsed_ms <= 0.0)
         return false;
@@ -141,4 +133,3 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
     out->avg_ms_per_frame = elapsed_ms / (double)cfg.measure_frames;
     return true;
 }
-
