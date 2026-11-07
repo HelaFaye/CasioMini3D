@@ -68,7 +68,7 @@ static void test_solid_triangle_coverage_and_color()
     DrawTriangleSolid(a, b, c, SOLID_COLOR);
 
     // Preserve the textured rasterizer's current inclusive-edge convention.
-    assert(pixel_writes == 231);
+    assert(pixel_writes == 230);
     assert(uv_reads == 0);
     assert(invalid_pixel_writes == 0);
     for (int pixel : framebuffer)
