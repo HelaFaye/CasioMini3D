@@ -1,295 +1,179 @@
 # fxmark: benchmark design, current implementation, and roadmap
 
-**Audit date:** 2026-11-06
-**Active target:** Casio fx-CG50 / Gint / fxSDK
-**Active implementation:** `V3/`
+**Status reviewed:** 2026-11-07  
+**Active application:** `V3/`  
+**Target:** Casio fx-CG family using Gint and fxSDK  
+**Physical validation target:** fx-CG50, OS 3.20.0202
 
-<<<<<<< HEAD
-This document describes the benchmark direction for the CasioMini3D project, grounded in the code that exists today.
-=======
-## 1. Status summary
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
+## 1. Purpose and scope
 
-The V3 benchmark runner and its three initial workloads are implemented in source. They are still a prototype and are not yet a fully validated graphics benchmark suite.
+`fxmark` is a calculator-native graphics benchmark inspired by the workload organization of glmark2. It measures the Gint/fxSDK rendering path and the software rasterizer implemented by CasioMini3D. It is **not** a desktop OpenGL/OpenGL ES port, an OpenGL conformance suite, or a score that can be compared directly with glmark2 results.
 
-<<<<<<< HEAD
-The active V3 app currently implements a small benchmark set:
-=======
-| Capability | Current status | Evidence / limitation |
-|---|---|---|
-| Benchmark registry | Implemented | `V3/src/bench.cpp` registers three named scenes. |
-| Warm-up and fixed-frame measurement | Implemented | `run_benchmark()` runs `warmup_frames`, then `measure_frames`. |
-| On-device selection/results UI | Implemented | `V3/src/main.cpp`; F6, EXE, DEL rerun tests; MENU exits. |
-| Clear-only workload | Implemented | `dclear()` and `dupdate()` per frame. |
-| Triangle workload | Implemented | Screen-space `DrawTriangle()` calls; not a 3D mesh/transform test. |
-| Textured-geometry workload | Implemented | Two screen-space triangles per configured item; samples the generated UV map. |
-| CSV appender | Implemented in source; runtime validation pending | OS-world callback appends to `\\fls0\\benchmarks.csv`; verify on hardware. |
-| Microsecond timing | Not integrated | V3 currently uses 128 Hz `rtc_ticks()`, not `libprof`. |
-| Isolated render vs presentation timing | Not implemented | `dupdate()` remains inside each timed scene frame. |
-| General renderer facade | Not implemented | Scenes call the existing drawing functions directly. |
-| General 3D depth buffer/clipping | Not implemented in V3 benchmark path | The separate exploratory `ModelRenderer/` path has its own limitations (see below). |
-| Repeatability on physical hardware | Pending | Run each workload at least three times under fixed conditions. |
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
+The V3 application has a benchmark runner, a three-entry scene registry, scene selection, warm-up and measured frame loops, an on-screen result summary, and an experimental CSV append path. These pieces are implemented in source. The benchmark suite remains a prototype: timing resolution, scene semantics, configuration, storage behavior, and repeatability need further validation before publishing stable scores.
 
-This is a source-level audit of the public `main` branch. “Implemented in source” does not mean the behavior has been validated on every physical calculator or OS revision.
+## 2. Current implementation (V3)
 
-<<<<<<< HEAD
-These are the workloads currently represented in code. The project is intentionally conservative about benchmark scope until the rendering path and filesystem behavior are validated on real hardware.
-=======
-## 2. Current source map
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
-
-- `V3/src/main.cpp` — benchmark registry selection, default configuration, result UI, startup suite, and CSV appender.
-- `V3/src/bench.hpp` — `BenchId`, `BenchConfig`, and `BenchResult` data structures.
-- `V3/src/bench.cpp` — scene registry, scene loops, warm-up/measurement runner, RTC timing, and metric calculation.
-- `V3/src/shapes/shapes.hpp` — triangle/rectangle/parallelogram drawing interfaces and `VertexLocal`.
-- `V3/src/shapes/triangle.cpp` — scanline triangle rasterizer and UV interpolation.
-- `V3/src/display.hpp` / `display.cpp` — Gint display integration, direct pixel writes, and UV lookup map.
-- `V3/src/world.cpp` — separate block-world/cube demo with camera projection and face sorting.
-
-## 3. What the three benchmark scenes actually measure
-
-<<<<<<< HEAD
-The goal is to measure the target-native rendering path in a way that is stable enough to compare runs on the same device, clock configuration, and workload setup. Results are not directly comparable to glmark2 scores from desktop/mobile OpenGL or OpenGL ES implementations.
-
-## Benchmark model
-
-The benchmark structure follows the broad scene/runner separation used by glmark2:
-
-- a benchmark runner selects a workload
-- each workload is represented as a render scene
-- the timed run is separated from UI and interaction code
-- results are reported as timing and throughput metrics
-
-This project uses those architectural ideas as inspiration. It does not claim compatibility with glmark2, and its workload metrics are not equivalent to glmark2's.
-
-## Benchmark architecture
+The active implementation is in `V3/src/`. Its execution path is:
 
 ```text
-benchmark runner
-    -> benchmark scene (fixed workload)
-        -> render primitive(s) / rasterizer path
-            -> Gint display framebuffer
-    -> timing and result reporting
-=======
-The default configuration in `main.cpp` is:
+V3/src/main.cpp
+  -> benchmark registry / suite control
+  -> V3/src/bench.cpp
+       -> clear-only
+       -> triangle-throughput
+       -> textured-geometry
+  -> V3/src/shapes/triangle.cpp
+  -> V3/src/display.cpp / Gint VRAM
+  -> dupdate() presentation
+  -> result screen and experimental CSV append
+```
+
+### 2.1 Runner and controls
+
+`main.cpp` registers three `BenchId` values: `ClearOnly`, `TriangleThroughput`, and `TexturedGeometry`. On startup it runs the suite once. The result screen allows individual tests to be rerun with `F6` (clear-only), `EXE` (triangle-throughput), and `DEL` (textured-geometry); `MENU` exits.
+
+The default configuration is 5 warm-up frames, 60 measured frames, and `triangle_count = 64`. `BenchConfig` also contains width and height fields. At present, `bench.cpp` validates that these fields are positive, but the scene and rasterizer use compile-time `SCREEN_WIDTH` and `SCREEN_HEIGHT` constants. Those fields do not currently provide configurable render resolution.
+
+### 2.2 Implemented scenes and what they measure
+
+| Scene | Current operation | What the result includes | Important limitation |
+|---|---|---|---|
+| `clear-only` | `dclear(C_BLACK)` followed by `dupdate()` for each frame | Framebuffer clear plus display presentation | Not a clear-only CPU measurement. |
+| `triangle-throughput` | Clears the frame, submits `triangle_count` screen-space triangles through `DrawTriangle()`, then calls `dupdate()` | Scanline rasterization, UV lookup/pixel writes, clear, and presentation | 2D screen-space triangles; no 3D transform pipeline. |
+| `textured-geometry` | Clears the frame, submits two `DrawTriangle()` calls per configured item, then calls `dupdate()` | Triangle rasterization, UV interpolation and lookup, clear, and presentation | Samples the generated 40×40 UV map, not the loaded image asset. |
+
+The two geometry workloads use deterministic coordinate formulas based on item index and frame number. With the default `triangle_count` of 64, the triangle workload submits 64 triangles per measured frame; the textured-geometry workload submits 128 triangles per measured frame. These are scene counts, not triangles transformed from a 3D mesh.
+
+`display.cpp` initializes `uv_map` as a 40×40 generated color gradient. `triangle.cpp` performs scanline filling and linearly interpolates UV coordinates across screen-space edges and spans before calling `get_uv_map()`. Image/palette helper functions also exist, but the current `DrawTriangle()` sampling path reads `uv_map`; it does not exercise a complete loaded-image texture pipeline.
+
+### 2.3 Rasterizer and 3D demo boundaries
+
+`V3/src/shapes/triangle.cpp` is a scanline triangle rasterizer. It clips scanline and horizontal spans against screen bounds, but it does not implement 3D view-volume clipping, a depth buffer, or perspective-correct attribute interpolation. UV interpolation is linear in screen space.
+
+The interactive block-world demo in `V3/src/world.cpp` is separate from the three benchmark scenes. It applies a camera transform/projection, collects visible cube quads, sorts them by average depth, and draws them. Average-depth face sorting is a painter-order approximation; it can fail for intersecting or cyclically overlapping geometry. The camera now converts degree input to radians before evaluating its fixed-point trigonometric approximation, but the projection still clamps near/small Z values rather than clipping geometry against a near plane.
+
+`ModelRenderer/` is a separate exploratory/legacy implementation. It should not be treated as the V3 benchmark backend or as a validated general-purpose renderer without separate source review and tests.
+
+## 3. Timing and result reporting
+
+### 3.1 Current timer
+
+`run_benchmark()` in `V3/src/bench.cpp`:
+
+1. Executes `warmup_frames` through the selected scene.
+2. Reads `rtc_ticks()`.
+3. Executes `measure_frames` through the same scene.
+4. Reads `rtc_ticks()` again and calculates elapsed time at 128 ticks per second.
+5. Derives elapsed milliseconds, FPS, and average milliseconds per frame.
+
+The runner accounts for `rtc_ticks()` resetting at midnight by calculating elapsed ticks with a 24-hour modulus. The RTC is still 128 Hz, so one tick is 7.8125 ms. A zero-tick interval is treated as a failed measurement.
+
+The timed scene functions call `dupdate()` inside every measured frame. Therefore, all three benchmark results include display presentation. This is an end-to-end frame workload, not an isolated software-render time. In particular, `clear-only` includes both clearing and presentation.
+
+### 3.2 Higher-resolution timing
+
+A separate Gint bring-up application has been physically tested with `libprof` 2.4.0 on the maintainer's fx-CG50. That validates the library integration in that separate application; it does **not** mean `libprof` is already linked or used by CasioMini3D.
+
+A future V3 timing change should initialize a microsecond-capable timer, handle timer-acquisition failure explicitly, bracket only the region whose timing is being reported, and record the timer source/resolution. Keep RTC as a coarse cross-check where useful. Prefer separate render and presentation measurements rather than silently changing the meaning of the existing workload names.
+
+### 3.3 Current result structure
+
+`BenchResult` currently contains the scene name, warm-up frame count, measured frame count, elapsed milliseconds (integer), FPS, and average milliseconds per frame. The on-screen result page displays FPS and average milliseconds per frame.
+
+## 4. CSV result persistence
+
+The logger in `V3/src/main.cpp` now uses the normalized Gint/Fugue storage-root path:
 
 ```cpp
-cfg.warmup_frames = 5;
-cfg.measure_frames = 60;
-cfg.triangle_count = 64;
-cfg.width = SCREEN_WIDTH;
-cfg.height = SCREEN_HEIGHT;
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
+static const char path[] = "/benchmarks.csv";
 ```
 
-### 3.1 `clear-only`
+The raw volume-prefixed path spelling (for example, `\\\\fls0\\file`) is the BFile path form. The active logger uses Gint's POSIX/C99 filesystem interface instead, and the file operations remain inside `gint_world_switch(GINT_CALL(...))` so they execute in the OS world on fx-CG targets.
 
-<<<<<<< HEAD
-Owns test selection, warm-up frames, measurement frames, and result presentation. Keep benchmark logic separate from interactive camera controls and demo setup.
-=======
-Each frame calls `dclear(C_BLACK)` followed by `dupdate()`. The scene ignores the `BenchConfig` argument. This is a framebuffer-clear plus presentation baseline, not a measurement of clear cost in isolation.
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
+The CSV header is:
 
-### 3.2 `triangle-throughput`
-
-<<<<<<< HEAD
-Each scene should use deterministic geometry and fixed workload parameters, and state what it measures and which rendering features it requires.
-=======
-Each frame clears the display, loops `cfg.triangle_count` times, generates screen-space coordinates from the loop index and frame number, calls `DrawTriangle()`, and then calls `dupdate()`.
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
-
-The generated triangle positions are deterministic for a fixed configuration and frame sequence. However, this is a 2D screen-space primitive workload. It does not exercise 3D model/view/projection transforms, mesh submission, clipping, or depth testing.
-
-<<<<<<< HEAD
-The current implementation routes work through the existing software rasterizer and Gint display path. It is not a general-purpose 3D engine abstraction.
-=======
-The current `DrawTriangle()` implementation interpolates UV coordinates and samples `get_uv_map()`. Consequently, this is not a pure untextured triangle-fill test: each covered pixel also performs a lookup in the UV map.
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
-
-### 3.3 `textured-geometry`
-
-<<<<<<< HEAD
-The runner is intended to report benchmark name, warm-up and measurement frame counts, elapsed time, FPS, and average milliseconds per frame. Treat results as experimental until repeated target-device runs establish their accuracy and repeatability.
-=======
-Each configured item constructs a rectangle as two triangles and submits both to `DrawTriangle()`. With the default `triangle_count = 64`, the scene submits 128 triangles per measured frame.
-
-`main()` calls `init_uv_map()`. The current implementation initializes a 40x40 red/green gradient in a software array. `DrawTriangle()` samples this generated map through `get_uv_map()`. Although the build includes a fxconv texture asset and `display.cpp` has image-pixel helper functions, this benchmark path does not currently sample the compiled image asset.
-
-The scene is therefore a deterministic two-triangle textured-quad/UV-lookup workload using a synthetic gradient, not yet a representative asset-texturing or perspective-correct 3D texture test.
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
-
-## 4. Measurement semantics and current defects
-
-`run_benchmark()` currently:
-
-<<<<<<< HEAD
-- keep scene data deterministic
-- keep screen size, geometry count, and texture settings fixed per benchmark
-- separate warm-up from measured iterations
-- avoid keyboard polling and UI updates inside the timed section where possible
-- record calculator model, clock mode, and software configuration alongside results
-- publish only workloads that are stable on real hardware
-=======
-1. Rejects a null output pointer, zero measured frames, non-positive configured width/height, and zero triangle count for the two geometry tests.
-2. Executes the warm-up frames.
-3. Reads `rtc_ticks()` before the measured scene loop.
-4. Executes exactly `measure_frames` scene frames.
-5. Subtracts the start tick value from the end tick value.
-6. Converts elapsed ticks using 128 ticks/second, rounds `elapsed_ms` to an integer, and derives FPS and average milliseconds per frame.
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
-
-The active timer is **Gint RTC**, not `libprof`. The RTC tick resolution is 1/128 second (7.8125 ms per tick), which is coarse for short graphics measurements. The simple unsigned subtraction also does not explicitly handle the RTC counter's midnight reset. A zero-tick interval is treated as failure.
-
-<<<<<<< HEAD
-The current V3 app contains the following benchmark identifiers and scenes:
-
-- `clear-only` — frame-clear baseline
-- `triangle-throughput` — deterministic triangle drawing workload
-- `textured-geometry` — geometry workload intended to exercise the texture path
-
-The code being present does not establish that the workload or result is validated. In particular, verify the textured path and timer behavior on target hardware before treating measurements as reliable.
-
-The following are not established as implemented or validated benchmark workloads:
-
-- generic shader-style workloads
-- advanced post-processing or blending tests
-- fill-rate or overdraw-heavy scenes
-- an open-ended glmark2-style suite
-=======
-The UI and keyboard selection logic are outside the measured scene loop. However, each scene calls `dupdate()` during every measured frame. The elapsed time therefore includes rendering work and display presentation. It must not be described as renderer-only or rasterizer-only time.
-
-`BenchConfig.width` and `height` are checked for positive values, but the active scenes use the compile-time `SCREEN_WIDTH` and `SCREEN_HEIGHT` constants. The configured dimensions therefore do not currently control the rasterizer's bounds or workload area.
-
-## 5. CSV result persistence
-
-`main.cpp` implements an experimental appender:
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
-
-- File path in the C source: `\\\\fls0\\benchmarks.csv` (runtime path: `\\fls0\benchmarks.csv`).
-- The write callback is invoked through `gint_world_switch(GINT_CALL(...))`, keeping Fugue filesystem calls in the OS world rather than calling them directly from the Gint world.
-- The file is opened with `fopen(path, "a+")`.
-- The header is written only when the file is empty.
-- One row is appended for each completed benchmark result.
-- The callback checks seek/size operations, `fprintf`, `fflush`, `ferror`, and `fclose`.
-- The results screen reports `CSV OK` or `CSV FAIL` for each scene.
-
-Current CSV columns are:
-
-<<<<<<< HEAD
-- run each benchmark several times on the target calculator
-- record clock mode and exact frame counts
-- confirm repeatability before broadening the suite
-- verify CSV logging independently from benchmark rendering
-=======
-```text
+```csv
 name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame
 ```
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
 
-This is an implementation in source, but persistence remains experimental until tested on the actual calculator. In particular, verify that the file is created in the intended filesystem, rows and header are correct, the file can be read/exported, and data remains available after a calculator restart. `CSV OK` is a useful runtime indicator, but it is not a substitute for inspecting the resulting file.
+The logger opens the file in append/update mode, seeks to the end, writes the header if the file is empty, appends one row, flushes, checks stream errors, closes the file, and returns a success or failure result. The results UI now distinguishes the failing stage: `CSV OPEN`, `CSV SEEK`, `CSV SIZE`, `CSV HEADER`, `CSV WRITE`, `CSV FLUSH`, `CSV STREAM`, `CSV CLOSE`, or `CSV SWITCH`. It also displays the captured `errno` or world-switch return code.
 
-<<<<<<< HEAD
-- keep benchmark scenes fixed and deterministic
-- avoid mixing demo controls into timed benchmark sections
-- keep metrics and failure states explicit
+This remains an implementation in source, not proof of persistence. Do not mark CSV logging as hardware-validated until the target has been tested for file creation, repeated append, reopen/readback, export, restart persistence, and failure behavior. If the diagnostic still reports a failure, record the stage and code; that narrows the next investigation.
 
-### Milestone 3: add only supported workloads
+The current schema does not record a unique run ID, timestamp, calculator model, OS version, clock mode, fxSDK/Gint versions, timer source, resolution, or workload-specific primitive count. Add those only with a versioned schema or documented migration strategy; do not silently change the existing CSV columns.
 
-Add workloads only when the rendering path can define them clearly and repeatably. Describe the exact feature measured and how the workload differs from any desktop OpenGL analogue.
+## 5. Corrective changes in the 2026-11-07 source audit
 
-## Attribution and licensing
+The audit patch makes the following targeted corrections:
 
-The architecture and scene/benchmark concepts were informed by the public glmark2 project, and its source was consulted as a design reference. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the project URL, license identification, consulted files, and scope of this attribution. No glmark2 source code is intentionally copied into the current benchmark implementation; that is not a complete provenance audit of all historical repository content.
-=======
-The current path writes a single CSV file at the Fugue `fls0` root. It does not create a dedicated directory, unique session file, or per-run identifier. It does not currently record a timestamp, calculator OS, clock setting, build revision, renderer revision, actual triangle count, or separate render/presentation times.
+1. **CSV path and diagnostics:** use the normalized `/benchmarks.csv` path and expose the failed filesystem stage plus its error code on the results screen. The OS-world boundary is retained.
+2. **RTC rollover:** calculate the elapsed tick count across the RTC's midnight reset using the 24-hour tick modulus.
+3. **Framebuffer bounds:** reject `DrawPixel()` coordinates outside the active screen dimensions before writing Gint VRAM.
+4. **UV-map bounds:** validate writes to the 40×40 map and define out-of-range sampling as clamp-to-edge.
+5. **P8 image access:** validate image/data pointers, pixel coordinates, and palette indices before dereferencing.
+6. **Fixed-point conversion:** replace signed left shifts used for integer scaling/division with multiplication by the fixed-point scale.
+7. **Triangle interpolation:** promote coordinate deltas and interpolation math before subtraction/multiplication to reduce signed-int overflow risk.
+8. **World ownership:** delete copy construction and copy assignment because `World` owns its `ids` allocation and shallow copying would cause aliasing/double-free risks.
+9. **Camera trigonometry:** convert camera degrees to radians, wrap the angle to the approximation's domain, and shift cosine by π/2 rather than 4/π.
+10. **Documentation integrity:** replace unresolved merge-conflict markers in the README and this design document.
 
-## 6. Renderer status and relationship to ModelRenderer
+### Findings not silently redesigned
 
-V3 is the active benchmark/demo app. Its three benchmark workloads are screen-space raster tests and do not establish a general-purpose 3D rendering API.
+- `World::set_block()` stores an ID of 0 or 1 and writes the supplied pointer to `blocks[0]` or `blocks[1]`. This representation only supports an empty entry plus one non-null block type. Passing a second distinct non-null block pointer overwrites `blocks[1]`, changing the block observed by every cell whose ID is 1. Supporting multiple block types requires an explicit registry/count or a different per-cell representation.
+- `World` dimensions are multiplied as signed `int` values before allocation; positivity and multiplication overflow are not validated. The render path also assumes `Camera::current` is non-null.
+- The block-world projection clamps near/small Z values instead of clipping triangles against a near plane. Average-depth whole-quad sorting cannot correctly resolve every intersecting geometry arrangement; there is no per-pixel Z-buffer.
+- `BenchConfig.width` and `.height` are validated but ignored by the active scene/rasterizer bounds.
+- RTC timing remains coarse, and each measured frame includes `dclear()` and `dupdate()`.
+- The separate `ModelRenderer/` mesh-loader work has not been revalidated in this patch. The previous source review identified unsafe count/read/index assumptions and face lengths copied into fixed four-element arrays; it needs its own input validation and malformed-file tests before use with untrusted meshes.
 
-The separate `ModelRenderer/` directory is exploratory mesh-oriented work. Its current approach includes vertex transforms, camera projection, polygon faces, backface/visibility checks, and sorting whole faces by average depth before drawing. Whole-face painter sorting is an approximation; it cannot correctly resolve all intersecting geometry. The projection currently clamps very small/near camera-space Z values rather than clipping triangles against a near plane. This path does not yet provide a general per-pixel Z-buffer pipeline.
+## 6. Recommended implementation milestones
 
-Keep the benchmark runner and its test registry separate from the interactive cube/world demo. Do not describe the current V3 triangle tests as 3D mesh benchmarks.
+### Milestone 1 — Validate and characterize the existing suite
 
-## 7. Recommended next implementation steps
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
+- Build with the fxSDK wrapper and exact Gint/toolchain versions.
+- Run all three scenes at least three times under identical clock/configuration.
+- Retain raw results and compare median, minimum, maximum, and spread.
+- Verify CSV header-once behavior, appended rows, readback/export, and restart persistence on physical hardware.
 
-### Milestone 1 — Make the existing measurements trustworthy
+### Milestone 2 — Improve timing without changing workload semantics
 
-<<<<<<< HEAD
-A useful release can run deterministic tests on-device, report repeatable per-test results, document workload settings, and distinguish implemented behavior from target-validated behavior.
-=======
-1. Add a timer abstraction. Prefer a microsecond-capable timer such as `libprof` when the dependency is available and initializes successfully; retain RTC only as a clearly labelled coarse fallback/cross-check. Do not assume every Gint installation has libprof installed.
-2. Check timer resource ownership and failure behavior. A benchmark must fail or clearly downgrade its timing mode rather than silently report misleading precision.
-3. Handle RTC rollover if RTC remains in use.
-4. Make workload configuration effective: either apply width/height to viewport and raster clipping or remove those fields until implemented.
-5. Report actual submitted triangle counts and workload parameters.
-6. Run at least three repeats per scene with unchanged clock/configuration; retain raw results and summarize median/min/max and spread.
+- Integrate a microsecond-capable timer (such as the separately tested `libprof` API) with explicit initialization/error handling.
+- Record timer source and resolution in result metadata.
+- Separate render-only and end-to-end presentation modes rather than changing the meaning of current scores.
 
-### Milestone 2 — Separate renderer timing from presentation
+### Milestone 3 — Make scene definitions precise
 
-Refactor the scene contract so rendering and presentation can be controlled separately. Report at least two distinct modes:
+- Add a solid-color triangle path if `triangle-throughput` is intended to be untextured.
+- Keep the synthetic-gradient test clearly named and add a separate embedded-asset texture test.
+- Record exact primitive counts and texture format/dimensions.
+- Make width/height configuration effective or remove those parameters until it is.
 
-- **render-only:** CPU rasterization/drawing work without a display update inside every timed iteration (present a final frame after the timer stops);
-- **end-to-end:** the current style of per-frame render plus `dupdate()`.
+### Milestone 4 — Define a reusable renderer interface
 
-A dedicated presentation test can measure repeated display updates of a stable frame. Keep clear-only labelled as clear-plus-presentation unless the test is intentionally split.
+For a general-purpose renderer, define caller-owned color/depth surfaces, an explicit render context, model/view/projection transforms, clipping, a documented fill rule, and bounded texture sampling. Validate mesh counts, face sizes, indices, and all file reads.
 
-### Milestone 3 — Define representative workload semantics
+### Milestone 5 — Add general 3D visibility and workloads
 
-1. Make `triangle-throughput` an explicit geometry/fill workload. If it should measure untextured fill, add a solid-color path rather than relying on the current UV-map sampling path.
-2. Keep the current synthetic-gradient workload but name/document it accurately; add a separate test that samples a known embedded texture asset.
-3. Record exact primitive counts and texture format/dimensions.
-4. Add transform/object-scaling tests only when they exercise a real 3D transform/mesh path.
-5. Add a per-pixel depth test and clipping workload only after the renderer implements those features.
+Implement geometric near-plane/viewport clipping and per-pixel depth testing before advertising depth-tested 3D workloads. Add transform, mesh, depth/overdraw, and texture-filtering benchmarks only once the underlying feature exists. Label CPU equivalents of shader-oriented workloads clearly as software shading.
 
-### Milestone 4 — Add renderer correctness before broad benchmark expansion
+### Milestone 6 — Publish defensible results
 
-For a general 3D software renderer, define and test:
+Publish workload definitions, result schema, device/clock/OS settings, timer source/resolution, repeated measurements, raw CSV, and known limitations. Keep fxmark scores distinct from desktop/mobile glmark2 results. Preserve third-party notices and audit source/asset provenance before redistribution.
 
-- explicit render context and caller-owned color/depth surfaces;
-- model/view/projection transforms;
-- geometric near-plane and viewport clipping;
-- triangle winding and edge/fill rules;
-- per-pixel depth testing/writes;
-- perspective-correct interpolation for UVs and other attributes;
-- bounded texture sampling and defined wrap/clamp behavior;
-- safe mesh parsing with validated counts, face lengths, indices, and read results.
+## 7. Source map
 
-A painter-sorted quad demo remains useful, but it is not a substitute for a general visibility-correct triangle pipeline.
+- `V3/src/main.cpp` — scene registry, startup suite, controls, result display, and CSV logging.
+- `V3/src/bench.cpp` — three scene implementations and RTC-based timing.
+- `V3/src/bench.hpp` — scene IDs, configuration, and result structures.
+- `V3/src/shapes/triangle.cpp` — scanline triangle rasterization and screen-space UV interpolation.
+- `V3/src/display.cpp` — Gint VRAM writes, generated UV map, and image/palette helpers.
+- `V3/src/world.cpp` — separate block-world camera/projection and average-depth quad sorting.
+- `THIRD_PARTY_NOTICES.md` — glmark2, Gint, and fxSDK reference/attribution notes.
 
-### Milestone 5 — Make CSV data suitable for comparison
+## 8. Scope and licensing
 
-Version the CSV schema before treating it as stable. Add fields for run/session ID, timestamp or monotonic run index, benchmark and renderer versions, calculator model, OS version, clock setting, timer backend, screen dimensions, workload parameters, measured frames, actual primitives/pixels, render time, presentation time, and status. Preserve raw timing values rather than only rounded milliseconds.
+The current third-party notice states that glmark2's benchmark organization was consulted as design inspiration and that its code was not intentionally copied into the current V3 benchmark implementation. That is not a comprehensive provenance audit of all historical files. If source code, assets, or other materials are copied or adapted, review their licenses and preserve applicable notices and terms.
 
-Keep file operations outside the timed render loop and continue using the correct Gint/OS-world boundary for Fugue operations. Validate append/readback/export/restart behavior on physical hardware.
+## Definition of a useful first validated release
 
-## 8. Hardware validation protocol
-
-For every published result, record:
-
-- calculator model and OS version;
-- Gint/fxSDK/compiler versions and build revision;
-- clock configuration;
-- benchmark ID and exact workload parameters;
-- warm-up and measured frame counts;
-- timer backend and resolution;
-- whether display presentation is included;
-- at least three repeated runs under identical conditions;
-- raw CSV file and any failed/unsupported tests.
-
-The current maintainer's physical test target is an fx-CG50 with OS 3.20.0202. This is the intended hardware baseline for upcoming validation; it does not assert that the CasioMini3D benchmark suite or CSV logger has already passed on that device/OS combination.
-
-Do not compare fxmark numbers directly with desktop/mobile glmark2 scores. The calculator workloads use a different software rendering pipeline, display path, API, and timing environment.
-
-## 9. Third-party and upstream contribution policy
-
-The high-level scene/benchmark organization is inspired by glmark2, as described in `THIRD_PARTY_NOTICES.md`. Keep the implementation original and retain attribution. Before distribution, perform the documented source/asset provenance audit, including legacy directories.
-
-When a component becomes independently useful, evaluate whether it belongs in CasioMini3D, Gint, fxSDK, or a broader SDK such as ParticuleSDK. Keep target-specific benchmark and demo code in this repository; propose general Gint/fxSDK improvements upstream only when they solve a broader platform/toolchain problem and the relevant maintainers' contribution requirements are satisfied.
-
-## 10. Completion criteria
-
-A benchmark is ready for published results only when its workload semantics are explicit, its configuration is actually applied, its timer behavior and precision are documented, its scene timing scope is clear, its filesystem output is validated if logging is enabled, and repeated physical-device runs are stable. A 3D benchmark label requires the tested feature to exist in the renderer; do not infer 3D pipeline coverage from screen-space triangle drawing.
->>>>>>> 8b3728a (docs: reconcile fxmark status and ignore build artifacts)
+A first validated fxmark release should run all three deterministic workloads on the physical target, report exact workload and measurement semantics, produce repeatable results across multiple runs, demonstrate CSV persistence on the target OS, and clearly distinguish screen-space raster workloads from general 3D rendering. It must not claim OpenGL compatibility or direct score comparability with glmark2.
