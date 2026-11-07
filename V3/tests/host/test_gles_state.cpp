@@ -175,9 +175,11 @@ void test_buffer_objects_and_vertex_attributes()
     GLuint names[2] = {};
     glGenBuffers(2, names);
     assert(names[0] != 0 && names[1] != 0 && names[0] != names[1]);
+    assert(glIsBuffer(names[0]) == GL_FALSE);
 
     const GLfloat vertices[6] = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
     glBindBuffer(GL_ARRAY_BUFFER, names[0]);
+    assert(glIsBuffer(names[0]) == GL_TRUE);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
 
     GLint value = 0;
@@ -248,6 +250,8 @@ void test_buffer_objects_and_vertex_attributes()
     assert(glGetError() == GL_OUT_OF_MEMORY);
 
     glDeleteBuffers(2, names);
+    assert(glIsBuffer(names[0]) == GL_FALSE);
+    assert(glIsBuffer(names[1]) == GL_FALSE);
     glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &value);
     assert(value == 8);
     assert(glGetError() == GL_NO_ERROR);
@@ -264,10 +268,12 @@ void test_texture_objects_and_uploads()
     GLuint textures[2] = {};
     glGenTextures(2, textures);
     assert(textures[0] != 0 && textures[1] != 0 && textures[0] != textures[1]);
+    assert(glIsTexture(textures[0]) == GL_FALSE);
 
     GLint value = 0;
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, textures[1]);
+    assert(glIsTexture(textures[1]) == GL_TRUE);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &value);
     assert(value == GL_TEXTURE1);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &value);
@@ -336,6 +342,8 @@ void test_texture_objects_and_uploads()
     assert(glGetError() == GL_INVALID_VALUE);
 
     glDeleteTextures(2, textures);
+    assert(glIsTexture(textures[0]) == GL_FALSE);
+    assert(glIsTexture(textures[1]) == GL_FALSE);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &value);
     assert(value == 0);
     assert(!fxgl::get_texture_binding(0, view, sampler));
