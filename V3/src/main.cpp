@@ -20,6 +20,7 @@ enum class CsvErrorStage : uint8_t
     None = 0,
     WorldSwitch,
     Open,
+    Create,
     Seek,
     Size,
     HeaderWrite,
@@ -53,12 +54,27 @@ static int append_csv_in_os_world(void* opaque)
     static const char header[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
 
     errno = 0;
-    FILE* file = fopen(path, "a+");
+    FILE* file = fopen(path, "r+");
     if (!file)
     {
-        args->error = CsvErrorStage::Open;
-        args->error_number = errno;
-        return static_cast<int>(args->error);
+        const int open_errno = errno;
+        if (open_errno != ENOENT)
+        {
+            args->error = CsvErrorStage::Open;
+            args->error_number = open_errno;
+            return static_cast<int>(args->error);
+        }
+
+        // Avoid relying on append-mode behavior: create only if absent,
+        // then explicitly seek to the end before writing.
+        errno = 0;
+        file = fopen(path, "w+");
+        if (!file)
+        {
+            args->error = CsvErrorStage::Create;
+            args->error_number = errno;
+            return static_cast<int>(args->error);
+        }
     }
 
     CsvErrorStage failure = CsvErrorStage::None;
@@ -144,6 +160,7 @@ static const char* csv_error_name(CsvErrorStage error)
         case CsvErrorStage::None:        return "CSV OK";
         case CsvErrorStage::WorldSwitch: return "CSV SWITCH";
         case CsvErrorStage::Open:        return "CSV OPEN";
+        case CsvErrorStage::Create:      return "CSV CREATE";
         case CsvErrorStage::Seek:        return "CSV SEEK";
         case CsvErrorStage::Size:        return "CSV SIZE";
         case CsvErrorStage::HeaderWrite: return "CSV HEADER";
