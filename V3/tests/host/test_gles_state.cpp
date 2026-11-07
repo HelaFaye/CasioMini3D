@@ -542,6 +542,34 @@ void test_shader_and_program_object_lifecycle()
     assert(value == 2);
     glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &value);
     assert(value == 3);
+    glValidateProgram(program);
+    glGetProgramiv(program, GL_VALIDATE_STATUS, &value);
+    assert(value == GL_TRUE);
+
+    GLuint attached[2] = {};
+    GLsizei attached_count = 0;
+    glGetAttachedShaders(program, 2, &attached_count, attached);
+    assert(attached_count == 2);
+    assert(attached[0] == vertex && attached[1] == fragment);
+
+    GLchar active_name[32] = {};
+    GLsizei active_length = 0;
+    GLint active_size = 0;
+    GLenum active_type = 0;
+    glGetActiveAttrib(program, 0, sizeof(active_name),
+        &active_length, &active_size, &active_type, active_name);
+    assert(std::strcmp(active_name, "a_position") == 0);
+    assert(active_size == 1 && active_type == GL_FLOAT_VEC4);
+    glGetActiveUniform(program, 0, sizeof(active_name),
+        &active_length, &active_size, &active_type, active_name);
+    assert(std::strcmp(active_name, "u_mvp") == 0);
+    assert(active_size == 1 && active_type == GL_FLOAT_MAT4);
+
+    GLchar retrieved_source[256] = {};
+    glGetShaderSource(vertex, sizeof(retrieved_source),
+        &active_length, retrieved_source);
+    assert(active_length == static_cast<GLsizei>(sizeof(vertex_source) - 1));
+    assert(std::strcmp(retrieved_source, vertex_source) == 0);
 
     assert(glGetAttribLocation(program, "a_position") == 0);
     assert(glGetAttribLocation(program, "a_uv") == 3);
@@ -566,8 +594,15 @@ void test_shader_and_program_object_lifecycle()
         0, 0, 0, 1
     };
     glUniformMatrix4fv(mvp_location, 1, GL_FALSE, identity);
-    glUniform1f(gain_location, 0.75f);
+    const GLfloat gain_value[1] = {0.75f};
+    glUniform1fv(gain_location, 1, gain_value);
     glUniform1i(texture_location, 1);
+    GLfloat retrieved_gain = 0.0f;
+    GLint retrieved_texture_unit = -1;
+    glGetUniformfv(program, gain_location, &retrieved_gain);
+    glGetUniformiv(program, texture_location, &retrieved_texture_unit);
+    assert(retrieved_gain == 0.75f);
+    assert(retrieved_texture_unit == 1);
 
     fxgl::LinkedProgramView view = {};
     assert(fxgl::get_current_program_view(view));
