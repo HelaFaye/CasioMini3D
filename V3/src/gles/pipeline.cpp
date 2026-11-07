@@ -107,7 +107,8 @@ static bool valid_state(const PipelineState& state)
 
 static bool valid_surface(const RenderSurface& surface)
 {
-    return surface.color && surface.width > 0 && surface.height > 0 &&
+    return (surface.color || surface.depth || surface.stencil) &&
+           surface.width > 0 && surface.height > 0 &&
            surface.stride >= surface.width;
 }
 
@@ -382,23 +383,26 @@ static bool process_fragment(
     if (state.depth_enabled && surface.depth && state.depth_write)
         surface.depth[offset] = incoming_depth;
 
-    if (state.blend_enabled)
+    if (surface.color)
     {
-        blend_pixel(surface.color[offset], source, state);
-    }
-    else if (state.color_write[0] && state.color_write[1] &&
-             state.color_write[2])
-    {
-        surface.color[offset] = pack_rgb565(source);
-    }
-    else
-    {
-        float destination[4] = {};
-        unpack_rgb565(surface.color[offset], destination);
-        for (unsigned channel = 0; channel < 3; ++channel)
-            if (state.color_write[channel])
-                destination[channel] = source[channel];
-        surface.color[offset] = pack_rgb565(destination);
+        if (state.blend_enabled)
+        {
+            blend_pixel(surface.color[offset], source, state);
+        }
+        else if (state.color_write[0] && state.color_write[1] &&
+                 state.color_write[2])
+        {
+            surface.color[offset] = pack_rgb565(source);
+        }
+        else
+        {
+            float destination[4] = {};
+            unpack_rgb565(surface.color[offset], destination);
+            for (unsigned channel = 0; channel < 3; ++channel)
+                if (state.color_write[channel])
+                    destination[channel] = source[channel];
+            surface.color[offset] = pack_rgb565(destination);
+        }
     }
 
     ++stats.written_fragments;
