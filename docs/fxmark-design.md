@@ -1,119 +1,124 @@
-# fxmark: benchmark design and implementation plan
+# fxmark: benchmark design and implementation status
 
-## Status
+## Current state
 
-This document describes a proposed direction for a calculator graphics benchmark inspired by glmark2. It is a design/roadmap, not a claim that the benchmark runner, compatibility API, or full scene suite already exists.
+This document describes the benchmark direction for the CasioMini3D project, but it is intentionally grounded in the code that exists today.
+
+The project is not a desktop OpenGL or glmark2 port. It is a target-native benchmark prototype built for Casio fx-CG hardware using the Gint / fxSDK toolchain.
+
+The active V3 app currently implements a small, deterministic benchmark set:
+
+- `clear-only`
+- `triangle-throughput`
+- `textured-geometry`
+
+These are the implemented workloads at the moment. This project is intentionally conservative about benchmark scope until the rendering path and filesystem behavior are validated on real hardware.
 
 ## Goal
 
-Build a repeatable graphics benchmark for Casio fx-CG50-class calculators using the graphics facilities available through Gint and, where useful, the software renderer in CasioMini3D. Reuse glmark2's workload ideas and recognizable test categories where they make sense, but implement the workloads for this target rather than trying to run OpenGL calls unchanged.
+Build a repeatable graphics benchmark for Casio fx-CG-class calculators using the graphics facilities available through Gint and, where useful, the software renderer in CasioMini3D.
 
-fxmark results measure this calculator's rendering path. They are not directly comparable to glmark2 scores from an OpenGL/OpenGL ES implementation.
+The goal is to measure the target-native rendering path in a way that is stable enough to compare runs within the same device, clock configuration, and workload setup.
 
-## Current starting point
+The benchmark output is not directly comparable to glmark2 scores from a desktop/mobile OpenGL or OpenGL ES implementation.
 
-The V3 prototype already provides useful foundations:
+## Benchmark model
 
-- Gint display access and direct pixel writes in `src/display.cpp`.
-- Triangle, rectangle, and parallelogram rasterization under `src/shapes/`.
-- Fixed-point math, a camera projection, cube faces, and a block-world demo in `src/world.cpp`.
-- A demo loop and an on-screen FPS estimate in `src/main.cpp`.
+The benchmark structure follows the same broad idea as glmark2:
 
-These components are currently organized around the cube demo. The FPS display is informational, not a controlled benchmark: the scene is randomized and there is no benchmark runner, fixed test configuration, or structured result output.
+- a benchmark runner selects a fixed workload
+- each workload is a deterministic render scene
+- the timed section is kept separate from UI and interaction code
+- results are reported as measured throughput and timing values
 
-## Proposed architecture
+In practice, this repo keeps the model smaller and more calculator-native than a full glmark2 reimplementation.
+
+## Benchmark architecture
 
 ```text
 benchmark runner
     -> benchmark scene (fixed workload)
-        -> small renderer interface
-            -> software transform / rasterization
-                -> Gint display / framebuffer
+        -> render primitive(s) / rasterizer path
+            -> Gint display framebuffer
     -> timing and result reporting
 ```
 
 ### 1. Benchmark runner
 
-Owns test selection, configuration, warm-up, timed repetitions, and result presentation. It should keep benchmark logic separate from interactive camera controls and random demo setup.
+Owns test selection, warm-up frames, measurement frames, and final reporting. It should keep the benchmark logic separate from interactive camera controls and demo setup.
 
 ### 2. Benchmark scenes
 
-Each scene creates a deterministic workload: fixed geometry, texture, camera, and object/primitive count. A scene should state what it measures and which rendering features it requires.
+Each scene creates a deterministic workload with fixed geometry, fixed camera state, and fixed frame counts. A scene should state what it measures and which rendering features it requires.
 
-### 3. Renderer interface
+### 3. Rendering backend
 
-Introduce a small native API that scenes can call without depending on `World` or `Cube` internals. Begin with operations the implementation can support, such as clearing, submitting triangles or quads, choosing a solid color or texture, and applying transforms. This is a lightweight compatibility facade, not an OpenGL implementation; unsupported OpenGL concepts should not be exposed as if they were implemented.
+The current implementation routes work through the existing software rasterizer and Gint display path. This is enough for a small benchmark suite, but it is not a general-purpose 3D engine abstraction yet.
 
-### 4. Rendering backend
+### 4. Timing and results
 
-Initially route supported operations through the existing software rasterizer and Gint display path. Extend the pipeline incrementally as real tests need features. For example, a depth buffer would be needed for correct general triangle visibility; sorting whole quads by average depth is only a painter's-order approximation and can fail for intersecting geometry.
+The runtime reports:
 
-### 5. Timing and results
+- benchmark name
+- warm-up frame count
+- measurement frame count
+- elapsed time
+- FPS
+- average milliseconds per frame
 
-Use a documented timer source and resolution. Report the calculator model, clock setting, test name, workload settings, warm-up/repetition policy, elapsed time, frame count, and derived rate. Keep raw counters where possible so later versions can improve reporting without changing what the test did.
+This is a stable result format for simple on-device validation and comparison.
 
-## Workload plan
-
-Start with a small, reliable vertical slice:
-
-1. **Clear-only baseline** — repeatedly clear the frame, measuring the display/framebuffer path with minimal scene work.
-2. **Triangle throughput** — draw a fixed number of deterministic triangles at a fixed screen size.
-3. **Textured geometry** — draw a fixed textured workload once texture loading, UV behavior, and bounds are well-defined.
-4. **Transform/object scaling** — increase a controlled number of transformed objects or primitives to observe how workload size affects rendering time.
-
-Then add further glmark2-inspired workloads only when the target implementation can define them accurately. For example, an OpenGL shader workload could have a clearly named CPU shading analogue, but it would measure CPU software shading—not GLSL or GPU shader performance. Hardware buffer-operation tests should be marked unsupported unless there is a meaningful corresponding operation on the calculator.
-
-## Measurement rules
+## Workload rules
 
 For results to be useful and reproducible:
 
-- Use fixed scene data; avoid random geometry unless the random seed is fixed and recorded.
-- Keep resolution, geometry, texture, and settings fixed per test.
-- Separate warm-up from measured iterations.
-- Avoid keyboard polling, text updates, and other UI work inside the timed section where practical.
-- State clock settings and calculator model with each result; device clock changes can affect performance.
-- Report unsupported tests explicitly. Do not silently substitute a different workload under the same test name.
-- Do not claim scores are comparable to desktop/mobile glmark2 results; this is a different API and rendering implementation.
+- keep scene data deterministic
+- keep screen size, geometry count, and texture settings fixed per benchmark
+- separate warm-up from measured iterations
+- avoid keyboard polling and UI updates inside the timed section where possible
+- record calculator model, clock mode, and software configuration alongside results
+- only publish workloads that are stable on real hardware
 
-## Suggested contribution milestones
+## Current implementation status
 
-### Milestone 1: repeatable runner
+The following are implemented in the current V3 benchmark app:
 
-Add a benchmark mode, a test registry, fixed test parameters, timed repetitions, and an on-device summary. Implement clear-only and triangle-throughput tests first. Document timer behavior and clock-setting requirements.
+- `clear-only` — baseline clear cost
+- `triangle-throughput` — fixed triangle count and deterministic placement
+- `textured-geometry` — repeated textured geometry path
 
-### Milestone 2: extract a renderer facade
+The following are not yet part of the stable benchmark suite and should only be added after validation:
 
-Define the smallest native rendering interface needed by those tests and route them through the current rasterizer. Keep the existing interactive demo working.
+- generic shader-style workloads
+- deep 3D object scenes
+- advanced post-processing or blending tests
+- fill-rate or overdraw-heavy scenes
+- open-ended glmark2-style suites
 
-### Milestone 3: expand rendering capability
+## Suggested next steps
 
-Add texture sampling and other capabilities as tests require them. Add depth handling before claiming general visibility-correct 3D rendering. Validate clipping and screen bounds.
+### Milestone 1: validate the current suite
 
-### Milestone 4: port workload concepts
+- run each benchmark several times on the target calculator
+- record clock mode and exact frame counts
+- confirm repeatability before broadening the suite
 
-Implement the remaining feasible glmark2-inspired workloads as target-native scenes, with a description of each workload and any differences from its OpenGL counterpart. Mark unsupported features clearly.
+### Milestone 2: keep the benchmark layer small and stable
 
-### Milestone 5: validate and publish results
+- keep benchmark scenes fixed and deterministic
+- do not mix camera-demo logic into the timed benchmark path
+- keep metrics clear and comparable
 
-Run tests on actual fx-CG50 hardware, repeat runs, record model/clock/settings, and publish sample output and known limitations.
+### Milestone 3: add only what is genuinely supported
 
-## Deferred follow-up: upstream backport and contributions
-
-No upstream contribution or backport is planned as part of the current work. Keep this section as a reminder to revisit that possibility later.
-
-When ready, track the following follow-up tasks here:
-
-- [ ] Review the original `leofarhi/CasioMini3D` repository's current state and contribution guidelines before proposing changes.
-- [ ] Separate generally useful renderer or benchmark improvements from fork-specific experiments.
-- [ ] Keep changes small and self-contained; add build/run instructions and test evidence for fx-CG50 hardware where available.
-- [ ] Check licensing and attribution for any glmark2-inspired or reused code/assets.
-- [ ] Decide whether to open an upstream issue or discussion first, then prepare a focused pull request if appropriate.
-- [ ] Record upstream feedback and any changes needed to maintain a backportable fork.
+Add new workloads only when the underlying rendering path can define them clearly and repeatably. This includes describing the exact feature being measured and any differences from a desktop OpenGL analogue.
 
 ## Scope and licensing note
 
-A workload-inspired reimplementation is distinct from copying glmark2 implementation code. If code, assets, or other materials are copied or adapted from glmark2, review the upstream license and preserve required notices and terms. Identify the source of any reused assets and ensure their licenses permit redistribution.
+This repository intentionally does not claim to be a verbatim copy of glmark2. The project draws inspiration from glmark2's general benchmark structure, but the implementation remains target-native and calculator-specific.
 
-## Definition of a useful first release
+If code or assets are adapted from upstream projects, those materials should be reviewed carefully for licensing and attribution before reuse.
 
-A first release is useful when it can run at least two deterministic tests on-device, show repeatable per-test results, document the exact workloads and settings, and clearly distinguish supported tests from unsupported OpenGL-specific features.
+## Definition of a useful release
+
+A useful release is one that can run a small deterministic test suite on-device, report repeatable results, document workload settings, and clearly distinguish between supported and unsupported rendering features.
