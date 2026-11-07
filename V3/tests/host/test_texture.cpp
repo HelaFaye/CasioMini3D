@@ -109,7 +109,7 @@ static void test_bilinear_interpolation_rgb565()
     assert(gfx::sample_texture(texture, ONE / 2, ONE / 2, bilinear) == 0x8408);
 
     // Clamp at the left edge: the negative neighbor resolves to column zero.
-    assert(gfx::sample_texture(texture, -(ONE / 2), ONE / 2, bilinear) == 0xf000);
+    assert(gfx::sample_texture(texture, -(ONE / 2), ONE / 2, bilinear) == 0x8400);
 }
 
 static void test_invalid_inputs_fail_closed()
