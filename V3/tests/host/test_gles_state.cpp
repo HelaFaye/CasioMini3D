@@ -476,6 +476,216 @@ void test_context_drives_software_pipeline()
     fxglReleaseCurrent();
 }
 
+void test_shader_and_program_object_lifecycle()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "#version 100\n"
+        "attribute vec4 a_position;\n"
+        "attribute vec2 a_uv;\n"
+        "uniform mat4 u_mvp;\n"
+        "uniform float u_gain;\n"
+        "varying vec2 v_uv;\n"
+        "void main() {\n"
+        "  gl_Position = u_mvp * a_position;\n"
+        "  v_uv = a_uv;\n"
+        "}\n";
+    static const GLchar fragment_source[] =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "uniform sampler2D u_texture;\n"
+        "uniform float u_gain;\n"
+        "varying vec2 v_uv;\n"
+        "void main() {\n"
+        "  gl_FragColor = texture2D(u_texture, v_uv) * u_gain;\n"
+        "}\n";
+
+    const GLuint vertex = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fragment = glCreateShader(GL_FRAGMENT_SHADER);
+    assert(vertex != 0 && fragment != 0 && vertex != fragment);
+    assert(glIsShader(vertex) == GL_TRUE);
+    assert(glIsShader(fragment) == GL_TRUE);
+
+    const GLchar *vertex_parts[] = {vertex_source};
+    glShaderSource(vertex, 1, vertex_parts, nullptr);
+    glCompileShader(vertex);
+    GLint value = 0;
+    glGetShaderiv(vertex, GL_COMPILE_STATUS, &value);
+    assert(value == GL_TRUE);
+    glGetShaderiv(vertex, GL_SHADER_TYPE, &value);
+    assert(value == GL_VERTEX_SHADER);
+    glGetShaderiv(vertex, GL_SHADER_SOURCE_LENGTH, &value);
+    assert(value == static_cast<GLint>(sizeof(vertex_source)));
+
+    const GLchar *fragment_parts[] = {fragment_source};
+    const GLint fragment_length[] = {static_cast<GLint>(sizeof(fragment_source) - 1)};
+    glShaderSource(fragment, 1, fragment_parts, fragment_length);
+    glCompileShader(fragment);
+    glGetShaderiv(fragment, GL_COMPILE_STATUS, &value);
+    assert(value == GL_TRUE);
+
+    const GLuint program = glCreateProgram();
+    assert(program != 0 && glIsProgram(program) == GL_TRUE);
+    glBindAttribLocation(program, 3, "a_uv");
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glGetProgramiv(program, GL_ATTACHED_SHADERS, &value);
+    assert(value == 2);
+
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &value);
+    assert(value == GL_TRUE);
+    glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &value);
+    assert(value == 2);
+    glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &value);
+    assert(value == 3);
+
+    assert(glGetAttribLocation(program, "a_position") == 0);
+    assert(glGetAttribLocation(program, "a_uv") == 3);
+    assert(glGetAttribLocation(program, "not_an_attribute") == -1);
+
+    const GLint mvp_location = glGetUniformLocation(program, "u_mvp");
+    const GLint gain_location = glGetUniformLocation(program, "u_gain");
+    const GLint texture_location = glGetUniformLocation(program, "u_texture");
+    assert(mvp_location >= 0);
+    assert(gain_location >= 0);
+    assert(texture_location >= 0);
+    assert(glGetUniformLocation(program, "missing_uniform") == -1);
+
+    glUseProgram(program);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &value);
+    assert(value == static_cast<GLint>(program));
+
+    const GLfloat identity[16] = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+    };
+    glUniformMatrix4fv(mvp_location, 1, GL_FALSE, identity);
+    glUniform1f(gain_location, 0.75f);
+    glUniform1i(texture_location, 1);
+
+    fxgl::LinkedProgramView view = {};
+    assert(fxgl::get_current_program_view(view));
+    assert(view.vertex_shader && view.fragment_shader);
+    assert(view.uniform_count == 3);
+    assert(view.vertex_shader->uniform_count == 2);
+    assert(view.fragment_shader->uniform_count == 2);
+    assert(view.vertex_uniform_map[1] == view.fragment_uniform_map[1]);
+    assert(view.vertex_varying_offsets[0] == 0);
+    assert(view.fragment_varying_offsets[0] == 0);
+    assert(view.varying_scalar_count == 2);
+    assert(view.attribute_locations[0] == 0);
+    assert(view.attribute_locations[1] == 3);
+    assert(view.uniform_values[static_cast<size_t>(mvp_location)].type ==
+        fxgl::ShaderType::Mat4);
+    assert(view.uniform_values[static_cast<size_t>(mvp_location)].data[0] == 1.0f);
+    assert(view.uniform_values[static_cast<size_t>(gain_location)].type ==
+        fxgl::ShaderType::Float);
+    assert(view.uniform_values[static_cast<size_t>(gain_location)].data[0] == 0.75f);
+    assert(view.uniform_values[static_cast<size_t>(texture_location)].type ==
+        fxgl::ShaderType::Sampler2D);
+    assert(view.uniform_values[static_cast<size_t>(texture_location)].data[0] == 1.0f);
+
+    glUniform1f(texture_location, 1.0f);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glUniform1f(-1, 1.0f);
+    assert(glGetError() == GL_NO_ERROR);
+
+    glUseProgram(0);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &value);
+    assert(value == 0);
+    assert(!fxgl::get_current_program_view(view));
+
+    glDeleteProgram(program);
+    assert(glIsProgram(program) == GL_FALSE);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    assert(glIsShader(vertex) == GL_FALSE);
+    assert(glIsShader(fragment) == GL_FALSE);
+
+    fxglReleaseCurrent();
+}
+
+void test_shader_compile_and_program_link_failures()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar bad_vertex_source[] =
+        "attribute vec4 a_position; void main() { gl_Position = unknown; }";
+    static const GLchar valid_fragment_source[] =
+        "precision mediump float; void main() { gl_FragColor = vec4(1.0); }";
+
+    const GLuint bad_vertex = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fragment = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *bad_parts[] = {bad_vertex_source};
+    const GLchar *fragment_parts[] = {valid_fragment_source};
+    glShaderSource(bad_vertex, 1, bad_parts, nullptr);
+    glShaderSource(fragment, 1, fragment_parts, nullptr);
+    glCompileShader(bad_vertex);
+    glCompileShader(fragment);
+
+    GLint value = GL_TRUE;
+    glGetShaderiv(bad_vertex, GL_COMPILE_STATUS, &value);
+    assert(value == GL_FALSE);
+    glGetShaderiv(bad_vertex, GL_INFO_LOG_LENGTH, &value);
+    assert(value > 1);
+    GLchar log[160] = {};
+    GLsizei log_length = 0;
+    glGetShaderInfoLog(bad_vertex, sizeof(log), &log_length, log);
+    assert(log_length > 0 && log[0] != '\0');
+
+    const GLuint failed_program = glCreateProgram();
+    glAttachShader(failed_program, bad_vertex);
+    glAttachShader(failed_program, fragment);
+    glLinkProgram(failed_program);
+    glGetProgramiv(failed_program, GL_LINK_STATUS, &value);
+    assert(value == GL_FALSE);
+    glGetProgramiv(failed_program, GL_INFO_LOG_LENGTH, &value);
+    assert(value > 1);
+    glGetProgramInfoLog(failed_program, sizeof(log), &log_length, log);
+    assert(log_length > 0 && log[0] != '\0');
+    glUseProgram(failed_program);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    glDeleteProgram(failed_program);
+    glDeleteShader(bad_vertex);
+    glDeleteShader(fragment);
+
+    // A syntactically valid pair still fails linking when fragment varyings
+    // are not produced by the vertex stage.
+    static const GLchar vertex_no_varying[] =
+        "void main() { gl_Position = vec4(0.0); }";
+    static const GLchar fragment_missing_varying[] =
+        "varying vec2 v_missing; void main() { gl_FragColor = vec4(v_missing, 0.0, 1.0); }";
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *vs_parts[] = {vertex_no_varying};
+    const GLchar *fs_parts[] = {fragment_missing_varying};
+    glShaderSource(vs, 1, vs_parts, nullptr);
+    glShaderSource(fs, 1, fs_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+
+    const GLuint link_error_program = glCreateProgram();
+    glAttachShader(link_error_program, vs);
+    glAttachShader(link_error_program, fs);
+    glLinkProgram(link_error_program);
+    glGetProgramiv(link_error_program, GL_LINK_STATUS, &value);
+    assert(value == GL_FALSE);
+
+    glDeleteProgram(link_error_program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    fxglReleaseCurrent();
+}
+
 void test_state_validation_and_error_latching()
 {
     uint16_t color[4] = {};
@@ -594,6 +804,8 @@ int main()
     test_texture_objects_and_uploads();
     test_rgb565_unpack_alignment();
     test_state_validation_and_error_latching();
+    test_shader_and_program_object_lifecycle();
+    test_shader_compile_and_program_link_failures();
     test_context_drives_software_pipeline();
 
     std::puts("GLES-style context/state tests: PASS");
