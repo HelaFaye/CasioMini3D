@@ -536,7 +536,7 @@ static bool valid_vertex_attrib_type(GLenum type)
 {
     return type == GL_BYTE || type == GL_UNSIGNED_BYTE ||
            type == GL_SHORT || type == GL_UNSIGNED_SHORT ||
-           type == GL_FLOAT;
+           type == GL_FIXED || type == GL_FLOAT;
 }
 
 void glVertexAttribPointer(
@@ -899,6 +899,15 @@ void glGetIntegerv(GLenum pname, GLint *data)
             break;
         case GL_STENCIL_WRITEMASK:
             data[0] = static_cast<GLint>(g_context.stencil_mask);
+            break;
+        case GL_ARRAY_BUFFER_BINDING:
+            data[0] = static_cast<GLint>(g_context.array_buffer_binding);
+            break;
+        case GL_ELEMENT_ARRAY_BUFFER_BINDING:
+            data[0] = static_cast<GLint>(g_context.element_buffer_binding);
+            break;
+        case GL_MAX_VERTEX_ATTRIBS:
+            data[0] = static_cast<GLint>(FXGL_MAX_VERTEX_ATTRIBS);
             break;
         case GL_MAX_TEXTURE_SIZE:
             data[0] = 128;
