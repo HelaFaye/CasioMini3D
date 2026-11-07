@@ -44,7 +44,7 @@ static void print_bench_result(const BenchResult& result)
 static void print_benchmark_legend()
 {
     const char* text1 = "F6 clear";
-    const char* text2 = "F7 triangles";
+    const char* text2 = "EXE triangles";
     const char* text3 = "MENU quit";
 
     dtext(10, 190, C_WHITE, text1);
@@ -89,7 +89,7 @@ int main(){
             selected_bench = BenchId::ClearOnly;
             mode = AppMode::Benchmark;
         }
-        if(keydown(KEY_F7))
+        if(keydown(KEY_EXE))
         {
             selected_bench = BenchId::TriangleThroughput;
             mode = AppMode::Benchmark;
