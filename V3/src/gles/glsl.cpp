@@ -991,11 +991,21 @@ private:
 
         if (std::strcmp(name, "clamp") == 0)
         {
-            if (argument_count != 3 || arguments[0] != arguments[1] ||
-                arguments[0] != arguments[2] ||
-                (arguments[0] != ShaderType::Float && !is_vector(arguments[0])))
+            const bool matching_bounds =
+                argument_count == 3 &&
+                arguments[0] == arguments[1] &&
+                arguments[0] == arguments[2];
+            const bool scalar_bounds =
+                argument_count == 3 &&
+                is_vector(arguments[0]) &&
+                arguments[1] == ShaderType::Float &&
+                arguments[2] == ShaderType::Float;
+            if (argument_count != 3 ||
+                (arguments[0] != ShaderType::Float &&
+                 !is_vector(arguments[0])) ||
+                (!matching_bounds && !scalar_bounds))
             {
-                fail("clamp requires three matching scalar or vector arguments");
+                fail("clamp requires a scalar or vector with matching bounds or scalar bounds");
                 return ShaderType::Invalid;
             }
             emit_simple(ShaderOp::Clamp, arguments[0], 0, 3);
@@ -1237,7 +1247,37 @@ bool compile_glsl(
         return false;
     }
 
-    Parser parser(stage, source, module);
+    /* GLSL ES 1.00 requires the version directive to precede shader
+       declarations. The subset accepts #version 100 and rejects other
+       preprocessor directives explicitly. */
+    const char *shader_source = source;
+    while (*shader_source == ' ' || *shader_source == '\t' ||
+           *shader_source == '\r' || *shader_source == '\n')
+        ++shader_source;
+    if (*shader_source == '#')
+    {
+        const char *line_end = shader_source;
+        while (*line_end && *line_end != '\n' && *line_end != '\r')
+            ++line_end;
+        const char *expected = "#version 100";
+        size_t length = static_cast<size_t>(line_end - shader_source);
+        while (length > 0 &&
+               (shader_source[length - 1] == ' ' ||
+                shader_source[length - 1] == '\t'))
+            --length;
+        if (length != std::strlen(expected) ||
+            std::strncmp(shader_source, expected, length) != 0)
+        {
+            std::snprintf(module.info_log, sizeof(module.info_log),
+                          "GLSL ES subset: unsupported preprocessor directive");
+            return false;
+        }
+        shader_source = line_end;
+        while (*shader_source == '\n' || *shader_source == '\r')
+            ++shader_source;
+    }
+
+    Parser parser(stage, shader_source, module);
     module.compiled = parser.parse();
     return module.compiled;
 }
@@ -1466,12 +1506,20 @@ bool execute_glsl(
                 if (!pop_value(stack, stack_size, c) ||
                     !pop_value(stack, stack_size, b) ||
                     !pop_value(stack, stack_size, a) ||
-                    a.type != b.type || a.type != c.type)
+                    (b.type != a.type && b.type != ShaderType::Float) ||
+                    (c.type != a.type && c.type != ShaderType::Float) ||
+                    (b.type != c.type &&
+                     !(is_vector(a.type) && b.type == ShaderType::Float &&
+                       c.type == ShaderType::Float)))
                     return false;
                 result = zero_value(a.type);
                 for (size_t i = 0; i < component_count(a.type); ++i)
-                    result.data[i] = std::max(b.data[i],
-                        std::min(a.data[i], c.data[i]));
+                {
+                    const float lower = b.data[component_count(b.type) == 1 ? 0 : i];
+                    const float upper = c.data[component_count(c.type) == 1 ? 0 : i];
+                    result.data[i] = std::max(lower,
+                        std::min(a.data[i], upper));
+                }
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
