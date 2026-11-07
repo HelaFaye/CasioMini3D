@@ -436,6 +436,75 @@ void test_state_validation_and_error_latching()
     glGetIntegerv(GL_BLEND_EQUATION_RGB, &value);
     assert(value == GL_FUNC_REVERSE_SUBTRACT);
 
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_REVERSE_SUBTRACT);
+    glBlendColor(0.25f, 0.5f, 0.75f, 0.125f);
+    glDepthRangef(0.2f, 0.8f);
+
+    glStencilFuncSeparate(GL_FRONT, GL_GEQUAL, 5, 0x3f);
+    glStencilOpSeparate(GL_FRONT, GL_REPLACE, GL_INCR, GL_DECR);
+    glStencilMaskSeparate(GL_FRONT, 0x0f);
+    glStencilFuncSeparate(GL_BACK, GL_LESS, 2, 0xf0);
+    glStencilOpSeparate(GL_BACK, GL_ZERO, GL_KEEP, GL_INVERT);
+    glStencilMaskSeparate(GL_BACK, 0xf0);
+
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &value);
+    assert(value == GL_ONE);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &value);
+    assert(value == GL_ZERO);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &value);
+    assert(value == GL_FUNC_REVERSE_SUBTRACT);
+
+    glGetIntegerv(GL_STENCIL_FUNC, &value);
+    assert(value == GL_GEQUAL);
+    glGetIntegerv(GL_STENCIL_REF, &value);
+    assert(value == 5);
+    glGetIntegerv(GL_STENCIL_VALUE_MASK, &value);
+    assert(value == 0x3f);
+    glGetIntegerv(GL_STENCIL_FAIL, &value);
+    assert(value == GL_REPLACE);
+    glGetIntegerv(GL_STENCIL_PASS_DEPTH_FAIL, &value);
+    assert(value == GL_INCR);
+    glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &value);
+    assert(value == GL_DECR);
+    glGetIntegerv(GL_STENCIL_WRITEMASK, &value);
+    assert(value == 0xff);
+    glGetIntegerv(GL_STENCIL_BACK_FUNC, &value);
+    assert(value == GL_LESS);
+    glGetIntegerv(GL_STENCIL_BACK_REF, &value);
+    assert(value == 2);
+    glGetIntegerv(GL_STENCIL_BACK_VALUE_MASK, &value);
+    assert(value == 0xf0);
+    glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &value);
+    assert(value == 0xf0);
+    glGetIntegerv(GL_STENCIL_BACK_FAIL, &value);
+    assert(value == GL_ZERO);
+    glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_FAIL, &value);
+    assert(value == GL_KEEP);
+    glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_PASS, &value);
+    assert(value == GL_INVERT);
+
+    GLfloat depth_range[2] = {};
+    glGetFloatv(GL_DEPTH_RANGE, depth_range);
+    assert(depth_range[0] > 0.19f && depth_range[0] < 0.21f);
+    assert(depth_range[1] > 0.79f && depth_range[1] < 0.81f);
+    GLfloat blend_color[4] = {};
+    glGetFloatv(GL_BLEND_COLOR, blend_color);
+    assert(blend_color[0] > 0.24f && blend_color[0] < 0.26f);
+    assert(blend_color[3] > 0.12f && blend_color[3] < 0.13f);
+
+    glStencilFunc(GL_EQUAL, 9, 0xff);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glGetIntegerv(GL_STENCIL_REF, &value);
+    assert(value == 9);
+    glGetIntegerv(GL_STENCIL_BACK_REF, &value);
+    assert(value == 9);
+
+    glBlendFuncSeparate(GL_ZERO, GL_SRC_ALPHA_SATURATE, GL_ONE, GL_ZERO);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glStencilOpSeparate(GL_FRONT, 0xdead, GL_KEEP, GL_KEEP);
+    assert(glGetError() == GL_INVALID_ENUM);
+
     fxglReleaseCurrent();
 }
 } // namespace
