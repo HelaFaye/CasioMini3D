@@ -17,7 +17,8 @@ enum class TextureFilter : uint8_t
 enum class TextureAddressMode : uint8_t
 {
     Clamp = 0,
-    Repeat = 1
+    Repeat = 1,
+    MirroredRepeat = 2
 };
 
 struct Texture2DView
