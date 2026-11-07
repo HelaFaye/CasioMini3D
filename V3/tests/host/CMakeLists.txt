@@ -46,6 +46,8 @@ add_executable(gles_state_tests
     ../../src/gles/gles_context.cpp
     ../../src/gles/math.cpp
     ../../src/gles/pipeline.cpp
+    ../../src/gles/program.cpp
+    ../../src/gles/glsl.cpp
     ../../src/gfx/texture.cpp
 )
 
