@@ -33,21 +33,24 @@ static void print_bench_result(const BenchResult& result)
 {
     char fps_buffer[32];
     char frame_buffer[32];
+    char elapsed_buffer[32];
     snprintf(fps_buffer, sizeof(fps_buffer), "FPS: %.2f", result.fps);
     snprintf(frame_buffer, sizeof(frame_buffer), "ms/frame: %.3f", result.avg_ms_per_frame);
+    snprintf(elapsed_buffer, sizeof(elapsed_buffer), "Elapsed: %lu ms", (unsigned long)result.elapsed_ms);
 
-    dtext(8, 8, C_WHITE, "Benchmark complete");
-    dtext(8, 24, C_WHITE, result.name);
-    dtext(8, 40, C_WHITE, fps_buffer);
-    dtext(8, 56, C_WHITE, frame_buffer);
-    dtext(8, 80, C_WHITE, "MENU: return");
+    dtext(8, 12, C_WHITE, "Benchmark complete");
+    dtext(8, 32, C_WHITE, result.name);
+    dtext(8, 52, C_WHITE, fps_buffer);
+    dtext(8, 72, C_WHITE, frame_buffer);
+    dtext(8, 92, C_WHITE, elapsed_buffer);
+    dtext(8, 116, C_WHITE, "MENU: return");
 }
 
 static void print_benchmark_legend()
 {
-    dtext(8, 180, C_WHITE, "F6: clear-only");
-    dtext(8, 194, C_WHITE, "EXE: moving triangles");
-    dtext(8, 208, C_WHITE, "MENU: quit");
+    dtext(8, 156, C_WHITE, "F6: clear-only");
+    dtext(8, 170, C_WHITE, "EXE: moving triangles");
+    dtext(8, 184, C_WHITE, "MENU: quit");
 }
 
 int main(){
