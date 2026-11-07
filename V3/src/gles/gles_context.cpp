@@ -332,15 +332,6 @@ static bool valid_stencil_operation(GLenum value)
            value == GL_INCR_WRAP || value == GL_DECR_WRAP;
 }
 
-static StencilFace *stencil_face(GLenum face)
-{
-    if (face == GL_FRONT)
-        return &g_context.stencil_front;
-    if (face == GL_BACK)
-        return &g_context.stencil_back;
-    return nullptr;
-}
-
 static bool *capability(GLenum cap)
 {
     switch (cap)
