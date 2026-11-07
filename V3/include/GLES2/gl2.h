@@ -209,6 +209,8 @@ void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
 void glBlendFuncSeparate(GLenum src_rgb, GLenum dst_rgb,
     GLenum src_alpha, GLenum dst_alpha);
 void glBlendEquationSeparate(GLenum mode_rgb, GLenum mode_alpha);
+void glStencilFunc(GLenum func, GLint ref, GLuint mask);
+void glStencilOp(GLenum stencil_fail, GLenum depth_fail, GLenum depth_pass);
 void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask);
 void glStencilOpSeparate(GLenum face, GLenum stencil_fail,
     GLenum depth_fail, GLenum depth_pass);
