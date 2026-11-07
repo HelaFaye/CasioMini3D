@@ -359,9 +359,9 @@ void test_rgb565_unpack_alignment()
     // Default unpack alignment is four bytes. Two RGB565 pixels occupy four
     // bytes per row; an odd-width row occupies two bytes but starts each next
     // row at a four-byte boundary.
-    const uint8_t aligned_rows[8] = {
-        0xf8, 0x00, 0xaa, 0xaa,
-        0x07, 0xe0, 0xbb, 0xbb
+    const uint16_t aligned_rows[4] = {
+        RED, 0xaaaa,
+        GREEN, 0xbbbb
     };
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 2, 0, GL_RGB,
         GL_UNSIGNED_SHORT_5_6_5, aligned_rows);
@@ -382,7 +382,7 @@ void test_rgb565_unpack_alignment()
     glPixelStorei(GL_UNPACK_ALIGNMENT, 3);
     assert(glGetError() == GL_INVALID_VALUE);
 
-    const uint8_t tight_rows[4] = {0x00, 0x1f, 0xff, 0xff};
+    const uint16_t tight_rows[2] = {BLUE, 0xffff};
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 2, 0, GL_RGB,
         GL_UNSIGNED_SHORT_5_6_5, tight_rows);
     assert(fxgl::get_texture_binding(0, view, sampler));
