@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 clock_t lastTime = 0;
@@ -20,6 +21,7 @@ enum class AppMode
 static const int UI_TEXT_X = 8;
 static const int UI_TEXT_TOP = 8;
 static const int LEGEND_TOP = 148;
+
 static const BenchId BENCHMARKS[] = {
     BenchId::ClearOnly,
     BenchId::TriangleThroughput,
@@ -32,7 +34,9 @@ static bool benchmark_valid[BENCHMARK_COUNT];
 static void run_benchmark_suite(const BenchConfig& cfg)
 {
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
+    {
         benchmark_valid[i] = run_benchmark(BENCHMARKS[i], cfg, &benchmark_results[i]);
+    }
 }
 
 static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
@@ -93,7 +97,9 @@ void dclock()
     clock_t deltaTime = clock() - lastTime;
     int fps = 1000;
     if (deltaTime != 0)
+    {
         fps = CLOCKS_PER_SEC / deltaTime;
+    }
 
     char buffer[20];
     sprintf(buffer, "FPS %d", fps);
@@ -154,7 +160,8 @@ static void print_benchmark_legend()
     dtext(UI_TEXT_X, LEGEND_TOP + 42, C_WHITE, "MENU: quit");
 }
 
-int main(){
+int main()
+{
     srand(time(NULL));
     init_uv_map();
 
@@ -165,11 +172,11 @@ int main(){
     cfg.width = SCREEN_WIDTH;
     cfg.height = SCREEN_HEIGHT;
 
-    Camera *camera = new Camera(Vector3<int>(0, 100, -300), 0);
-    World *world = new World(16, 16, 16, new Block*[2]{nullptr, new Cube()});
+    Camera* camera = new Camera(Vector3<int>(0, 100, -300), 0);
+    World* world = new World(16, 16, 16, new Block*[2]{nullptr, new Cube()});
     world->set_id_unsafe(0, 0, 0, 1);
     world->set_id_unsafe(1, 0, 0, 1);
-    for (size_t i = 0; i < 200; i++)
+    for (size_t i = 0; i < 200; ++i)
     {
         world->set_id_unsafe(rand() % 16, rand() % 16, rand() % 16, 1);
     }
@@ -178,7 +185,9 @@ int main(){
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
     {
         if (benchmark_valid[i])
+        {
             append_benchmark_result_csv(benchmark_results[i], cfg);
+        }
     }
 
     AppMode mode = AppMode::Results;
@@ -189,21 +198,21 @@ int main(){
         dclear(C_BLACK);
         clearevents();
 
-        if(keydown(KEY_F1))
+        if (keydown(KEY_F1))
             clock_set_speed(CLOCK_SPEED_F1);
-        if(keydown(KEY_F5))
+        if (keydown(KEY_F5))
             clock_set_speed(CLOCK_SPEED_F5);
-        if(keydown(KEY_F6))
+        if (keydown(KEY_F6))
         {
             selected_bench = BenchId::ClearOnly;
             mode = AppMode::Benchmark;
         }
-        if(keydown(KEY_EXE))
+        if (keydown(KEY_EXE))
         {
             selected_bench = BenchId::TriangleThroughput;
             mode = AppMode::Benchmark;
         }
-        if(keydown(KEY_DEL))
+        if (keydown(KEY_DEL))
         {
             selected_bench = BenchId::TexturedGeometry;
             mode = AppMode::Benchmark;
@@ -230,28 +239,28 @@ int main(){
         }
         else
         {
-            if(keydown(KEY_LEFT))
+            if (keydown(KEY_LEFT))
                 camera->position.x -= 10;
-            if(keydown(KEY_RIGHT))
+            if (keydown(KEY_RIGHT))
                 camera->position.x += 10;
-            if(keydown(KEY_UP))
+            if (keydown(KEY_UP))
                 camera->position.z += 10;
-            if(keydown(KEY_DOWN))
+            if (keydown(KEY_DOWN))
                 camera->position.z -= 10;
 
-            if(keydown(KEY_8))
+            if (keydown(KEY_8))
                 camera->position.y += 10;
-            if(keydown(KEY_2))
+            if (keydown(KEY_2))
                 camera->position.y -= 10;
 
-            if(keydown(KEY_7))
+            if (keydown(KEY_7))
                 camera->angle += 3;
-            if(keydown(KEY_1))
+            if (keydown(KEY_1))
                 camera->angle -= 3;
 
-            if(keydown(KEY_9))
+            if (keydown(KEY_9))
                 camera->offset.y -= 10;
-            if(keydown(KEY_3))
+            if (keydown(KEY_3))
                 camera->offset.y += 10;
 
             world->Render();
@@ -261,5 +270,6 @@ int main(){
             dupdate();
         }
     }
+
     return 0;
 }
