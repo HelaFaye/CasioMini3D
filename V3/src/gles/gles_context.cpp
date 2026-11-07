@@ -67,6 +67,8 @@ struct Context
     size_t texture_bytes = 0;
     GLuint texture_binding_2d[FXGL_MAX_TEXTURE_UNITS] = {};
     size_t active_texture_unit = 0;
+    GLint unpack_alignment = 4;
+    GLint pack_alignment = 4;
 
     GLint viewport[4] = {};
     GLint scissor[4] = {};
@@ -719,6 +721,26 @@ void glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid **pointer)
     *pointer = const_cast<GLvoid *>(g_context.attributes[index].pointer);
 }
 
+void glPixelStorei(GLenum pname, GLint param)
+{
+    if (!has_context()) return;
+    if (pname != GL_UNPACK_ALIGNMENT && pname != GL_PACK_ALIGNMENT)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (param != 1 && param != 2 && param != 4 && param != 8)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    if (pname == GL_UNPACK_ALIGNMENT)
+        g_context.unpack_alignment = param;
+    else
+        g_context.pack_alignment = param;
+}
+
 void glGenTextures(GLsizei n, GLuint *textures)
 {
     if (!has_context()) return;
@@ -945,9 +967,24 @@ void glTexImage2D(
             return;
         }
         if (pixels)
-            std::memcpy(new_pixels, pixels, new_bytes);
+        {
+            const size_t row_bytes = static_cast<size_t>(width) * sizeof(uint16_t);
+            const size_t alignment =
+                static_cast<size_t>(g_context.unpack_alignment);
+            const size_t source_stride =
+                (row_bytes + alignment - 1) & ~(alignment - 1);
+            const uint8_t *source = static_cast<const uint8_t *>(pixels);
+            for (GLsizei row = 0; row < height; ++row)
+            {
+                std::memcpy(new_pixels + static_cast<size_t>(row) * width,
+                    source + static_cast<size_t>(row) * source_stride,
+                    row_bytes);
+            }
+        }
         else
+        {
             std::memset(new_pixels, 0, new_bytes);
+        }
     }
 
     std::free(object->pixels);
@@ -998,13 +1035,18 @@ void glTexSubImage2D(
         return;
     }
 
-    const uint16_t *source = static_cast<const uint16_t *>(pixels);
+    const size_t row_bytes = static_cast<size_t>(width) * sizeof(uint16_t);
+    const size_t alignment = static_cast<size_t>(g_context.unpack_alignment);
+    const size_t source_stride =
+        (row_bytes + alignment - 1) & ~(alignment - 1);
+    const uint8_t *source = static_cast<const uint8_t *>(pixels);
     for (GLsizei row = 0; row < height; ++row)
     {
         uint16_t *destination = object->pixels +
             static_cast<size_t>(yoffset + row) * object->width + xoffset;
-        std::memcpy(destination, source + static_cast<size_t>(row) * width,
-                    static_cast<size_t>(width) * sizeof(uint16_t));
+        std::memcpy(destination,
+            source + static_cast<size_t>(row) * source_stride,
+            row_bytes);
     }
 }
 
@@ -1297,6 +1339,12 @@ void glGetIntegerv(GLenum pname, GLint *data)
             break;
         case GL_MAX_TEXTURE_IMAGE_UNITS:
             data[0] = static_cast<GLint>(FXGL_MAX_TEXTURE_UNITS);
+            break;
+        case GL_UNPACK_ALIGNMENT:
+            data[0] = g_context.unpack_alignment;
+            break;
+        case GL_PACK_ALIGNMENT:
+            data[0] = g_context.pack_alignment;
             break;
         case GL_MAX_TEXTURE_SIZE:
             data[0] = FXGL_MAX_TEXTURE_SIZE;
