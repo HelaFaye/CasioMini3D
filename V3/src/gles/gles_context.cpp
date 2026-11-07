@@ -3052,6 +3052,15 @@ void glGetIntegerv(GLenum pname, GLint *data)
         case GL_STENCIL_BACK_PASS_DEPTH_PASS:
             data[0] = static_cast<GLint>(g_context.stencil_back.depth_pass);
             break;
+        case GL_FRAMEBUFFER_BINDING:
+            data[0] = static_cast<GLint>(g_context.framebuffer_binding);
+            break;
+        case GL_RENDERBUFFER_BINDING:
+            data[0] = static_cast<GLint>(g_context.renderbuffer_binding);
+            break;
+        case GL_MAX_RENDERBUFFER_SIZE:
+            data[0] = FXGL_MAX_RENDERBUFFER_SIZE;
+            break;
         case GL_ARRAY_BUFFER_BINDING:
             data[0] = static_cast<GLint>(g_context.array_buffer_binding);
             break;
