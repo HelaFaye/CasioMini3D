@@ -732,11 +732,50 @@ static bool draw_vertex_triangle(
     return true;
 }
 
-static bool supported_draw_mode(GLenum mode)
+static bool draw_vertex_point(
+    const fxgl::LinkedProgramView& program,
+    uint32_t index)
 {
-    return mode == GL_TRIANGLES ||
-           mode == GL_TRIANGLE_STRIP ||
-           mode == GL_TRIANGLE_FAN;
+    fxgl::ClipVertex vertex = {};
+    if (!execute_vertex(program, index, vertex))
+        return false;
+
+    DrawInvocation invocation = {program, false};
+    fxgl::draw_clip_point(
+        vertex,
+        program.varying_scalar_count,
+        execute_fragment,
+        &invocation);
+    if (invocation.fragment_failed)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return false;
+    }
+    return true;
+}
+
+static bool draw_vertex_line(
+    const fxgl::LinkedProgramView& program,
+    uint32_t first,
+    uint32_t second)
+{
+    fxgl::ClipVertex vertices[2] = {};
+    if (!execute_vertex(program, first, vertices[0]) ||
+        !execute_vertex(program, second, vertices[1]))
+        return false;
+
+    DrawInvocation invocation = {program, false};
+    fxgl::draw_clip_line(
+        vertices,
+        program.varying_scalar_count,
+        execute_fragment,
+        &invocation);
+    if (invocation.fragment_failed)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return false;
+    }
+    return true;
 }
 
 static bool valid_draw_mode(GLenum mode)
@@ -1123,17 +1162,12 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
         set_error(GL_INVALID_ENUM);
         return;
     }
-    if (!supported_draw_mode(mode))
-    {
-        set_error(GL_INVALID_OPERATION);
-        return;
-    }
     if (first < 0 || count < 0)
     {
         set_error(GL_INVALID_VALUE);
         return;
     }
-    if (count < 3)
+    if (count == 0)
         return;
 
     fxgl::LinkedProgramView program = {};
@@ -1143,53 +1177,83 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
         return;
     }
 
-    const uint64_t final_vertex =
-        static_cast<uint64_t>(static_cast<uint32_t>(first)) +
+    const uint64_t first_wide = static_cast<uint32_t>(first);
+    const uint64_t final_vertex = first_wide +
         static_cast<uint64_t>(static_cast<uint32_t>(count - 1));
     if (final_vertex > std::numeric_limits<uint32_t>::max())
     {
         set_error(GL_INVALID_VALUE);
         return;
     }
+    const uint32_t base = static_cast<uint32_t>(first);
 
-    if (mode == GL_TRIANGLES)
+    if (mode == GL_POINTS)
     {
-        for (GLsizei i = 0; i + 2 < count; i += 3)
+        for (GLsizei i = 0; i < count; ++i)
+            if (!draw_vertex_point(program, base + static_cast<uint32_t>(i)))
+                return;
+    }
+    else if (mode == GL_LINES)
+    {
+        for (GLsizei i = 0; i < count - 1; i += 2)
         {
-            if (!draw_vertex_triangle(
-                    program,
-                    static_cast<uint32_t>(first + i),
-                    static_cast<uint32_t>(first + i + 1),
-                    static_cast<uint32_t>(first + i + 2)))
+            if (!draw_vertex_line(program,
+                    base + static_cast<uint32_t>(i),
+                    base + static_cast<uint32_t>(i + 1)))
+                return;
+        }
+    }
+    else if (mode == GL_LINE_STRIP || mode == GL_LINE_LOOP)
+    {
+        for (GLsizei i = 0; i < count - 1; ++i)
+        {
+            if (!draw_vertex_line(program,
+                    base + static_cast<uint32_t>(i),
+                    base + static_cast<uint32_t>(i + 1)))
+                return;
+        }
+        if (mode == GL_LINE_LOOP && count > 1)
+        {
+            if (!draw_vertex_line(program,
+                    base + static_cast<uint32_t>(count - 1), base))
+                return;
+        }
+    }
+    else if (mode == GL_TRIANGLES)
+    {
+        for (GLsizei i = 0; i < count - 2; i += 3)
+        {
+            if (!draw_vertex_triangle(program,
+                    base + static_cast<uint32_t>(i),
+                    base + static_cast<uint32_t>(i + 1),
+                    base + static_cast<uint32_t>(i + 2)))
                 return;
         }
     }
     else if (mode == GL_TRIANGLE_STRIP)
     {
-        for (GLsizei i = 0; i + 2 < count; ++i)
+        for (GLsizei i = 0; i < count - 2; ++i)
         {
-            const uint32_t a = static_cast<uint32_t>(first + i);
-            const uint32_t b = static_cast<uint32_t>(first + i + 1);
-            const uint32_t c = static_cast<uint32_t>(first + i + 2);
+            const uint32_t a = base + static_cast<uint32_t>(i);
+            const uint32_t b = base + static_cast<uint32_t>(i + 1);
+            const uint32_t d = base + static_cast<uint32_t>(i + 2);
             if ((i & 1) == 0)
             {
-                if (!draw_vertex_triangle(program, a, b, c))
+                if (!draw_vertex_triangle(program, a, b, d))
                     return;
             }
-            else if (!draw_vertex_triangle(program, b, a, c))
+            else if (!draw_vertex_triangle(program, b, a, d))
                 return;
         }
     }
     else /* GL_TRIANGLE_FAN */
     {
-        const uint32_t center = static_cast<uint32_t>(first);
-        for (GLsizei i = 1; i + 1 < count; ++i)
+        for (GLsizei i = 1; i < count - 1; ++i)
         {
-            if (!draw_vertex_triangle(
-                    program,
-                    center,
-                    static_cast<uint32_t>(first + i),
-                    static_cast<uint32_t>(first + i + 1)))
+            if (!draw_vertex_triangle(program,
+                    base,
+                    base + static_cast<uint32_t>(i),
+                    base + static_cast<uint32_t>(i + 1)))
                 return;
         }
     }
@@ -1205,11 +1269,6 @@ void glDrawElements(
     if (!valid_draw_mode(mode))
     {
         set_error(GL_INVALID_ENUM);
-        return;
-    }
-    if (!supported_draw_mode(mode))
-    {
-        set_error(GL_INVALID_OPERATION);
         return;
     }
     if (count < 0)
@@ -1281,9 +1340,32 @@ void glDrawElements(
         return value;
     };
 
-    if (mode == GL_TRIANGLES)
+    if (mode == GL_POINTS)
     {
-        for (GLsizei i = 0; i + 2 < count; i += 3)
+        for (GLsizei i = 0; i < count; ++i)
+            if (!draw_vertex_point(program, get_index(i)))
+                return;
+    }
+    else if (mode == GL_LINES)
+    {
+        for (GLsizei i = 0; i < count - 1; i += 2)
+        {
+            if (!draw_vertex_line(program, get_index(i), get_index(i + 1)))
+                return;
+        }
+    }
+    else if (mode == GL_LINE_STRIP || mode == GL_LINE_LOOP)
+    {
+        for (GLsizei i = 0; i < count - 1; ++i)
+            if (!draw_vertex_line(program, get_index(i), get_index(i + 1)))
+                return;
+        if (mode == GL_LINE_LOOP && count > 1)
+            if (!draw_vertex_line(program, get_index(count - 1), get_index(0)))
+                return;
+    }
+    else if (mode == GL_TRIANGLES)
+    {
+        for (GLsizei i = 0; i < count - 2; i += 3)
         {
             if (!draw_vertex_triangle(
                     program, get_index(i), get_index(i + 1), get_index(i + 2)))
@@ -1292,29 +1374,26 @@ void glDrawElements(
     }
     else if (mode == GL_TRIANGLE_STRIP)
     {
-        for (GLsizei i = 0; i + 2 < count; ++i)
+        for (GLsizei i = 0; i < count - 2; ++i)
         {
             const uint32_t a = get_index(i);
             const uint32_t b = get_index(i + 1);
-            const uint32_t c = get_index(i + 2);
+            const uint32_t d = get_index(i + 2);
             if ((i & 1) == 0)
             {
-                if (!draw_vertex_triangle(program, a, b, c))
+                if (!draw_vertex_triangle(program, a, b, d))
                     return;
             }
-            else if (!draw_vertex_triangle(program, b, a, c))
+            else if (!draw_vertex_triangle(program, b, a, d))
                 return;
         }
     }
-    else
+    else /* GL_TRIANGLE_FAN */
     {
-        const uint32_t center = get_index(0);
-        for (GLsizei i = 1; i + 1 < count; ++i)
-        {
+        for (GLsizei i = 1; i < count - 1; ++i)
             if (!draw_vertex_triangle(
-                    program, center, get_index(i), get_index(i + 1)))
+                    program, get_index(0), get_index(i), get_index(i + 1)))
                 return;
-        }
     }
 }
 
