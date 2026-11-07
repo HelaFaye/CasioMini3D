@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <gint/bfile.h>
 
 clock_t lastTime = 0;
 
@@ -19,6 +21,60 @@ enum class AppMode
 static const int UI_TEXT_X = 8;
 static const int UI_TEXT_TOP = 8;
 static const int LEGEND_TOP = 148;
+
+static void utf16_from_cstr(const char* src, uint16_t* out, size_t max_chars)
+{
+    size_t i = 0;
+    while (src[i] != '\0' && i + 1 < max_chars)
+    {
+        out[i] = (uint16_t)(unsigned char)src[i];
+        ++i;
+    }
+    out[i] = 0;
+}
+
+static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
+{
+    static const char kLogPath[] = "fls0:benchmarks.csv";
+    uint16_t filename[32];
+    utf16_from_cstr(kLogPath, filename, sizeof(filename) / sizeof(filename[0]));
+
+    int handle = Bfile_OpenFile(filename, BFile_ReadWrite);
+    if (handle < 0)
+    {
+        if (Bfile_CreateFile(filename, 4096) < 0)
+            return false;
+        handle = Bfile_OpenFile(filename, BFile_ReadWrite);
+        if (handle < 0)
+            return false;
+    }
+
+    if (Bfile_SeekFile(handle, 0, BFile_SeekEnd) < 0)
+    {
+        Bfile_CloseFile(handle);
+        return false;
+    }
+
+    char line[256];
+    int written = snprintf(line, sizeof(line),
+        "%s,%u,%u,%u,%.2f,%.3f\n",
+        result.name,
+        cfg.warmup_frames,
+        cfg.measure_frames,
+        result.elapsed_ms,
+        result.fps,
+        result.avg_ms_per_frame);
+
+    if (written <= 0)
+    {
+        Bfile_CloseFile(handle);
+        return false;
+    }
+
+    const bool ok = Bfile_WriteFile(handle, line, written) >= 0;
+    Bfile_CloseFile(handle);
+    return ok;
+}
 
 void dclock()
 {
@@ -113,6 +169,7 @@ int main(){
             {
                 dclear(C_BLACK);
                 print_bench_result(result);
+                append_benchmark_result_csv(result, cfg);
                 dupdate();
                 while (!keydown(KEY_MENU))
                     clearevents();
