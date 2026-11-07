@@ -77,3 +77,12 @@ target_include_directories(gles_pipeline_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
 )
 add_test(NAME gles_software_pipeline COMMAND gles_pipeline_tests)
+
+add_executable(glsl_tests
+    test_glsl.cpp
+    ../../src/gles/glsl.cpp
+)
+
+target_compile_features(glsl_tests PRIVATE cxx_std_20)
+target_compile_options(glsl_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME glsl_subset_vm COMMAND glsl_tests)
