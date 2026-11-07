@@ -261,7 +261,7 @@ static bool link_program(ProgramObject& program)
     {
         const fxgl::ShaderVariable& varying =
             program.vertex_module.varyings[i];
-        const size_t components = fxgl::component_count(varying.type);
+        const size_t components = shader_component_count(varying.type);
         if (components == 0 ||
             scalar_offset + components > fxgl::GLSL_MAX_VARYINGS)
         {
