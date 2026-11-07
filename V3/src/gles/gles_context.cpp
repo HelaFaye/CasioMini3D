@@ -25,6 +25,7 @@ struct BufferObject
     uint8_t *data = nullptr;
     size_t size = 0;
     GLenum usage = GL_STATIC_DRAW;
+    bool reserved = false;
     bool alive = false;
 };
 
@@ -38,6 +39,7 @@ struct TextureObject
     GLenum mag_filter = GL_NEAREST;
     GLenum wrap_s = GL_CLAMP_TO_EDGE;
     GLenum wrap_t = GL_CLAMP_TO_EDGE;
+    bool reserved = false;
     bool alive = false;
 };
 
@@ -112,12 +114,18 @@ static bool has_context()
     return true;
 }
 
-static BufferObject *find_buffer(GLuint name)
+static BufferObject *buffer_slot(GLuint name)
 {
     if (name == 0 || name > FXGL_MAX_BUFFERS)
         return nullptr;
     BufferObject& object = g_context.buffers[name - 1];
-    return object.alive ? &object : nullptr;
+    return object.reserved ? &object : nullptr;
+}
+
+static BufferObject *find_buffer(GLuint name)
+{
+    BufferObject *object = buffer_slot(name);
+    return object && object->alive ? object : nullptr;
 }
 
 static BufferObject *bound_buffer(GLenum target)
@@ -145,12 +153,18 @@ static BufferObject *bound_buffer(GLenum target)
     return object;
 }
 
-static TextureObject *find_texture(GLuint name)
+static TextureObject *texture_slot(GLuint name)
 {
     if (name == 0 || name > FXGL_MAX_TEXTURES)
         return nullptr;
     TextureObject& object = g_context.textures[name - 1];
-    return object.alive ? &object : nullptr;
+    return object.reserved ? &object : nullptr;
+}
+
+static TextureObject *find_texture(GLuint name)
+{
+    TextureObject *object = texture_slot(name);
+    return object && object->alive ? object : nullptr;
 }
 
 static TextureObject *bound_texture(GLenum target)
@@ -418,6 +432,12 @@ GLboolean fxglHasCurrentContext(void)
     return g_context.current ? GL_TRUE : GL_FALSE;
 }
 
+GLboolean glIsBuffer(GLuint buffer)
+{
+    if (!has_context()) return GL_FALSE;
+    return find_buffer(buffer) ? GL_TRUE : GL_FALSE;
+}
+
 void glGenBuffers(GLsizei n, GLuint *buffers)
 {
     if (!has_context()) return;
@@ -429,7 +449,7 @@ void glGenBuffers(GLsizei n, GLuint *buffers)
 
     size_t available = 0;
     for (const BufferObject& object : g_context.buffers)
-        if (!object.alive) ++available;
+        if (!object.reserved) ++available;
     if (available < static_cast<size_t>(n))
     {
         set_error(GL_OUT_OF_MEMORY);
@@ -439,10 +459,10 @@ void glGenBuffers(GLsizei n, GLuint *buffers)
     GLsizei generated = 0;
     for (size_t i = 0; i < FXGL_MAX_BUFFERS && generated < n; ++i)
     {
-        if (!g_context.buffers[i].alive)
+        if (!g_context.buffers[i].reserved)
         {
             g_context.buffers[i] = {};
-            g_context.buffers[i].alive = true;
+            g_context.buffers[i].reserved = true;
             buffers[generated++] = static_cast<GLuint>(i + 1);
         }
     }
@@ -459,7 +479,7 @@ void glDeleteBuffers(GLsizei n, const GLuint *buffers)
 
     for (GLsizei i = 0; i < n; ++i)
     {
-        BufferObject *object = find_buffer(buffers[i]);
+        BufferObject *object = buffer_slot(buffers[i]);
         if (!object)
             continue;
 
@@ -478,8 +498,11 @@ void glDeleteBuffers(GLsizei n, const GLuint *buffers)
             }
         }
 
-        g_context.buffer_bytes -= object->size;
-        std::free(object->data);
+        if (object->alive)
+        {
+            g_context.buffer_bytes -= object->size;
+            std::free(object->data);
+        }
         *object = {};
     }
 }
@@ -498,10 +521,15 @@ void glBindBuffer(GLenum target, GLuint buffer)
         return;
     }
 
-    if (buffer != 0 && !find_buffer(buffer))
+    if (buffer != 0)
     {
-        set_error(GL_INVALID_OPERATION);
-        return;
+        BufferObject *object = buffer_slot(buffer);
+        if (!object)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        object->alive = true;
     }
     *binding = buffer;
 }
@@ -741,6 +769,12 @@ void glPixelStorei(GLenum pname, GLint param)
         g_context.pack_alignment = param;
 }
 
+GLboolean glIsTexture(GLuint texture)
+{
+    if (!has_context()) return GL_FALSE;
+    return find_texture(texture) ? GL_TRUE : GL_FALSE;
+}
+
 void glGenTextures(GLsizei n, GLuint *textures)
 {
     if (!has_context()) return;
@@ -752,7 +786,7 @@ void glGenTextures(GLsizei n, GLuint *textures)
 
     size_t available = 0;
     for (const TextureObject& object : g_context.textures)
-        if (!object.alive) ++available;
+        if (!object.reserved) ++available;
     if (available < static_cast<size_t>(n))
     {
         set_error(GL_OUT_OF_MEMORY);
@@ -762,10 +796,10 @@ void glGenTextures(GLsizei n, GLuint *textures)
     GLsizei generated = 0;
     for (size_t i = 0; i < FXGL_MAX_TEXTURES && generated < n; ++i)
     {
-        if (!g_context.textures[i].alive)
+        if (!g_context.textures[i].reserved)
         {
             g_context.textures[i] = {};
-            g_context.textures[i].alive = true;
+            g_context.textures[i].reserved = true;
             textures[generated++] = static_cast<GLuint>(i + 1);
         }
     }
@@ -782,7 +816,7 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
 
     for (GLsizei i = 0; i < n; ++i)
     {
-        TextureObject *object = find_texture(textures[i]);
+        TextureObject *object = texture_slot(textures[i]);
         if (!object)
             continue;
 
@@ -791,8 +825,11 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
             if (binding == name)
                 binding = 0;
 
-        g_context.texture_bytes -= object->bytes;
-        std::free(object->pixels);
+        if (object->alive)
+        {
+            g_context.texture_bytes -= object->bytes;
+            std::free(object->pixels);
+        }
         *object = {};
     }
 }
@@ -818,10 +855,15 @@ void glBindTexture(GLenum target, GLuint texture)
         set_error(GL_INVALID_ENUM);
         return;
     }
-    if (texture != 0 && !find_texture(texture))
+    if (texture != 0)
     {
-        set_error(GL_INVALID_OPERATION);
-        return;
+        TextureObject *object = texture_slot(texture);
+        if (!object)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        object->alive = true;
     }
     g_context.texture_binding_2d[g_context.active_texture_unit] = texture;
 }
