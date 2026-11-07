@@ -38,7 +38,7 @@ This is a partial OpenGL ES 2.0-style software renderer, not a conformant GLES i
 |---|---|---|
 | Context and surface | Single current context; caller-owned RGB565 color buffer and optional depth/stencil planes; GL-style error/state API | Multiple contexts, GLES framebuffer/renderbuffer objects, texture-backed render targets, completeness checks, broad format support |
 | Buffers and attributes | Bounded buffer objects, upload/sub-update, eight attribute slots, client-memory and VBO attribute fetch, constant attributes | Full GLES object/query semantics and complete type/edge-case coverage |
-| Draw calls | glDrawArrays and glDrawElements; points, line pairs/strips/loops, triangles/strips/fans are routed to software primitive paths | Point/line regression coverage is not yet complete; primitive rasterization edge rules and full specification conformance remain |
+| Draw calls | glDrawArrays and glDrawElements; points, line pairs/strips/loops, triangles/strips/fans are routed to software primitive paths; basic point/line clipping and scissor regression tests pass | Broader primitive edge-rule, clipping, interpolation and full specification conformance remain |
 | Vertex/primitive pipeline | Attribute decoding, vertex shader execution, six-plane homogeneous clipping, perspective divide, viewport transform, triangle coverage, perspective-correct varying interpolation | Full GLES clipping/precision behavior, polygon offset, provoking-vertex details and exhaustive raster rules |
 | Fragment pipeline | Fragment shader execution/discard, scissor, depth, stencil, blend equations/factors, color masks, RGB565 writes | Multisample behavior, alpha-capable targets, full blend/logic semantics and exact conformance |
 | GLSL ES front end/VM | Bounded source, lexer/parser/typed bytecode VM; float, int, bool, vec2/3/4, mat4, sampler2D; attributes/uniforms/varyings; constructors, swizzles, arithmetic, selected vector functions, texture2D; compile diagnostics | No control flow or loops, user functions, arrays/structs, mat2/mat3, full built-in library, precision model, complete type conversion/overload rules, preprocessor |
@@ -47,13 +47,13 @@ This is a partial OpenGL ES 2.0-style software renderer, not a conformant GLES i
 | Render state and queries | Common viewport/scissor/cull/depth/blend/stencil state and selected queries | Broad GLES state/query coverage, extension strings, complete limits and exact invalid-operation/enum rules |
 | Calculator integration | Renderer core is separated from Gint and uses caller-provided surfaces | Current feature-branch implementation has not yet been validated by an fxSDK/SH cross-build or on the fx-CG50 |
 
-The triangle path is connected end-to-end: GL-style calls → linked vertex shader → vertex fetch → clip-space triangle → rasterizer → fragment shader → depth/stencil/blend → RGB565 surface. Points and lines have recently been added to the primitive path, but require dedicated regression tests and a fresh passing CI run before being considered verified.
+The triangle path is connected end-to-end: GL-style calls → linked vertex shader → vertex fetch → clip-space primitive → rasterizer → fragment shader → depth/stencil/blend → RGB565 surface. Basic point and line tests now cover point placement, homogeneous clipping and scissor-limited line coverage. These tests are useful regression checks, not a substitute for the GLES rasterization conformance suite.
 
 The shader compiler is intentionally a strict subset. It rejects unsupported syntax instead of pretending to implement it. A program that compiles here is not necessarily a valid program for every GLES 2.0 driver, and a GLES 2.0 program may use syntax or built-ins that this compiler does not yet accept.
 
 Current implementation budgets are eight vertex attributes, two texture units, eight varying scalar components, bounded shader/resource pools, a 128×128 texture dimension limit, and a 64 KiB aggregate RGB565 texture budget. These are provisional software limits, not hardware capability claims.
 
-The host suite has seven CTest targets: legacy triangle rasterizer, benchmark registry, texture sampler, GLES context/state, matrix/clipping, software triangle pipeline, and GLSL VM. The latest host workflow for this branch is being rerun after the attached-shader query link fix. Host test success alone would not establish calculator compatibility or Khronos conformance. No Khronos GLES conformance suite has been run.
+The host suite has seven CTest targets: legacy triangle rasterizer, benchmark registry, texture sampler, GLES context/state, matrix/clipping, software triangle pipeline, and GLSL VM. The latest host workflow passed on commit 6ce57c39dcb23209171d7cffcf88e6fec90ba61f (GitHub Actions run 42427197519). Host test success alone does not establish calculator compatibility or Khronos conformance. No Khronos GLES conformance suite has been run.
 
 
 ## 3. Feature roadmap
