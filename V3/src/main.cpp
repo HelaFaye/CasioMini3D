@@ -25,12 +25,11 @@ typedef struct CsvWriteArgs
     const BenchConfig* config;
 } CsvWriteArgs;
 
-// Fugue filesystem operations run in the OS world, not in Gint's world.
+// Fugue files live under the flash volume root, not a POSIX-style path.
 static int append_csv_in_os_world(void* opaque)
 {
     const CsvWriteArgs* args = (const CsvWriteArgs*)opaque;
-    // Fugue paths use a UNC-style volume prefix: \\fls0\file.
-    static const char path[] = "\\\\fls0\\benchmarks.csv";
+    static const char path[] = "\\fls0\\benchmarks.csv";
     static const char header[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
 
     FILE* file = fopen(path, "a+");
@@ -136,7 +135,6 @@ int main()
     cfg.width = SCREEN_WIDTH;
     cfg.height = SCREEN_HEIGHT;
 
-    // Give visible feedback before the blocking automatic startup suite.
     dclear(C_BLACK);
     dtext(8, 8, C_WHITE, "Running benchmark suite...");
     dupdate();
