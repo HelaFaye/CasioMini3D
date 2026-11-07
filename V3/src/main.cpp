@@ -1,12 +1,8 @@
 #include "display.hpp"
-#include "fixed.hpp"
-#include "types.hpp"
-#include "world.hpp"
 #include "bench.hpp"
 
+#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
 #include <gint/gint.h>
 
 static const BenchId BENCHMARKS[] = {
@@ -19,59 +15,190 @@ static BenchResult benchmark_results[BENCHMARK_COUNT];
 static bool benchmark_valid[BENCHMARK_COUNT];
 static bool benchmark_logged[BENCHMARK_COUNT];
 
-typedef struct CsvWriteArgs
+enum class CsvErrorStage : uint8_t
+{
+    None = 0,
+    WorldSwitch,
+    Open,
+    Create,
+    Seek,
+    Size,
+    HeaderWrite,
+    RowWrite,
+    Flush,
+    Stream,
+    Close
+};
+
+static CsvErrorStage benchmark_csv_error[BENCHMARK_COUNT];
+static int benchmark_csv_errno[BENCHMARK_COUNT];
+
+struct CsvWriteArgs
 {
     const BenchResult* result;
     const BenchConfig* config;
-} CsvWriteArgs;
+    CsvErrorStage error;
+    int error_number;
+};
 
-// Fugue filesystem operations run in the OS world, not in Gint's world.
+// Gint's POSIX/C99 filesystem API uses normalized paths. "/" is the
+// Fugue storage root; the raw "\\\\fls0\\..." prefix belongs to BFile.
+// File operations must run in the OS world on fx-CG targets.
 static int append_csv_in_os_world(void* opaque)
 {
-    const CsvWriteArgs* args = (const CsvWriteArgs*)opaque;
-    // Runtime path: \\fls0\benchmarks.csv. Escape the leading backslashes
-    // so C does not interpret \f or \b as form-feed/backspace characters.
-    static const char path[] = "\\\\fls0\\benchmarks.csv";
+    CsvWriteArgs* args = static_cast<CsvWriteArgs*>(opaque);
+    args->error = CsvErrorStage::None;
+    args->error_number = 0;
+
+    static const char path[] = "/benchmarks.csv";
     static const char header[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
 
-    FILE* file = fopen(path, "a+");
+    errno = 0;
+    FILE* file = fopen(path, "r+");
     if (!file)
-        return -1;
+    {
+        const int open_errno = errno;
+        if (open_errno != ENOENT)
+        {
+            args->error = CsvErrorStage::Open;
+            args->error_number = open_errno;
+            return static_cast<int>(args->error);
+        }
 
-    bool ok = true;
+        // Avoid relying on append-mode behavior: create only if absent,
+        // then explicitly seek to the end before writing.
+        errno = 0;
+        file = fopen(path, "w+");
+        if (!file)
+        {
+            args->error = CsvErrorStage::Create;
+            args->error_number = errno;
+            return static_cast<int>(args->error);
+        }
+    }
+
+    CsvErrorStage failure = CsvErrorStage::None;
+    int failure_errno = 0;
+
+    errno = 0;
     if (fseek(file, 0, SEEK_END) != 0)
-        ok = false;
+    {
+        failure = CsvErrorStage::Seek;
+        failure_errno = errno;
+    }
 
-    const long size = ok ? ftell(file) : -1;
-    if (size < 0)
-        ok = false;
+    long size = -1;
+    if (failure == CsvErrorStage::None)
+    {
+        errno = 0;
+        size = ftell(file);
+        if (size < 0)
+        {
+            failure = CsvErrorStage::Size;
+            failure_errno = errno;
+        }
+    }
 
-    if (ok && size == 0 && fprintf(file, "%s", header) < 0)
-        ok = false;
+    if (failure == CsvErrorStage::None && size == 0)
+    {
+        errno = 0;
+        if (fprintf(file, "%s", header) < 0)
+        {
+            failure = CsvErrorStage::HeaderWrite;
+            failure_errno = errno;
+        }
+    }
 
-    if (ok && fprintf(file, "%s,%lu,%lu,%lu,%.2f,%.3f\n",
-            args->result->name,
-            (unsigned long)args->config->warmup_frames,
-            (unsigned long)args->config->measure_frames,
-            (unsigned long)args->result->elapsed_ms,
-            args->result->fps,
-            args->result->avg_ms_per_frame) < 0)
-        ok = false;
+    if (failure == CsvErrorStage::None)
+    {
+        errno = 0;
+        if (fprintf(file, "%s,%lu,%lu,%lu,%.2f,%.3f\n",
+                args->result->name,
+                static_cast<unsigned long>(args->config->warmup_frames),
+                static_cast<unsigned long>(args->config->measure_frames),
+                static_cast<unsigned long>(args->result->elapsed_ms),
+                args->result->fps,
+                args->result->avg_ms_per_frame) < 0)
+        {
+            failure = CsvErrorStage::RowWrite;
+            failure_errno = errno;
+        }
+    }
 
-    if (ok && fflush(file) != 0)
-        ok = false;
-    if (ferror(file))
-        ok = false;
-    if (fclose(file) != 0)
-        ok = false;
+    if (failure == CsvErrorStage::None)
+    {
+        errno = 0;
+        if (fflush(file) != 0)
+        {
+            failure = CsvErrorStage::Flush;
+            failure_errno = errno;
+        }
+    }
 
-    return ok ? 0 : -1;
+    if (failure == CsvErrorStage::None && ferror(file))
+    {
+        failure = CsvErrorStage::Stream;
+        failure_errno = errno;
+    }
+
+    errno = 0;
+    if (fclose(file) != 0 && failure == CsvErrorStage::None)
+    {
+        failure = CsvErrorStage::Close;
+        failure_errno = errno;
+    }
+
+    args->error = failure;
+    args->error_number = failure_errno;
+    return static_cast<int>(failure);
 }
 
-static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
+static const char* csv_error_name(CsvErrorStage error)
 {
-    CsvWriteArgs args = {&result, &cfg};
-    return gint_world_switch(GINT_CALL(append_csv_in_os_world, &args)) == 0;
+    switch (error)
+    {
+        case CsvErrorStage::None:        return "CSV OK";
+        case CsvErrorStage::WorldSwitch: return "CSV SWITCH";
+        case CsvErrorStage::Open:        return "CSV OPEN";
+        case CsvErrorStage::Create:      return "CSV CREATE";
+        case CsvErrorStage::Seek:        return "CSV SEEK";
+        case CsvErrorStage::Size:        return "CSV SIZE";
+        case CsvErrorStage::HeaderWrite: return "CSV HEADER";
+        case CsvErrorStage::RowWrite:    return "CSV WRITE";
+        case CsvErrorStage::Flush:       return "CSV FLUSH";
+        case CsvErrorStage::Stream:      return "CSV STREAM";
+        case CsvErrorStage::Close:       return "CSV CLOSE";
+    }
+    return "CSV UNKNOWN";
+}
+
+static bool append_benchmark_result_csv(
+    const BenchResult& result,
+    const BenchConfig& cfg,
+    CsvErrorStage* error,
+    int* error_number)
+{
+    CsvWriteArgs args = {
+        &result,
+        &cfg,
+        CsvErrorStage::WorldSwitch,
+        0
+    };
+
+    const int switch_result = gint_world_switch(
+        GINT_CALL(append_csv_in_os_world, &args));
+
+    // If the callback did not run, retain the world-switch failure as the
+    // stage and preserve the switch result as its diagnostic code.
+    if (args.error == CsvErrorStage::WorldSwitch)
+        args.error_number = switch_result;
+
+    if (error)
+        *error = args.error;
+    if (error_number)
+        *error_number = args.error_number;
+
+    return switch_result == 0 && args.error == CsvErrorStage::None;
 }
 
 static bool run_and_store(size_t index, const BenchConfig& cfg)
@@ -79,13 +206,16 @@ static bool run_and_store(size_t index, const BenchConfig& cfg)
     BenchResult result = {};
     benchmark_valid[index] = false;
     benchmark_logged[index] = false;
+    benchmark_csv_error[index] = CsvErrorStage::None;
+    benchmark_csv_errno[index] = 0;
 
     if (!run_benchmark(BENCHMARKS[index], cfg, &result))
         return false;
 
     benchmark_results[index] = result;
     benchmark_valid[index] = true;
-    benchmark_logged[index] = append_benchmark_result_csv(result, cfg);
+    benchmark_logged[index] = append_benchmark_result_csv(
+        result, cfg, &benchmark_csv_error[index], &benchmark_csv_errno[index]);
     return true;
 }
 
@@ -96,6 +226,8 @@ static void run_suite(const BenchConfig& cfg)
         benchmark_valid[i] = false;
         benchmark_logged[i] = false;
         benchmark_results[i] = {};
+        benchmark_csv_error[i] = CsvErrorStage::None;
+        benchmark_csv_errno[i] = 0;
     }
 
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
@@ -109,17 +241,27 @@ static void draw_results()
 
     for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
     {
-        const int y = 34 + (int)i * 38;
+        const int y = 34 + static_cast<int>(i) * 38;
         dtext(8, y, C_WHITE, bench_name(BENCHMARKS[i]));
         if (benchmark_valid[i])
         {
             char fps[32];
             char ms[32];
+            char error_number[20];
             snprintf(fps, sizeof(fps), "FPS %.2f", benchmark_results[i].fps);
             snprintf(ms, sizeof(ms), "%.2f ms/frame", benchmark_results[i].avg_ms_per_frame);
             dtext(8, y + 15, C_WHITE, fps);
             dtext(145, y + 15, C_WHITE, ms);
-            dtext(300, y + 15, C_WHITE, benchmark_logged[i] ? "CSV OK" : "CSV FAIL");
+            dtext(300, y + 15, C_WHITE,
+                benchmark_logged[i] ? "CSV OK" : csv_error_name(benchmark_csv_error[i]));
+            if (!benchmark_logged[i])
+            {
+                if (benchmark_csv_error[i] == CsvErrorStage::WorldSwitch)
+                    snprintf(error_number, sizeof(error_number), "code %d", benchmark_csv_errno[i]);
+                else
+                    snprintf(error_number, sizeof(error_number), "errno %d", benchmark_csv_errno[i]);
+                dtext(300, y + 27, C_WHITE, error_number);
+            }
         }
         else
         {
@@ -133,7 +275,6 @@ static void draw_results()
 
 int main()
 {
-    srand(time(NULL));
     init_uv_map();
 
     BenchConfig cfg;

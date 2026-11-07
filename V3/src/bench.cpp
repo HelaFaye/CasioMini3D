@@ -34,10 +34,10 @@ static bool run_triangle_throughput_scene(const BenchConfig& cfg, uint32_t frame
         dclear(C_BLACK);
         for (uint32_t i = 0; i < cfg.triangle_count; ++i)
         {
-            const int x = (int)((i * 37u + frame * 3u) % (SCREEN_WIDTH - 32));
-            const int y = (int)((i * 23u + frame * 2u) % (SCREEN_HEIGHT - 32));
-            const int w = 12 + (int)(i % 20u);
-            const int h = 12 + (int)((i * 3u) % 20u);
+            const int x = static_cast<int>((i * 37u + frame * 3u) % (SCREEN_WIDTH - 32));
+            const int y = static_cast<int>((i * 23u + frame * 2u) % (SCREEN_HEIGHT - 32));
+            const int w = 12 + static_cast<int>(i % 20u);
+            const int h = 12 + static_cast<int>((i * 3u) % 20u);
 
             VertexLocal a = {x, y, 0, 0};
             VertexLocal b = {x + w, y + h / 2, FLOAT_TO_FIXED(39), 0};
@@ -56,10 +56,10 @@ static bool run_textured_geometry_scene(const BenchConfig& cfg, uint32_t frames)
         dclear(C_BLACK);
         for (uint32_t i = 0; i < cfg.triangle_count; ++i)
         {
-            const int x0 = (int)((i * 17u + frame * 2u) % (SCREEN_WIDTH - 48));
-            const int y0 = (int)((i * 19u + frame * 3u) % (SCREEN_HEIGHT - 48));
-            const int w = 16 + (int)(i % 16u);
-            const int h = 16 + (int)((i * 5u) % 16u);
+            const int x0 = static_cast<int>((i * 17u + frame * 2u) % (SCREEN_WIDTH - 48));
+            const int y0 = static_cast<int>((i * 19u + frame * 3u) % (SCREEN_HEIGHT - 48));
+            const int w = 16 + static_cast<int>(i % 16u);
+            const int h = 16 + static_cast<int>((i * 5u) % 16u);
 
             VertexLocal a = {x0, y0, 0, 0};
             VertexLocal b = {x0 + w, y0, FLOAT_TO_FIXED(39), 0};
@@ -116,20 +116,27 @@ bool run_benchmark(BenchId id, const BenchConfig& cfg, BenchResult* out)
     const uint32_t start_ticks = rtc_ticks();
     if (!execute_scene(id, cfg, cfg.measure_frames))
         return false;
-    const uint32_t elapsed_ticks = rtc_ticks() - start_ticks;
+    const uint32_t end_ticks = rtc_ticks();
+
+    // rtc_ticks() is the number of 128-Hz ticks since midnight. It resets
+    // at midnight, so use a one-day modulus rather than uint32_t wraparound.
+    constexpr uint32_t RTC_TICKS_PER_DAY = 24u * 60u * 60u * 128u;
+    const uint32_t elapsed_ticks = (end_ticks >= start_ticks)
+        ? (end_ticks - start_ticks)
+        : (RTC_TICKS_PER_DAY - start_ticks + end_ticks);
+
     if (elapsed_ticks == 0)
         return false;
 
-    // Gint's RTC counter advances at 128 ticks per second.
-    const double elapsed_ms = (double)elapsed_ticks * 1000.0 / 128.0;
+    const double elapsed_ms = static_cast<double>(elapsed_ticks) * 1000.0 / 128.0;
     if (elapsed_ms <= 0.0)
         return false;
 
     out->name = bench_name(id);
     out->warmup_frames = cfg.warmup_frames;
     out->measure_frames = cfg.measure_frames;
-    out->elapsed_ms = (uint32_t)(elapsed_ms + 0.5);
-    out->fps = (double)cfg.measure_frames * 1000.0 / elapsed_ms;
-    out->avg_ms_per_frame = elapsed_ms / (double)cfg.measure_frames;
+    out->elapsed_ms = static_cast<uint32_t>(elapsed_ms + 0.5);
+    out->fps = static_cast<double>(cfg.measure_frames) * 1000.0 / elapsed_ms;
+    out->avg_ms_per_frame = elapsed_ms / static_cast<double>(cfg.measure_frames);
     return true;
 }

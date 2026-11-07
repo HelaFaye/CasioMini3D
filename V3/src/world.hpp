@@ -62,6 +62,9 @@ public:
     World(int width, int height, int depth, Block *blocks[]);
     ~World();
 
+    World(const World&) = delete;
+    World& operator=(const World&) = delete;
+
     Block *get_block(int x, int y, int z);
     Block *get_block_unsafe(int x, int y, int z);
     void set_block(int x, int y, int z, Block *block);
@@ -71,9 +74,7 @@ public:
     void set_id_unsafe(int x, int y, int z, int id);
 
     bool DetectInRange(fVector3 position);
-    
     void Render();
 };
-
 
 #endif

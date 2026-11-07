@@ -12,19 +12,19 @@ typedef intmax_t fixed_t;
 
 #define FIXED_ONE (1 << PRECISION)
 
-/* Convert an integer to a fixed point number. */
-#define INT_TO_FIXED(num) (fixed_t)(num<<PRECISION)
+/* Convert an integer to a fixed point number without shifting a negative value. */
+#define INT_TO_FIXED(num) ((fixed_t)(num) * (fixed_t)FIXED_ONE)
 /* Convert a float to a fixed point number. */
-#define FLOAT_TO_FIXED(num) (fixed_t)(num*FIXED_ONE)
+#define FLOAT_TO_FIXED(num) ((fixed_t)((num) * FIXED_ONE))
 /* Convert a fixed point number to an integer. */
-#define TO_INT(num) (int)(num>>PRECISION)
+#define TO_INT(num) ((int)((num) >> PRECISION))
 /* Convert a fixed point number to a float. */
-#define TO_FLOAT(num) ((float)(num)/FIXED_ONE)
+#define TO_FLOAT(num) ((float)(num) / FIXED_ONE)
 /* Multiply two fixed point numbers together. */
-#define MUL(a, b) ((a*b)>>PRECISION)
+#define MUL(a, b) (((a) * (b)) >> PRECISION)
 
-#define DIV(a, b) ((a<<PRECISION)/b)
-
+/* Divide with a fixed-point numerator without shifting a signed value. */
+#define DIV(a, b) (((fixed_t)(a) * (fixed_t)FIXED_ONE) / (b))
 
 
 static inline fixed_t fixed_abs(fixed_t x)
@@ -41,8 +41,8 @@ static inline fixed_t fmul(fixed_t left, fixed_t right)
 
 static inline fixed_t fdiv(fixed_t left, fixed_t right)
 {
-    /* Pretty slow */
-    intmax_t d = left << PRECISION;
+    /* Inputs are expected to remain in the renderer's normal fixed-point range. */
+    intmax_t d = left * (intmax_t)FIXED_ONE;
     return d / right;
 }
 
