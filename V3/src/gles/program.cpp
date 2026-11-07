@@ -1,4 +1,5 @@
 #include <GLES2/gl2.h>
+#include <fxgl/platform.h>
 #include "context_internal.hpp"
 
 #include <algorithm>
