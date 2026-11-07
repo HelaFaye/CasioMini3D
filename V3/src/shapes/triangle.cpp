@@ -6,6 +6,12 @@ template<bool Textured>
 struct RasterEdge
 {
     int x;
+};
+
+template<>
+struct RasterEdge<true>
+{
+    int x;
     fixed_t u;
     fixed_t v;
 };
@@ -15,7 +21,12 @@ static RasterEdge<Textured> CalcEdge(VertexLocal a, VertexLocal b, int y)
 {
     const int64_t delta_y = static_cast<int64_t>(b.y) - a.y;
     if (delta_y == 0)
-        return {a.x, a.u, a.v};
+    {
+        if constexpr (Textured)
+            return {a.x, a.u, a.v};
+        else
+            return {a.x};
+    }
 
     // Keep coordinate differences wider than int. This matters when a
     // triangle crosses the screen from very large off-screen coordinates.
@@ -25,19 +36,16 @@ static RasterEdge<Textured> CalcEdge(VertexLocal a, VertexLocal b, int y)
     const int64_t x_offset = (delta_x * factor) >> PRECISION;
     const int64_t x = static_cast<int64_t>(a.x) + x_offset;
 
-    RasterEdge<Textured> edge = {
-        static_cast<int>(x),
-        0,
-        0
-    };
-
     if constexpr (Textured)
     {
-        edge.u = a.u + (((b.u - a.u) * factor) >> PRECISION);
-        edge.v = a.v + (((b.v - a.v) * factor) >> PRECISION);
+        const fixed_t u = a.u + (((b.u - a.u) * factor) >> PRECISION);
+        const fixed_t v = a.v + (((b.v - a.v) * factor) >> PRECISION);
+        return {static_cast<int>(x), u, v};
     }
-
-    return edge;
+    else
+    {
+        return {static_cast<int>(x)};
+    }
 }
 
 template<bool Textured>
