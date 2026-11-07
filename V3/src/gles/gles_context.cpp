@@ -20,6 +20,10 @@ constexpr size_t FXGL_MAX_TEXTURES = 8;
 constexpr size_t FXGL_MAX_TEXTURE_UNITS = 2;
 constexpr size_t FXGL_MAX_TEXTURE_BYTES = 64u * 1024u;
 constexpr GLint FXGL_MAX_TEXTURE_SIZE = 128;
+constexpr size_t FXGL_MAX_FRAMEBUFFERS = 4;
+constexpr size_t FXGL_MAX_RENDERBUFFERS = 8;
+constexpr size_t FXGL_MAX_RENDERBUFFER_BYTES = 128u * 1024u;
+constexpr GLint FXGL_MAX_RENDERBUFFER_SIZE = 128;
 
 struct BufferObject
 {
@@ -40,6 +44,33 @@ struct TextureObject
     GLenum mag_filter = GL_NEAREST;
     GLenum wrap_s = GL_CLAMP_TO_EDGE;
     GLenum wrap_t = GL_CLAMP_TO_EDGE;
+    bool reserved = false;
+    bool alive = false;
+};
+
+struct FramebufferAttachment
+{
+    GLenum object_type = GL_NONE;
+    GLuint object_name = 0;
+    GLint texture_level = 0;
+};
+
+struct FramebufferObject
+{
+    bool reserved = false;
+    bool alive = false;
+    FramebufferAttachment color;
+    FramebufferAttachment depth;
+    FramebufferAttachment stencil;
+};
+
+struct RenderbufferObject
+{
+    uint8_t *storage = nullptr;
+    size_t bytes = 0;
+    GLsizei width = 0;
+    GLsizei height = 0;
+    GLenum internal_format = 0;
     bool reserved = false;
     bool alive = false;
 };
@@ -80,6 +111,11 @@ struct Context
 
     TextureObject textures[FXGL_MAX_TEXTURES] = {};
     size_t texture_bytes = 0;
+    FramebufferObject framebuffers[FXGL_MAX_FRAMEBUFFERS] = {};
+    RenderbufferObject renderbuffers[FXGL_MAX_RENDERBUFFERS] = {};
+    size_t renderbuffer_bytes = 0;
+    GLuint framebuffer_binding = 0;
+    GLuint renderbuffer_binding = 0;
     GLuint texture_binding_2d[FXGL_MAX_TEXTURE_UNITS] = {};
     size_t active_texture_unit = 0;
     GLint unpack_alignment = 4;
@@ -239,6 +275,222 @@ static void destroy_textures(Context& context)
     for (GLuint& binding : context.texture_binding_2d)
         binding = 0;
     context.active_texture_unit = 0;
+}
+
+static FramebufferObject *framebuffer_slot(GLuint name)
+{
+    if (name == 0 || name > FXGL_MAX_FRAMEBUFFERS)
+        return nullptr;
+    FramebufferObject& object = g_context.framebuffers[name - 1];
+    return object.reserved ? &object : nullptr;
+}
+
+static FramebufferObject *find_framebuffer(GLuint name)
+{
+    FramebufferObject *object = framebuffer_slot(name);
+    return object && object->alive ? object : nullptr;
+}
+
+static RenderbufferObject *renderbuffer_slot(GLuint name)
+{
+    if (name == 0 || name > FXGL_MAX_RENDERBUFFERS)
+        return nullptr;
+    RenderbufferObject& object = g_context.renderbuffers[name - 1];
+    return object.reserved ? &object : nullptr;
+}
+
+static RenderbufferObject *find_renderbuffer(GLuint name)
+{
+    RenderbufferObject *object = renderbuffer_slot(name);
+    return object && object->alive ? object : nullptr;
+}
+
+static FramebufferAttachment *bound_attachment(GLenum attachment)
+{
+    FramebufferObject *framebuffer = find_framebuffer(
+        g_context.framebuffer_binding);
+    if (!framebuffer)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+
+    switch (attachment)
+    {
+        case GL_COLOR_ATTACHMENT0: return &framebuffer->color;
+        case GL_DEPTH_ATTACHMENT: return &framebuffer->depth;
+        case GL_STENCIL_ATTACHMENT: return &framebuffer->stencil;
+        default:
+            set_error(GL_INVALID_ENUM);
+            return nullptr;
+    }
+}
+
+static bool attachment_dimensions(
+    const FramebufferAttachment& attachment,
+    GLsizei& width,
+    GLsizei& height,
+    GLenum expected_format)
+{
+    if (attachment.object_type == GL_TEXTURE)
+    {
+        if (attachment.texture_level != 0 || expected_format != GL_RGB565)
+            return false;
+        TextureObject *texture = find_texture(attachment.object_name);
+        if (!texture || !texture->pixels || texture->width == 0 ||
+            texture->height == 0)
+            return false;
+        width = texture->width;
+        height = texture->height;
+        return true;
+    }
+
+    if (attachment.object_type == GL_RENDERBUFFER)
+    {
+        RenderbufferObject *renderbuffer =
+            find_renderbuffer(attachment.object_name);
+        if (!renderbuffer || !renderbuffer->storage ||
+            renderbuffer->width <= 0 || renderbuffer->height <= 0 ||
+            renderbuffer->internal_format != expected_format)
+            return false;
+        width = renderbuffer->width;
+        height = renderbuffer->height;
+        return true;
+    }
+
+    return false;
+}
+
+static GLenum framebuffer_status()
+{
+    if (g_context.framebuffer_binding == 0)
+        return g_context.surface.color ? GL_FRAMEBUFFER_COMPLETE
+                                       : GL_FRAMEBUFFER_UNSUPPORTED;
+
+    FramebufferObject *framebuffer =
+        find_framebuffer(g_context.framebuffer_binding);
+    if (!framebuffer)
+        return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+
+    const FramebufferAttachment *attachments[3] = {
+        &framebuffer->color, &framebuffer->depth, &framebuffer->stencil
+    };
+    const GLenum formats[3] = {
+        GL_RGB565, GL_DEPTH_COMPONENT16, GL_STENCIL_INDEX8
+    };
+
+    bool has_attachment = false;
+    GLsizei reference_width = 0;
+    GLsizei reference_height = 0;
+
+    for (size_t i = 0; i < 3; ++i)
+    {
+        const FramebufferAttachment& attachment = *attachments[i];
+        if (attachment.object_type == GL_NONE)
+            continue;
+        has_attachment = true;
+
+        GLsizei width = 0;
+        GLsizei height = 0;
+        if (!attachment_dimensions(attachment, width, height, formats[i]))
+            return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+
+        if (width > FXGL_MAX_RENDERBUFFER_SIZE ||
+            height > FXGL_MAX_RENDERBUFFER_SIZE)
+            return GL_FRAMEBUFFER_UNSUPPORTED;
+
+        if (reference_width == 0)
+        {
+            reference_width = width;
+            reference_height = height;
+        }
+        else if (width != reference_width || height != reference_height)
+        {
+            return GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS;
+        }
+    }
+
+    return has_attachment ? GL_FRAMEBUFFER_COMPLETE
+                          : GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+}
+
+static bool resolve_draw_surface(fxgl_surface_t& surface)
+{
+    if (g_context.framebuffer_binding == 0)
+    {
+        surface = g_context.surface;
+        return surface.color != nullptr;
+    }
+    if (framebuffer_status() != GL_FRAMEBUFFER_COMPLETE)
+        return false;
+
+    FramebufferObject *framebuffer =
+        find_framebuffer(g_context.framebuffer_binding);
+    if (!framebuffer)
+        return false;
+
+    surface = {};
+    GLsizei width = 0;
+    GLsizei height = 0;
+    if (framebuffer->color.object_type == GL_TEXTURE)
+    {
+        TextureObject *texture = find_texture(framebuffer->color.object_name);
+        if (!texture)
+            return false;
+        surface.color = texture->pixels;
+        width = texture->width;
+        height = texture->height;
+    }
+    else if (framebuffer->color.object_type == GL_RENDERBUFFER)
+    {
+        RenderbufferObject *renderbuffer =
+            find_renderbuffer(framebuffer->color.object_name);
+        if (!renderbuffer || renderbuffer->internal_format != GL_RGB565)
+            return false;
+        surface.color = reinterpret_cast<uint16_t *>(renderbuffer->storage);
+        width = renderbuffer->width;
+        height = renderbuffer->height;
+    }
+    else
+    {
+        return false;
+    }
+
+    if (framebuffer->depth.object_type == GL_RENDERBUFFER)
+    {
+        RenderbufferObject *renderbuffer =
+            find_renderbuffer(framebuffer->depth.object_name);
+        if (!renderbuffer)
+            return false;
+        surface.depth = reinterpret_cast<uint16_t *>(renderbuffer->storage);
+    }
+    if (framebuffer->stencil.object_type == GL_RENDERBUFFER)
+    {
+        RenderbufferObject *renderbuffer =
+            find_renderbuffer(framebuffer->stencil.object_name);
+        if (!renderbuffer)
+            return false;
+        surface.stencil = renderbuffer->storage;
+    }
+
+    surface.width = width;
+    surface.height = height;
+    surface.stride = width;
+    return true;
+}
+
+static void destroy_framebuffer_resources(Context& context)
+{
+    for (RenderbufferObject& renderbuffer : context.renderbuffers)
+    {
+        std::free(renderbuffer.storage);
+        renderbuffer = {};
+    }
+    for (FramebufferObject& framebuffer : context.framebuffers)
+        framebuffer = {};
+    context.renderbuffer_bytes = 0;
+    context.framebuffer_binding = 0;
+    context.renderbuffer_binding = 0;
 }
 
 static bool valid_buffer_usage(GLenum usage)
