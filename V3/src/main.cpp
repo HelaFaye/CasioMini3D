@@ -6,9 +6,7 @@
 #include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
-#include <gint/bfile.h>
 
 clock_t lastTime = 0;
 
@@ -22,96 +20,61 @@ static const int UI_TEXT_X = 8;
 static const int UI_TEXT_TOP = 8;
 static const int LEGEND_TOP = 148;
 
-static void utf16_from_cstr(const char* src, uint16_t* out, size_t max_chars)
+static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
 {
-    size_t i = 0;
-    while (src[i] != '\0' && i + 1 < max_chars)
-    {
-        out[i] = (uint16_t)(unsigned char)src[i];
-        ++i;
-    }
-    out[i] = 0;
-}
-
-static bool open_or_create_results_log(uint16_t filename[32], int* out_handle)
-{
+    static const char kLogPath[] = "fls0:benchmarks.csv";
     static const char kCsvHeader[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
 
-    int handle = Bfile_OpenFile(filename, BFile_ReadWrite);
-    if (handle < 0)
+    FILE* file = fopen(kLogPath, "a");
+    if (!file)
     {
-        if (Bfile_CreateFile(filename, 4096) < 0)
-            return false;
-        handle = Bfile_OpenFile(filename, BFile_ReadWrite);
-        if (handle < 0)
+        file = fopen(kLogPath, "w");
+        if (!file)
             return false;
 
-        const size_t header_len = strlen(kCsvHeader);
-        if (Bfile_WriteFile(handle, kCsvHeader, (int)header_len) < 0)
+        if (fprintf(file, "%s", kCsvHeader) < 0)
         {
-            Bfile_CloseFile(handle);
+            fclose(file);
             return false;
         }
     }
     else
     {
-        const long current_size = Bfile_SeekFile(handle, 0, BFile_SeekEnd);
-        if (current_size < 0)
+        if (fseek(file, 0, SEEK_END) == 0)
         {
-            Bfile_CloseFile(handle);
-            return false;
-        }
-
-        if (current_size == 0)
-        {
-            const size_t header_len = strlen(kCsvHeader);
-            if (Bfile_WriteFile(handle, kCsvHeader, (int)header_len) < 0)
+            long size = ftell(file);
+            if (size == 0)
             {
-                Bfile_CloseFile(handle);
-                return false;
+                if (fprintf(file, "%s", kCsvHeader) < 0)
+                {
+                    fclose(file);
+                    return false;
+                }
             }
-        }
-
-        if (Bfile_SeekFile(handle, 0, BFile_SeekEnd) < 0)
-        {
-            Bfile_CloseFile(handle);
-            return false;
+            else
+            {
+                fseek(file, 0, SEEK_END);
+            }
         }
     }
 
-    *out_handle = handle;
-    return true;
-}
-
-static bool append_benchmark_result_csv(const BenchResult& result, const BenchConfig& cfg)
-{
-    static const char kLogPath[] = "fls0:benchmarks.csv";
-    uint16_t filename[32];
-    utf16_from_cstr(kLogPath, filename, sizeof(filename) / sizeof(filename[0]));
-
-    int handle = -1;
-    if (!open_or_create_results_log(filename, &handle))
-        return false;
-
-    char line[256];
-    const int written = snprintf(line, sizeof(line),
-        "%s,%u,%u,%u,%.2f,%.3f\n",
+    const int written = fprintf(file,
+        "%s,%lu,%lu,%lu,%.2f,%.3f\n",
         result.name,
-        cfg.warmup_frames,
-        cfg.measure_frames,
-        result.elapsed_ms,
+        (unsigned long)cfg.warmup_frames,
+        (unsigned long)cfg.measure_frames,
+        (unsigned long)result.elapsed_ms,
         result.fps,
         result.avg_ms_per_frame);
 
-    if (written <= 0)
+    if (written < 0)
     {
-        Bfile_CloseFile(handle);
+        fclose(file);
         return false;
     }
 
-    const bool ok = Bfile_WriteFile(handle, line, written) >= 0;
-    Bfile_CloseFile(handle);
-    return ok;
+    fclose(file);
+    return true;
 }
 
 void dclock()
@@ -148,8 +111,7 @@ static void print_benchmark_legend()
 {
     dtext(UI_TEXT_X, LEGEND_TOP, C_WHITE, "F6: clear-only");
     dtext(UI_TEXT_X, LEGEND_TOP + 14, C_WHITE, "EXE: triangles");
-    dtext(UI_TEXT_X, LEGEND_TOP + 28, C_WHITE, "DEL: textured");
-    dtext(UI_TEXT_X, LEGEND_TOP + 42, C_WHITE, "MENU: quit");
+    dtext(UI_TEXT_X, LEGEND_TOP + 28, C_WHITE, "MENU: quit");
 }
 
 int main(){
@@ -192,11 +154,6 @@ int main(){
         if(keydown(KEY_EXE))
         {
             selected_bench = BenchId::TriangleThroughput;
-            mode = AppMode::Benchmark;
-        }
-        if(keydown(KEY_DEL))
-        {
-            selected_bench = BenchId::TexturedGeometry;
             mode = AppMode::Benchmark;
         }
 
