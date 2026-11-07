@@ -29,7 +29,8 @@ typedef struct CsvWriteArgs
 static int append_csv_in_os_world(void* opaque)
 {
     const CsvWriteArgs* args = (const CsvWriteArgs*)opaque;
-    static const char path[] = "\\fls0\\benchmarks.csv";
+    // Fugue paths use a UNC-style volume prefix: \\fls0\file.
+    static const char path[] = "\\\\fls0\\benchmarks.csv";
     static const char header[] = "name,warmup_frames,measure_frames,elapsed_ms,fps,avg_ms_per_frame\n";
 
     FILE* file = fopen(path, "a+");
