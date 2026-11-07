@@ -62,3 +62,16 @@ add_executable(gles_math_tests
 target_compile_features(gles_math_tests PRIVATE cxx_std_20)
 target_compile_options(gles_math_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME gles_math_pipeline COMMAND gles_math_tests)
+
+add_executable(gles_pipeline_tests
+    test_gles_pipeline.cpp
+    ../../src/gles/math.cpp
+    ../../src/gles/pipeline.cpp
+)
+
+target_compile_features(gles_pipeline_tests PRIVATE cxx_std_20)
+target_compile_options(gles_pipeline_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(gles_pipeline_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+)
+add_test(NAME gles_software_pipeline COMMAND gles_pipeline_tests)
