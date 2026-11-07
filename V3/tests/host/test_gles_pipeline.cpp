@@ -256,6 +256,66 @@ void test_scissor_and_stencil_operations()
     assert(stencil[1 * 4 + 1] == 8);
 }
 
+void test_point_rasterization_and_clip_rejection()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    SolidColor yellow = {{1.0f, 1.0f, 0.0f, 1.0f}};
+
+    const ClipVertex center = vertex(0.0f, 0.0f, 0.0f, 1.0f);
+    RasterStats stats = {};
+    assert(fxgl::draw_point(surface, state, center, 0,
+        solid_fragment, &yellow, &stats));
+    assert(stats.input_points == 1);
+    assert(stats.tested_fragments == 1);
+    assert(stats.written_fragments == 1);
+    assert(color[2 * 4 + 2] == 0xffe0);
+
+    const ClipVertex outside = vertex(2.0f, 0.0f, 0.0f, 1.0f);
+    assert(!fxgl::draw_point(surface, state, outside, 0,
+        solid_fragment, &yellow, &stats));
+    assert(stats.input_points == 1);
+    assert(stats.written_fragments == 0);
+}
+
+void test_line_clipping_and_scissor_fragment_bounds()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    state.scissor_enabled = true;
+    state.scissor[0] = 1;
+    state.scissor[1] = 2;
+    state.scissor[2] = 2;
+    state.scissor[3] = 1;
+    SolidColor cyan = {{0.0f, 1.0f, 1.0f, 1.0f}};
+
+    const ClipVertex line[2] = {
+        vertex(-2.0f, 0.0f, 0.0f, 1.0f),
+        vertex(0.5f, 0.0f, 0.0f, 1.0f)
+    };
+    RasterStats stats = {};
+    assert(fxgl::draw_line(surface, state, line, 0,
+        solid_fragment, &cyan, &stats));
+    assert(stats.input_lines == 1);
+    assert(stats.written_fragments == 2);
+    assert(color[2 * 4 + 1] == 0x07ff);
+    assert(color[2 * 4 + 2] == 0x07ff);
+    assert(color[2 * 4 + 0] == 0x0000);
+    assert(color[2 * 4 + 3] == 0x0000);
+}
+
 void test_perspective_correct_varying_interpolation()
 {
     uint16_t color[16];
@@ -293,6 +353,8 @@ int main()
     test_depth_comparison_and_write_mask();
     test_alpha_blending_and_color_mask();
     test_scissor_and_stencil_operations();
+    test_point_rasterization_and_clip_rejection();
+    test_line_clipping_and_scissor_fragment_bounds();
     test_perspective_correct_varying_interpolation();
 
     std::puts("GLES software pipeline tests: PASS");
