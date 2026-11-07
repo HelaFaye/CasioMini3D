@@ -118,6 +118,38 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_FUNC_SUBTRACT 0x800A
 #define GL_FUNC_REVERSE_SUBTRACT 0x800B
 
+#define GL_NONE 0
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_RENDERBUFFER 0x8D41
+#define GL_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_RENDERBUFFER_BINDING 0x8CA7
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_DEPTH_ATTACHMENT 0x8D00
+#define GL_STENCIL_ATTACHMENT 0x8D20
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT 0x8CD6
+#define GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT 0x8CD7
+#define GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS 0x8CD9
+#define GL_FRAMEBUFFER_UNSUPPORTED 0x8CDD
+#define GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE 0x8CD0
+#define GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME 0x8CD1
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL 0x8CD2
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE 0x8CD3
+#define GL_RENDERBUFFER_WIDTH 0x8D42
+#define GL_RENDERBUFFER_HEIGHT 0x8D43
+#define GL_RENDERBUFFER_INTERNAL_FORMAT 0x8D44
+#define GL_RENDERBUFFER_RED_SIZE 0x8D50
+#define GL_RENDERBUFFER_GREEN_SIZE 0x8D51
+#define GL_RENDERBUFFER_BLUE_SIZE 0x8D52
+#define GL_RENDERBUFFER_ALPHA_SIZE 0x8D53
+#define GL_RENDERBUFFER_DEPTH_SIZE 0x8D54
+#define GL_RENDERBUFFER_STENCIL_SIZE 0x8D55
+#define GL_RGB565 0x8D62
+#define GL_DEPTH_COMPONENT16 0x81A5
+#define GL_STENCIL_INDEX8 0x8D48
+#define GL_RENDERBUFFER_MAX_SIZE 0x84E8
+#define GL_INVALID_FRAMEBUFFER_OPERATION 0x0506
+
 #define GL_TEXTURE_2D 0x0DE1
 #define GL_UNPACK_ALIGNMENT 0x0CF5
 #define GL_PACK_ALIGNMENT 0x0D05
@@ -259,6 +291,26 @@ void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)
 void glUniform1i(GLint location, GLint v0);
 void glUniformMatrix4fv(GLint location, GLsizei count,
     GLboolean transpose, const GLfloat *value);
+
+GLboolean glIsFramebuffer(GLuint framebuffer);
+void glGenFramebuffers(GLsizei n, GLuint *framebuffers);
+void glDeleteFramebuffers(GLsizei n, const GLuint *framebuffers);
+void glBindFramebuffer(GLenum target, GLuint framebuffer);
+void glFramebufferTexture2D(GLenum target, GLenum attachment,
+    GLenum textarget, GLuint texture, GLint level);
+void glFramebufferRenderbuffer(GLenum target, GLenum attachment,
+    GLenum renderbuffertarget, GLuint renderbuffer);
+GLenum glCheckFramebufferStatus(GLenum target);
+void glGetFramebufferAttachmentParameteriv(GLenum target, GLenum attachment,
+    GLenum pname, GLint *params);
+
+GLboolean glIsRenderbuffer(GLuint renderbuffer);
+void glGenRenderbuffers(GLsizei n, GLuint *renderbuffers);
+void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers);
+void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
+void glRenderbufferStorage(GLenum target, GLenum internalformat,
+    GLsizei width, GLsizei height);
+void glGetRenderbufferParameteriv(GLenum target, GLenum pname, GLint *params);
 
 void glPixelStorei(GLenum pname, GLint param);
 GLboolean glIsTexture(GLuint texture);
