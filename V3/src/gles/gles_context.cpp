@@ -1847,12 +1847,482 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
             if (binding == name)
                 binding = 0;
 
+        for (FramebufferObject& framebuffer : g_context.framebuffers)
+        {
+            FramebufferAttachment *attachments[3] = {
+                &framebuffer.color, &framebuffer.depth, &framebuffer.stencil
+            };
+            for (FramebufferAttachment *attachment : attachments)
+                if (attachment->object_type == GL_TEXTURE &&
+                    attachment->object_name == name)
+                    *attachment = {};
+        }
+
         if (object->alive)
         {
             g_context.texture_bytes -= object->bytes;
             std::free(object->pixels);
         }
         *object = {};
+    }
+}
+
+GLboolean glIsFramebuffer(GLuint framebuffer)
+{
+    if (!has_context()) return GL_FALSE;
+    return find_framebuffer(framebuffer) ? GL_TRUE : GL_FALSE;
+}
+
+void glGenFramebuffers(GLsizei n, GLuint *framebuffers)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !framebuffers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    size_t available = 0;
+    for (const FramebufferObject& object : g_context.framebuffers)
+        if (!object.reserved) ++available;
+    if (available < static_cast<size_t>(n))
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+
+    GLsizei generated = 0;
+    for (size_t i = 0; i < FXGL_MAX_FRAMEBUFFERS && generated < n; ++i)
+    {
+        if (!g_context.framebuffers[i].reserved)
+        {
+            g_context.framebuffers[i] = {};
+            g_context.framebuffers[i].reserved = true;
+            framebuffers[generated++] = static_cast<GLuint>(i + 1);
+        }
+    }
+}
+
+void glDeleteFramebuffers(GLsizei n, const GLuint *framebuffers)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !framebuffers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    for (GLsizei i = 0; i < n; ++i)
+    {
+        FramebufferObject *object = framebuffer_slot(framebuffers[i]);
+        if (!object)
+            continue;
+        if (g_context.framebuffer_binding == framebuffers[i])
+            g_context.framebuffer_binding = 0;
+        *object = {};
+    }
+}
+
+void glBindFramebuffer(GLenum target, GLuint framebuffer)
+{
+    if (!has_context()) return;
+    if (target != GL_FRAMEBUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (framebuffer != 0)
+    {
+        FramebufferObject *object = framebuffer_slot(framebuffer);
+        if (!object)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        object->alive = true;
+    }
+    g_context.framebuffer_binding = framebuffer;
+}
+
+void glFramebufferTexture2D(
+    GLenum target,
+    GLenum attachment,
+    GLenum textarget,
+    GLuint texture,
+    GLint level)
+{
+    if (!has_context()) return;
+    if (target != GL_FRAMEBUFFER || textarget != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (level < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (attachment != GL_COLOR_ATTACHMENT0 &&
+        attachment != GL_DEPTH_ATTACHMENT &&
+        attachment != GL_STENCIL_ATTACHMENT)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (g_context.framebuffer_binding == 0)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (texture != 0 && !find_texture(texture))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    FramebufferAttachment *destination = bound_attachment(attachment);
+    if (!destination) return;
+    if (texture == 0)
+        *destination = {};
+    else
+        *destination = {GL_TEXTURE, texture, level};
+}
+
+void glFramebufferRenderbuffer(
+    GLenum target,
+    GLenum attachment,
+    GLenum renderbuffertarget,
+    GLuint renderbuffer)
+{
+    if (!has_context()) return;
+    if (target != GL_FRAMEBUFFER || renderbuffertarget != GL_RENDERBUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (attachment != GL_COLOR_ATTACHMENT0 &&
+        attachment != GL_DEPTH_ATTACHMENT &&
+        attachment != GL_STENCIL_ATTACHMENT)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (g_context.framebuffer_binding == 0)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (renderbuffer != 0 && !find_renderbuffer(renderbuffer))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    FramebufferAttachment *destination = bound_attachment(attachment);
+    if (!destination) return;
+    if (renderbuffer == 0)
+        *destination = {};
+    else
+        *destination = {GL_RENDERBUFFER, renderbuffer, 0};
+}
+
+GLenum glCheckFramebufferStatus(GLenum target)
+{
+    if (!has_context()) return 0;
+    if (target != GL_FRAMEBUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return 0;
+    }
+    return framebuffer_status();
+}
+
+void glGetFramebufferAttachmentParameteriv(
+    GLenum target,
+    GLenum attachment,
+    GLenum pname,
+    GLint *params)
+{
+    if (!has_context()) return;
+    if (target != GL_FRAMEBUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (attachment != GL_COLOR_ATTACHMENT0 &&
+        attachment != GL_DEPTH_ATTACHMENT &&
+        attachment != GL_STENCIL_ATTACHMENT)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (g_context.framebuffer_binding == 0)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    FramebufferAttachment *source = bound_attachment(attachment);
+    if (!source) return;
+    switch (pname)
+    {
+        case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE:
+            *params = static_cast<GLint>(source->object_type);
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME:
+            *params = static_cast<GLint>(source->object_name);
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL:
+            if (source->object_type != GL_TEXTURE)
+            {
+                set_error(GL_INVALID_ENUM);
+                return;
+            }
+            *params = source->texture_level;
+            break;
+        case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE:
+            if (source->object_type != GL_TEXTURE)
+            {
+                set_error(GL_INVALID_ENUM);
+                return;
+            }
+            *params = 0;
+            break;
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
+    }
+}
+
+GLboolean glIsRenderbuffer(GLuint renderbuffer)
+{
+    if (!has_context()) return GL_FALSE;
+    return find_renderbuffer(renderbuffer) ? GL_TRUE : GL_FALSE;
+}
+
+void glGenRenderbuffers(GLsizei n, GLuint *renderbuffers)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !renderbuffers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    size_t available = 0;
+    for (const RenderbufferObject& object : g_context.renderbuffers)
+        if (!object.reserved) ++available;
+    if (available < static_cast<size_t>(n))
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+
+    GLsizei generated = 0;
+    for (size_t i = 0; i < FXGL_MAX_RENDERBUFFERS && generated < n; ++i)
+    {
+        if (!g_context.renderbuffers[i].reserved)
+        {
+            g_context.renderbuffers[i] = {};
+            g_context.renderbuffers[i].reserved = true;
+            renderbuffers[generated++] = static_cast<GLuint>(i + 1);
+        }
+    }
+}
+
+void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !renderbuffers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    for (GLsizei i = 0; i < n; ++i)
+    {
+        RenderbufferObject *object = renderbuffer_slot(renderbuffers[i]);
+        if (!object)
+            continue;
+
+        if (g_context.renderbuffer_binding == renderbuffers[i])
+            g_context.renderbuffer_binding = 0;
+
+        for (FramebufferObject& framebuffer : g_context.framebuffers)
+        {
+            FramebufferAttachment *attachments[3] = {
+                &framebuffer.color, &framebuffer.depth, &framebuffer.stencil
+            };
+            for (FramebufferAttachment *attachment : attachments)
+            {
+                if (attachment->object_type == GL_RENDERBUFFER &&
+                    attachment->object_name == renderbuffers[i])
+                    *attachment = {};
+            }
+        }
+
+        if (object->alive)
+        {
+            g_context.renderbuffer_bytes -= object->bytes;
+            std::free(object->storage);
+        }
+        *object = {};
+    }
+}
+
+void glBindRenderbuffer(GLenum target, GLuint renderbuffer)
+{
+    if (!has_context()) return;
+    if (target != GL_RENDERBUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (renderbuffer != 0)
+    {
+        RenderbufferObject *object = renderbuffer_slot(renderbuffer);
+        if (!object)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        object->alive = true;
+    }
+    g_context.renderbuffer_binding = renderbuffer;
+}
+
+void glRenderbufferStorage(
+    GLenum target,
+    GLenum internalformat,
+    GLsizei width,
+    GLsizei height)
+{
+    if (!has_context()) return;
+    if (target != GL_RENDERBUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (width < 0 || height < 0 ||
+        width > FXGL_MAX_RENDERBUFFER_SIZE ||
+        height > FXGL_MAX_RENDERBUFFER_SIZE)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    size_t bytes_per_pixel = 0;
+    if (internalformat == GL_RGB565 ||
+        internalformat == GL_DEPTH_COMPONENT16)
+        bytes_per_pixel = sizeof(uint16_t);
+    else if (internalformat == GL_STENCIL_INDEX8)
+        bytes_per_pixel = sizeof(uint8_t);
+    else
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    RenderbufferObject *object =
+        find_renderbuffer(g_context.renderbuffer_binding);
+    if (!object)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    const size_t pixels =
+        static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t new_bytes = pixels * bytes_per_pixel;
+    const size_t retained = g_context.renderbuffer_bytes - object->bytes;
+    if (new_bytes > FXGL_MAX_RENDERBUFFER_BYTES - retained)
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+
+    uint8_t *storage = nullptr;
+    if (new_bytes > 0)
+    {
+        storage = static_cast<uint8_t *>(std::malloc(new_bytes));
+        if (!storage)
+        {
+            set_error(GL_OUT_OF_MEMORY);
+            return;
+        }
+        std::memset(storage, 0, new_bytes);
+    }
+
+    std::free(object->storage);
+    object->storage = storage;
+    object->bytes = new_bytes;
+    object->width = width;
+    object->height = height;
+    object->internal_format = internalformat;
+    g_context.renderbuffer_bytes = retained + new_bytes;
+}
+
+void glGetRenderbufferParameteriv(
+    GLenum target,
+    GLenum pname,
+    GLint *params)
+{
+    if (!has_context()) return;
+    if (target != GL_RENDERBUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    RenderbufferObject *object =
+        find_renderbuffer(g_context.renderbuffer_binding);
+    if (!object)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    switch (pname)
+    {
+        case GL_RENDERBUFFER_WIDTH:
+            *params = object->width;
+            break;
+        case GL_RENDERBUFFER_HEIGHT:
+            *params = object->height;
+            break;
+        case GL_RENDERBUFFER_INTERNAL_FORMAT:
+            *params = static_cast<GLint>(object->internal_format);
+            break;
+        case GL_RENDERBUFFER_RED_SIZE:
+            *params = object->internal_format == GL_RGB565 ? 5 : 0;
+            break;
+        case GL_RENDERBUFFER_GREEN_SIZE:
+            *params = object->internal_format == GL_RGB565 ? 6 : 0;
+            break;
+        case GL_RENDERBUFFER_BLUE_SIZE:
+            *params = object->internal_format == GL_RGB565 ? 5 : 0;
+            break;
+        case GL_RENDERBUFFER_ALPHA_SIZE:
+            *params = 0;
+            break;
+        case GL_RENDERBUFFER_DEPTH_SIZE:
+            *params = object->internal_format == GL_DEPTH_COMPONENT16 ? 16 : 0;
+            break;
+        case GL_RENDERBUFFER_STENCIL_SIZE:
+            *params = object->internal_format == GL_STENCIL_INDEX8 ? 8 : 0;
+            break;
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
     }
 }
 
