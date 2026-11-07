@@ -23,6 +23,8 @@ The current benchmark set is intentionally small:
 
 These are not a full desktop OpenGL or glmark2 port. In particular, the benchmark suite does not yet measure a general 3D mesh pipeline, per-pixel depth testing, or perspective-correct texture mapping.
 
+A separate draft feature branch, `feature/fxmark-texture-sampler-p2`, is building an OpenGL ES 2.0-style software graphics core. It currently contains GL-style context/state and buffer/texture object APIs, RGB565 nearest/bilinear texture sampling, column-major matrix and homogeneous clipping utilities, and a host-tested triangle pipeline with perspective-correct varyings, culling, scissor, depth, stencil and blending. This is not yet a complete GLES implementation: shader/program objects and the standard `glDrawArrays` / `glDrawElements` paths are not implemented. The compatibility roadmap documents exact current coverage and limits in [docs/opengl-compatibility-roadmap.md](docs/opengl-compatibility-roadmap.md).
+
 ## Repository layout
 
 - `V3/` — active benchmark/demo application
