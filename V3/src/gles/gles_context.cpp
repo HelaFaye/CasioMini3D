@@ -1,5 +1,6 @@
 #include <GLES2/gl2.h>
 #include <fxgl/platform.h>
+#include "../gfx/texture.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,19 @@ struct BufferObject
     uint8_t *data = nullptr;
     size_t size = 0;
     GLenum usage = GL_STATIC_DRAW;
+    bool alive = false;
+};
+
+struct TextureObject
+{
+    uint16_t *pixels = nullptr;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    size_t bytes = 0;
+    GLenum min_filter = GL_NEAREST;
+    GLenum mag_filter = GL_NEAREST;
+    GLenum wrap_s = GL_CLAMP_TO_EDGE;
+    GLenum wrap_t = GL_CLAMP_TO_EDGE;
     bool alive = false;
 };
 
@@ -43,6 +57,11 @@ struct Context
     GLuint array_buffer_binding = 0;
     GLuint element_buffer_binding = 0;
     VertexAttribute attributes[FXGL_MAX_VERTEX_ATTRIBS] = {};
+
+    TextureObject textures[FXGL_MAX_TEXTURES] = {};
+    size_t texture_bytes = 0;
+    GLuint texture_binding_2d[FXGL_MAX_TEXTURE_UNITS] = {};
+    size_t active_texture_unit = 0;
 
     GLint viewport[4] = {};
     GLint scissor[4] = {};
@@ -117,6 +136,67 @@ static BufferObject *bound_buffer(GLenum target)
     if (!object)
         set_error(GL_INVALID_OPERATION);
     return object;
+}
+
+static TextureObject *find_texture(GLuint name)
+{
+    if (name == 0 || name > FXGL_MAX_TEXTURES)
+        return nullptr;
+    TextureObject& object = g_context.textures[name - 1];
+    return object.alive ? &object : nullptr;
+}
+
+static TextureObject *bound_texture(GLenum target)
+{
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return nullptr;
+    }
+
+    const GLuint name =
+        g_context.texture_binding_2d[g_context.active_texture_unit];
+    if (name == 0)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+
+    TextureObject *object = find_texture(name);
+    if (!object)
+        set_error(GL_INVALID_OPERATION);
+    return object;
+}
+
+static gfx::TextureSampler make_sampler(const TextureObject& object)
+{
+    gfx::TextureSampler sampler = {};
+    sampler.filter = object.mag_filter == GL_LINEAR
+        ? gfx::TextureFilter::Bilinear : gfx::TextureFilter::Nearest;
+    sampler.address_u = object.wrap_s == GL_REPEAT
+        ? gfx::TextureAddressMode::Repeat :
+        (object.wrap_s == GL_MIRRORED_REPEAT
+            ? gfx::TextureAddressMode::MirroredRepeat
+            : gfx::TextureAddressMode::Clamp);
+    sampler.address_v = object.wrap_t == GL_REPEAT
+        ? gfx::TextureAddressMode::Repeat :
+        (object.wrap_t == GL_MIRRORED_REPEAT
+            ? gfx::TextureAddressMode::MirroredRepeat
+            : gfx::TextureAddressMode::Clamp);
+    return sampler;
+}
+
+static void destroy_textures(Context& context)
+{
+    for (TextureObject& object : context.textures)
+    {
+        std::free(object.pixels);
+        object = {};
+    }
+    context.texture_bytes = 0;
+    for (GLuint& binding : context.texture_binding_2d)
+        binding = 0;
+    context.active_texture_unit = 0;
 }
 
 static bool valid_buffer_usage(GLenum usage)
@@ -291,7 +371,10 @@ GLboolean fxglMakeCurrent(const fxgl_surface_t *surface)
         return GL_FALSE;
 
     if (g_context.current)
+    {
         destroy_buffers(g_context);
+        destroy_textures(g_context);
+    }
 
     Context next = {};
     next.current = true;
@@ -319,6 +402,7 @@ GLboolean fxglMakeCurrent(const fxgl_surface_t *surface)
 void fxglReleaseCurrent(void)
 {
     destroy_buffers(g_context);
+    destroy_textures(g_context);
     g_context = {};
 }
 
@@ -630,6 +714,295 @@ void glGetVertexAttribPointerv(GLuint index, GLenum pname, GLvoid **pointer)
     *pointer = const_cast<GLvoid *>(g_context.attributes[index].pointer);
 }
 
+void glGenTextures(GLsizei n, GLuint *textures)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !textures))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    size_t available = 0;
+    for (const TextureObject& object : g_context.textures)
+        if (!object.alive) ++available;
+    if (available < static_cast<size_t>(n))
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+
+    GLsizei generated = 0;
+    for (size_t i = 0; i < FXGL_MAX_TEXTURES && generated < n; ++i)
+    {
+        if (!g_context.textures[i].alive)
+        {
+            g_context.textures[i] = {};
+            g_context.textures[i].alive = true;
+            textures[generated++] = static_cast<GLuint>(i + 1);
+        }
+    }
+}
+
+void glDeleteTextures(GLsizei n, const GLuint *textures)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !textures))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    for (GLsizei i = 0; i < n; ++i)
+    {
+        TextureObject *object = find_texture(textures[i]);
+        if (!object)
+            continue;
+
+        const GLuint name = textures[i];
+        for (GLuint& binding : g_context.texture_binding_2d)
+            if (binding == name)
+                binding = 0;
+
+        g_context.texture_bytes -= object->bytes;
+        std::free(object->pixels);
+        *object = {};
+    }
+}
+
+void glActiveTexture(GLenum texture)
+{
+    if (!has_context()) return;
+    if (texture < GL_TEXTURE0 ||
+        texture >= GL_TEXTURE0 + FXGL_MAX_TEXTURE_UNITS)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    g_context.active_texture_unit =
+        static_cast<size_t>(texture - GL_TEXTURE0);
+}
+
+void glBindTexture(GLenum target, GLuint texture)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (texture != 0 && !find_texture(texture))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    g_context.texture_binding_2d[g_context.active_texture_unit] = texture;
+}
+
+void glTexParameteri(GLenum target, GLenum pname, GLint param)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    TextureObject *object = bound_texture(target);
+    if (!object) return;
+
+    switch (pname)
+    {
+        case GL_TEXTURE_MIN_FILTER:
+        case GL_TEXTURE_MAG_FILTER:
+            if (param == GL_NEAREST || param == GL_LINEAR)
+            {
+                if (pname == GL_TEXTURE_MIN_FILTER)
+                    object->min_filter = static_cast<GLenum>(param);
+                else
+                    object->mag_filter = static_cast<GLenum>(param);
+            }
+            else if (param == GL_NEAREST_MIPMAP_NEAREST ||
+                     param == GL_LINEAR_MIPMAP_NEAREST ||
+                     param == GL_NEAREST_MIPMAP_LINEAR ||
+                     param == GL_LINEAR_MIPMAP_LINEAR)
+            {
+                /* Valid GLES enums, but mip chains are not implemented yet. */
+                set_error(GL_INVALID_OPERATION);
+            }
+            else
+            {
+                set_error(GL_INVALID_ENUM);
+            }
+            break;
+
+        case GL_TEXTURE_WRAP_S:
+        case GL_TEXTURE_WRAP_T:
+            if (param != GL_CLAMP_TO_EDGE && param != GL_REPEAT &&
+                param != GL_MIRRORED_REPEAT)
+            {
+                set_error(GL_INVALID_ENUM);
+                return;
+            }
+            if (pname == GL_TEXTURE_WRAP_S)
+                object->wrap_s = static_cast<GLenum>(param);
+            else
+                object->wrap_t = static_cast<GLenum>(param);
+            break;
+
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
+    }
+}
+
+void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    TextureObject *object = bound_texture(target);
+    if (!object) return;
+
+    switch (pname)
+    {
+        case GL_TEXTURE_MIN_FILTER:
+            *params = static_cast<GLint>(object->min_filter);
+            break;
+        case GL_TEXTURE_MAG_FILTER:
+            *params = static_cast<GLint>(object->mag_filter);
+            break;
+        case GL_TEXTURE_WRAP_S:
+            *params = static_cast<GLint>(object->wrap_s);
+            break;
+        case GL_TEXTURE_WRAP_T:
+            *params = static_cast<GLint>(object->wrap_t);
+            break;
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
+    }
+}
+
+void glTexImage2D(
+    GLenum target,
+    GLint level,
+    GLint internalformat,
+    GLsizei width,
+    GLsizei height,
+    GLint border,
+    GLenum format,
+    GLenum type,
+    const GLvoid *pixels)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D || format != GL_RGB ||
+        type != GL_UNSIGNED_SHORT_5_6_5)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (level != 0 || width < 0 || height < 0 || border != 0 ||
+        width > FXGL_MAX_TEXTURE_SIZE || height > FXGL_MAX_TEXTURE_SIZE)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (internalformat != static_cast<GLint>(format))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    TextureObject *object = bound_texture(target);
+    if (!object) return;
+
+    const size_t texels = static_cast<size_t>(width) *
+                          static_cast<size_t>(height);
+    const size_t new_bytes = texels * sizeof(uint16_t);
+    const size_t retained = g_context.texture_bytes - object->bytes;
+    if (new_bytes > FXGL_MAX_TEXTURE_BYTES - retained)
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+
+    uint16_t *new_pixels = nullptr;
+    if (new_bytes > 0)
+    {
+        new_pixels = static_cast<uint16_t *>(std::malloc(new_bytes));
+        if (!new_pixels)
+        {
+            set_error(GL_OUT_OF_MEMORY);
+            return;
+        }
+        if (pixels)
+            std::memcpy(new_pixels, pixels, new_bytes);
+        else
+            std::memset(new_pixels, 0, new_bytes);
+    }
+
+    std::free(object->pixels);
+    object->pixels = new_pixels;
+    object->width = static_cast<uint16_t>(width);
+    object->height = static_cast<uint16_t>(height);
+    object->bytes = new_bytes;
+    g_context.texture_bytes = retained + new_bytes;
+}
+
+void glTexSubImage2D(
+    GLenum target,
+    GLint level,
+    GLint xoffset,
+    GLint yoffset,
+    GLsizei width,
+    GLsizei height,
+    GLenum format,
+    GLenum type,
+    const GLvoid *pixels)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D || format != GL_RGB ||
+        type != GL_UNSIGNED_SHORT_5_6_5)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (level != 0 || xoffset < 0 || yoffset < 0 || width < 0 || height < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    TextureObject *object = bound_texture(target);
+    if (!object) return;
+
+    const int64_t right = static_cast<int64_t>(xoffset) + width;
+    const int64_t bottom = static_cast<int64_t>(yoffset) + height;
+    if (!object->pixels || right > object->width || bottom > object->height)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (width > 0 && height > 0 && !pixels)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    const uint16_t *source = static_cast<const uint16_t *>(pixels);
+    for (GLsizei row = 0; row < height; ++row)
+    {
+        uint16_t *destination = object->pixels +
+            static_cast<size_t>(yoffset + row) * object->width + xoffset;
+        std::memcpy(destination, source + static_cast<size_t>(row) * width,
+                    static_cast<size_t>(width) * sizeof(uint16_t));
+    }
+}
+
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 {
     if (!has_context()) return;
@@ -909,8 +1282,19 @@ void glGetIntegerv(GLenum pname, GLint *data)
         case GL_MAX_VERTEX_ATTRIBS:
             data[0] = static_cast<GLint>(FXGL_MAX_VERTEX_ATTRIBS);
             break;
+        case GL_ACTIVE_TEXTURE:
+            data[0] = static_cast<GLint>(
+                GL_TEXTURE0 + g_context.active_texture_unit);
+            break;
+        case GL_TEXTURE_BINDING_2D:
+            data[0] = static_cast<GLint>(
+                g_context.texture_binding_2d[g_context.active_texture_unit]);
+            break;
+        case GL_MAX_TEXTURE_IMAGE_UNITS:
+            data[0] = static_cast<GLint>(FXGL_MAX_TEXTURE_UNITS);
+            break;
         case GL_MAX_TEXTURE_SIZE:
-            data[0] = 128;
+            data[0] = FXGL_MAX_TEXTURE_SIZE;
             break;
         case GL_MAX_VIEWPORT_DIMS:
             data[0] = g_context.surface.width;
