@@ -41,6 +41,20 @@ static bool compare_values(GLenum function, uint32_t reference, uint32_t value)
     }
 }
 
+static bool valid_blend_factor(GLenum factor)
+{
+    return factor == GL_ZERO || factor == GL_ONE ||
+           factor == GL_SRC_COLOR || factor == GL_ONE_MINUS_SRC_COLOR ||
+           factor == GL_SRC_ALPHA || factor == GL_ONE_MINUS_SRC_ALPHA ||
+           factor == GL_DST_ALPHA || factor == GL_ONE_MINUS_DST_ALPHA ||
+           factor == GL_DST_COLOR || factor == GL_ONE_MINUS_DST_COLOR ||
+           factor == GL_SRC_ALPHA_SATURATE ||
+           factor == GL_CONSTANT_COLOR ||
+           factor == GL_ONE_MINUS_CONSTANT_COLOR ||
+           factor == GL_CONSTANT_ALPHA ||
+           factor == GL_ONE_MINUS_CONSTANT_ALPHA;
+}
+
 static bool valid_stencil_operation(GLenum operation)
 {
     return operation == GL_ZERO || operation == GL_KEEP ||
@@ -75,7 +89,11 @@ static bool valid_state(const PipelineState& state)
     if (!valid_compare_function(state.depth_function) ||
         !cull_face_ok || !front_face_ok || !blend_equation_ok ||
         !valid_face_state(state.stencil_front) ||
-        !valid_face_state(state.stencil_back))
+        !valid_face_state(state.stencil_back) ||
+        !valid_blend_factor(state.blend_src_rgb) ||
+        !valid_blend_factor(state.blend_dst_rgb) ||
+        !valid_blend_factor(state.blend_src_alpha) ||
+        !valid_blend_factor(state.blend_dst_alpha))
         return false;
 
     if (state.viewport[2] < 0 || state.viewport[3] < 0 ||
@@ -270,8 +288,10 @@ static void blend_pixel(
             source_factor, channel, source, destination, state.blend_color);
         const float df = blend_factor(
             destination_factor, channel, source, destination, state.blend_color);
-        output[channel] = clamp01(blend_channel(
-            equation, source[channel], destination[channel], sf, df));
+        output[channel] = state.color_write[channel]
+            ? clamp01(blend_channel(
+                equation, source[channel], destination[channel], sf, df))
+            : destination[channel];
     }
     destination_pixel = pack_rgb565(output);
 }
