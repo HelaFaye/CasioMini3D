@@ -1,74 +1,139 @@
 #include "shapes.hpp"
 
-struct Edge { int x, y; fixed_t u, v; };
+#include <stdint.h>
 
-inline Edge CalcEdge(VertexLocal a, VertexLocal b, int y)
+template<bool Textured>
+struct RasterEdge
 {
-    const fixed_t deltaY = static_cast<fixed_t>(b.y) - a.y;
-    if (deltaY == 0)
-        return {a.x, y, a.u, a.v};
+    int x;
+    fixed_t u;
+    fixed_t v;
+};
 
-    // Promote before subtraction/multiplication: screen coordinates are ints,
-    // while the interpolation factor is 16.16 fixed point.
-    const fixed_t factor =
-        ((static_cast<fixed_t>(y) - a.y) * FIXED_ONE) / deltaY;
-    const int x = a.x + static_cast<int>(
-        ((static_cast<fixed_t>(b.x) - a.x) * factor) >> PRECISION);
-    const fixed_t u = a.u + (((b.u - a.u) * factor) >> PRECISION);
-    const fixed_t v = a.v + (((b.v - a.v) * factor) >> PRECISION);
-    return {x, y, u, v};
+template<bool Textured>
+static RasterEdge<Textured> CalcEdge(VertexLocal a, VertexLocal b, int y)
+{
+    const int64_t delta_y = static_cast<int64_t>(b.y) - a.y;
+    if (delta_y == 0)
+        return {a.x, a.u, a.v};
+
+    // Keep coordinate differences wider than int. This matters when a
+    // triangle crosses the screen from very large off-screen coordinates.
+    const int64_t factor =
+        ((static_cast<int64_t>(y) - a.y) * FIXED_ONE) / delta_y;
+    const int64_t delta_x = static_cast<int64_t>(b.x) - a.x;
+    const int64_t x_offset = (delta_x * factor) >> PRECISION;
+    const int64_t x = static_cast<int64_t>(a.x) + x_offset;
+
+    RasterEdge<Textured> edge = {
+        static_cast<int>(x),
+        0,
+        0
+    };
+
+    if constexpr (Textured)
+    {
+        edge.u = a.u + (((b.u - a.u) * factor) >> PRECISION);
+        edge.v = a.v + (((b.v - a.v) * factor) >> PRECISION);
+    }
+
+    return edge;
 }
 
-inline void ProcessScanline(
-    int y, int Ax, int Bx,
-    fixed_t Au, fixed_t Av, fixed_t Bu, fixed_t Bv)
+template<bool Textured>
+static void ProcessScanline(
+    int y,
+    RasterEdge<Textured> a,
+    RasterEdge<Textured> b,
+    int solid_color)
 {
-    if (Bx == Ax)
+    if (a.x == b.x)
         return;
 
-    if (Ax > Bx)
+    if (a.x > b.x)
     {
-        std::swap(Ax, Bx);
-        std::swap(Au, Bu);
-        std::swap(Av, Bv);
+        const int old_x = a.x;
+        a.x = b.x;
+        b.x = old_x;
+
+        if constexpr (Textured)
+        {
+            const fixed_t old_u = a.u;
+            const fixed_t old_v = a.v;
+            a.u = b.u;
+            a.v = b.v;
+            b.u = old_u;
+            b.v = old_v;
+        }
     }
 
-    const int startX = std::max(Ax, 0);
-    const int endX = std::min(Bx, SCREEN_WIDTH - 1);
-    const fixed_t len = static_cast<fixed_t>(Bx) - Ax;
+    const int start_x = (a.x < 0) ? 0 : a.x;
+    const int end_x = (b.x >= SCREEN_WIDTH) ? SCREEN_WIDTH - 1 : b.x;
+    if (start_x > end_x)
+        return;
 
-    const fixed_t du = (Bu - Au) / len;
-    const fixed_t dv = (Bv - Av) / len;
-
-    fixed_t u = Au + du * (static_cast<fixed_t>(startX) - Ax);
-    fixed_t v = Av + dv * (static_cast<fixed_t>(startX) - Ax);
-
-    for (int x = startX; x <= endX; ++x)
+    if constexpr (Textured)
     {
-        const int pixelColor = get_uv_map(TO_INT(u), TO_INT(v));
-        DrawPixel(x, y, pixelColor);
-        u += du;
-        v += dv;
+        const fixed_t length = static_cast<fixed_t>(b.x) - a.x;
+        const fixed_t du = (b.u - a.u) / length;
+        const fixed_t dv = (b.v - a.v) / length;
+
+        fixed_t u = a.u + du * (static_cast<fixed_t>(start_x) - a.x);
+        fixed_t v = a.v + dv * (static_cast<fixed_t>(start_x) - a.x);
+
+        for (int x = start_x; x <= end_x; ++x)
+        {
+            DrawPixel(x, y, get_uv_map(TO_INT(u), TO_INT(v)));
+            u += du;
+            v += dv;
+        }
+    }
+    else
+    {
+        // No UV interpolation, texture lookup, or per-pixel shader dispatch.
+        for (int x = start_x; x <= end_x; ++x)
+            DrawPixel(x, y, solid_color);
     }
 }
 
-void DrawTriangle(VertexLocal v0, VertexLocal v1, VertexLocal v2)
+template<bool Textured>
+static void RasterizeTriangle(
+    VertexLocal v0,
+    VertexLocal v1,
+    VertexLocal v2,
+    int solid_color)
 {
     if (v1.y < v0.y) std::swap(v0, v1);
     if (v2.y < v0.y) std::swap(v0, v2);
     if (v2.y < v1.y) std::swap(v1, v2);
 
+    // Degenerate horizontal triangles have no covered scanlines.
     if (v2.y == v0.y)
         return;
 
-    const int startY = std::max(v0.y, 0);
-    const int endY = std::min(v2.y, SCREEN_HEIGHT - 1);
+    const int start_y = (v0.y < 0) ? 0 : v0.y;
+    const int end_y = (v2.y >= SCREEN_HEIGHT) ? SCREEN_HEIGHT - 1 : v2.y;
+    if (start_y > end_y)
+        return;
 
-    for (int y = startY; y <= endY; ++y)
+    for (int y = start_y; y <= end_y; ++y)
     {
-        const bool second_half = y > v1.y || v1.y == v0.y;
-        const Edge A = CalcEdge(v0, v2, y);
-        const Edge B = second_half ? CalcEdge(v1, v2, y) : CalcEdge(v0, v1, y);
-        ProcessScanline(y, A.x, B.x, A.u, A.v, B.u, B.v);
+        const bool second_half = (y > v1.y) || (v1.y == v0.y);
+        const RasterEdge<Textured> a = CalcEdge<Textured>(v0, v2, y);
+        const RasterEdge<Textured> b = second_half
+            ? CalcEdge<Textured>(v1, v2, y)
+            : CalcEdge<Textured>(v0, v1, y);
+
+        ProcessScanline<Textured>(y, a, b, solid_color);
     }
+}
+
+void DrawTriangle(VertexLocal v0, VertexLocal v1, VertexLocal v2)
+{
+    RasterizeTriangle<true>(v0, v1, v2, C_WHITE);
+}
+
+void DrawTriangleSolid(VertexLocal v0, VertexLocal v1, VertexLocal v2, int color)
+{
+    RasterizeTriangle<false>(v0, v1, v2, color);
 }
