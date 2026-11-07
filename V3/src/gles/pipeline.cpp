@@ -480,9 +480,6 @@ static bool rasterize_one(
     const bool top_left_1 = top_left_edge(vertices[2], vertices[0]);
     const bool top_left_2 = top_left_edge(vertices[0], vertices[1]);
 
-    const StencilFaceState& stencil_face = front
-        ? state.stencil_front : state.stencil_back;
-
     bool wrote_any = false;
     float varyings[MAX_VARYINGS] = {};
     for (int64_t y = y0; y <= y1; ++y)
@@ -756,11 +753,11 @@ bool draw_point(
     const float min_x = static_cast<float>(std::max(0, state.viewport[0]));
     const float min_y = static_cast<float>(std::max(0, state.viewport[1]));
     const float max_x = static_cast<float>(std::min(
-        surface.width, static_cast<int64_t>(state.viewport[0]) +
-        state.viewport[2]));
+        static_cast<int64_t>(surface.width),
+        static_cast<int64_t>(state.viewport[0]) + state.viewport[2]));
     const float max_y = static_cast<float>(std::min(
-        surface.height, static_cast<int64_t>(state.viewport[1]) +
-        state.viewport[3]));
+        static_cast<int64_t>(surface.height),
+        static_cast<int64_t>(state.viewport[1]) + state.viewport[3]));
     if (state.scissor_enabled)
     {
         if (min_x >= max_x || min_y >= max_y)
