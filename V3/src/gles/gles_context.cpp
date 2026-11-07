@@ -1331,6 +1331,16 @@ void glBlendEquationSeparate(GLenum mode_rgb, GLenum mode_alpha)
     g_context.blend_equation_alpha = mode_alpha;
 }
 
+void glStencilFunc(GLenum func, GLint ref, GLuint mask)
+{
+    glStencilFuncSeparate(GL_FRONT_AND_BACK, func, ref, mask);
+}
+
+void glStencilOp(GLenum stencil_fail, GLenum depth_fail, GLenum depth_pass)
+{
+    glStencilOpSeparate(GL_FRONT_AND_BACK, stencil_fail, depth_fail, depth_pass);
+}
+
 void glStencilFuncSeparate(
     GLenum face,
     GLenum func,
@@ -1540,8 +1550,56 @@ void glGetIntegerv(GLenum pname, GLint *data)
         case GL_BLEND_EQUATION_RGB:
             data[0] = static_cast<GLint>(g_context.blend_equation);
             break;
+        case GL_BLEND_SRC_ALPHA:
+            data[0] = static_cast<GLint>(g_context.blend_src_alpha);
+            break;
+        case GL_BLEND_DST_ALPHA:
+            data[0] = static_cast<GLint>(g_context.blend_dst_alpha);
+            break;
+        case GL_BLEND_EQUATION_ALPHA:
+            data[0] = static_cast<GLint>(g_context.blend_equation_alpha);
+            break;
         case GL_STENCIL_WRITEMASK:
             data[0] = static_cast<GLint>(g_context.stencil_mask);
+            break;
+        case GL_STENCIL_FUNC:
+            data[0] = static_cast<GLint>(g_context.stencil_front.function);
+            break;
+        case GL_STENCIL_REF:
+            data[0] = g_context.stencil_front.reference;
+            break;
+        case GL_STENCIL_VALUE_MASK:
+            data[0] = static_cast<GLint>(g_context.stencil_front.value_mask);
+            break;
+        case GL_STENCIL_FAIL:
+            data[0] = static_cast<GLint>(g_context.stencil_front.stencil_fail);
+            break;
+        case GL_STENCIL_PASS_DEPTH_FAIL:
+            data[0] = static_cast<GLint>(g_context.stencil_front.depth_fail);
+            break;
+        case GL_STENCIL_PASS_DEPTH_PASS:
+            data[0] = static_cast<GLint>(g_context.stencil_front.depth_pass);
+            break;
+        case GL_STENCIL_BACK_FUNC:
+            data[0] = static_cast<GLint>(g_context.stencil_back.function);
+            break;
+        case GL_STENCIL_BACK_REF:
+            data[0] = g_context.stencil_back.reference;
+            break;
+        case GL_STENCIL_BACK_VALUE_MASK:
+            data[0] = static_cast<GLint>(g_context.stencil_back.value_mask);
+            break;
+        case GL_STENCIL_BACK_WRITEMASK:
+            data[0] = static_cast<GLint>(g_context.stencil_back.write_mask);
+            break;
+        case GL_STENCIL_BACK_FAIL:
+            data[0] = static_cast<GLint>(g_context.stencil_back.stencil_fail);
+            break;
+        case GL_STENCIL_BACK_PASS_DEPTH_FAIL:
+            data[0] = static_cast<GLint>(g_context.stencil_back.depth_fail);
+            break;
+        case GL_STENCIL_BACK_PASS_DEPTH_PASS:
+            data[0] = static_cast<GLint>(g_context.stencil_back.depth_pass);
             break;
         case GL_ARRAY_BUFFER_BINDING:
             data[0] = static_cast<GLint>(g_context.array_buffer_binding);
@@ -1615,6 +1673,18 @@ void glGetFloatv(GLenum pname, GLfloat *data)
     if (pname == GL_DEPTH_CLEAR_VALUE)
     {
         data[0] = g_context.clear_depth;
+        return;
+    }
+    if (pname == GL_DEPTH_RANGE)
+    {
+        data[0] = g_context.depth_near;
+        data[1] = g_context.depth_far;
+        return;
+    }
+    if (pname == GL_BLEND_COLOR)
+    {
+        for (int i = 0; i < 4; ++i)
+            data[i] = g_context.blend_color[i];
         return;
     }
 
