@@ -2713,6 +2713,111 @@ void glClear(GLbitfield mask)
     }
 }
 
+void glReadPixels(
+    GLint x,
+    GLint y,
+    GLsizei width,
+    GLsizei height,
+    GLenum format,
+    GLenum type,
+    GLvoid *pixels)
+{
+    if (!has_context()) return;
+    if (width < 0 || height < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (format != GL_RGBA && format != GL_RGB)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    const bool packed_565 =
+        format == GL_RGB && type == GL_UNSIGNED_SHORT_5_6_5;
+    if (!packed_565 && type != GL_UNSIGNED_BYTE)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    if (width == 0 || height == 0)
+        return;
+    if (!pixels)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    fxgl_surface_t surface = {};
+    if (!resolve_draw_surface(surface) || !surface.color)
+    {
+        set_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return;
+    }
+
+    const size_t bytes_per_pixel = packed_565 ? 2 :
+        (format == GL_RGBA ? 4 : 3);
+    const size_t row_bytes = static_cast<size_t>(width) * bytes_per_pixel;
+    if (row_bytes > std::numeric_limits<size_t>::max() - 7)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    const size_t alignment = static_cast<size_t>(g_context.pack_alignment);
+    const size_t row_stride =
+        (row_bytes + alignment - 1) & ~(alignment - 1);
+    if (static_cast<size_t>(height) >
+        std::numeric_limits<size_t>::max() / row_stride)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    uint8_t *destination = static_cast<uint8_t *>(pixels);
+    for (GLsizei row_index = 0; row_index < height; ++row_index)
+    {
+        uint8_t *destination_row =
+            destination + static_cast<size_t>(row_index) * row_stride;
+        const int64_t source_y = static_cast<int64_t>(y) + row_index;
+
+        for (GLsizei column = 0; column < width; ++column)
+        {
+            const int64_t source_x = static_cast<int64_t>(x) + column;
+            uint16_t source_pixel = 0;
+            if (source_x >= 0 && source_y >= 0 &&
+                source_x < surface.width && source_y < surface.height)
+            {
+                source_pixel = surface.color[
+                    static_cast<size_t>(source_y) * surface.stride +
+                    static_cast<size_t>(source_x)];
+            }
+
+            if (packed_565)
+            {
+                std::memcpy(destination_row +
+                    static_cast<size_t>(column) * sizeof(uint16_t),
+                    &source_pixel, sizeof(source_pixel));
+                continue;
+            }
+
+            const uint8_t red = static_cast<uint8_t>(
+                (((source_pixel >> 11) & 0x1f) * 255 + 15) / 31);
+            const uint8_t green = static_cast<uint8_t>(
+                (((source_pixel >> 5) & 0x3f) * 255 + 31) / 63);
+            const uint8_t blue = static_cast<uint8_t>(
+                ((source_pixel & 0x1f) * 255 + 15) / 31);
+            const size_t offset = static_cast<size_t>(column) * bytes_per_pixel;
+            destination_row[offset + 0] = red;
+            destination_row[offset + 1] = green;
+            destination_row[offset + 2] = blue;
+            if (format == GL_RGBA)
+                destination_row[offset + 3] = 255;
+        }
+    }
+}
+
 void glEnable(GLenum cap)
 {
     if (!has_context()) return;
