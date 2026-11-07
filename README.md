@@ -73,7 +73,7 @@ cmake --build /tmp/casiomini3d-host-tests
 ctest --test-dir /tmp/casiomini3d-host-tests --output-on-failure
 ```
 
-These tests compile the production triangle source with minimal Gint header stubs. They validate CPU rasterization behavior, not the target display driver or SH cross-build.
+These tests compile the production triangle rasterizer and benchmark runner with minimal Gint header stubs. They validate CPU-side behavior, not the target display driver, filesystem, or SH cross-build.
 
 The exact workload semantics and measurement limitations are documented in [docs/fxmark-design.md](docs/fxmark-design.md). Results measure this calculator's software drawing and display path. They are not directly comparable to desktop/mobile glmark2 scores.
 
