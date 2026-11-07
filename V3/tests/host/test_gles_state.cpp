@@ -9,6 +9,20 @@
 
 namespace
 {
+struct TestFragmentColor
+{
+    float rgba[4];
+};
+
+bool test_fragment_shader(const float *, size_t, float rgba[4], void *user_data)
+{
+    const TestFragmentColor& color =
+        *static_cast<const TestFragmentColor *>(user_data);
+    for (int i = 0; i < 4; ++i)
+        rgba[i] = color.rgba[i];
+    return true;
+}
+
 constexpr uint16_t RED = 0xf800;
 constexpr uint16_t GREEN = 0x07e0;
 constexpr uint16_t BLUE = 0x001f;
@@ -401,6 +415,66 @@ void test_rgb565_unpack_alignment()
     fxglReleaseCurrent();
 }
 
+void test_context_drives_software_pipeline()
+{
+    uint16_t color[16] = {};
+    uint16_t depth[16];
+    uint8_t stencil[16] = {};
+    for (size_t i = 0; i < 16; ++i)
+        depth[i] = 0xffff;
+
+    fxgl_surface_t surface = {color, depth, stencil, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    fxgl::ClipVertex triangle[3] = {};
+    triangle[0].position = {-1.0f, -1.0f, 0.0f, 1.0f};
+    triangle[1].position = {1.0f, -1.0f, 0.0f, 1.0f};
+    triangle[2].position = {-1.0f, 1.0f, 0.0f, 1.0f};
+
+    TestFragmentColor red = {{1.0f, 0.0f, 0.0f, 1.0f}};
+    TestFragmentColor blue = {{0.0f, 0.0f, 1.0f, 1.0f}};
+    TestFragmentColor green = {{0.0f, 1.0f, 0.0f, 1.0f}};
+    fxgl::RasterStats stats = {};
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    assert(fxgl::draw_clip_triangle(triangle, 0, test_fragment_shader, &red, &stats));
+    assert(color[0] == RED);
+    assert(depth[0] == 32768);
+
+    // Equal depth fails LESS, leaving the first fragment in place.
+    assert(!fxgl::draw_clip_triangle(triangle, 0, test_fragment_shader, &blue));
+    assert(color[0] == RED);
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(1, 1, 1, 1);
+    assert(fxgl::draw_clip_triangle(triangle, 0, test_fragment_shader, &green));
+    assert(color[1 * 4 + 1] == GREEN);
+    assert(color[0] == RED);
+
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    TestFragmentColor half_blue = {{0.0f, 0.0f, 1.0f, 0.5f}};
+    assert(fxgl::draw_clip_triangle(triangle, 0, test_fragment_shader, &half_blue));
+    const uint16_t blended = color[0];
+    assert(((blended >> 11) & 0x1f) >= 14);
+    assert((blended & 0x1f) >= 14);
+
+    glDisable(GL_BLEND);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    std::swap(triangle[1], triangle[2]);
+    const uint16_t before_cull = color[0];
+    assert(!fxgl::draw_clip_triangle(triangle, 0, test_fragment_shader, &red));
+    assert(color[0] == before_cull);
+
+    fxglReleaseCurrent();
+}
+
 void test_state_validation_and_error_latching()
 {
     uint16_t color[4] = {};
@@ -519,6 +593,7 @@ int main()
     test_texture_objects_and_uploads();
     test_rgb565_unpack_alignment();
     test_state_validation_and_error_latching();
+    test_context_drives_software_pipeline();
 
     std::puts("GLES-style context/state tests: PASS");
     return 0;
