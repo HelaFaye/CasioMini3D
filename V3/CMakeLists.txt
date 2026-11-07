@@ -17,6 +17,7 @@ set(SOURCES
     src/bench.cpp
     src/world.cpp
     src/display.cpp
+    src/gfx/texture.cpp
     src/shapes/parallelogram.cpp
     src/shapes/rectangle.cpp
     src/shapes/triangle.cpp
