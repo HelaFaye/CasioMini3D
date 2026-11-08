@@ -62,6 +62,14 @@ bool texture_valid(const Texture2DView& texture);
 bool sampler_valid(const TextureSampler& sampler);
 /* True when implicit LOD can change the selected minification/magnification filter. */
 bool sampler_requires_implicit_derivatives(const TextureSampler& sampler);
+/* Fast path for a texture/sampler pair already validated and kept unchanged
+   for the duration of a draw call. The caller must satisfy both preconditions. */
+uint16_t sample_texture_validated(
+    const Texture2DView& texture,
+    int64_t u_16_16,
+    int64_t v_16_16,
+    const TextureSampler& sampler,
+    float lod = 0.0f);
 
 /* Sample an RGB565 texture using signed 16.16 texel-space coordinates.
    Nearest uses floor(u), floor(v). Bilinear interpolates the four surrounding
