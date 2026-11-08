@@ -868,10 +868,14 @@ bool run_benchmark(
     const RunConfig& config,
     BenchmarkResult& result,
     char *error,
-    size_t error_capacity)
+    size_t error_capacity,
+    FramePresentCallback present_callback,
+    void *present_user_data)
 {
     if (config.measure_frames == 0 || config.repeat_count == 0 ||
-        config.repeat_count > 9)
+        config.repeat_count > 9 ||
+        config.measure_frames >
+            (UINT32_MAX - config.warmup_frames) / config.repeat_count)
     {
         set_error_text(error, error_capacity,
             "measure_frames must be positive and repeat_count must be 1..9");
@@ -882,6 +886,21 @@ bool run_benchmark(
     if (!prepare_scene(request, instance, error, error_capacity))
         return false;
 
+    const uint32_t total_frames =
+        config.warmup_frames + config.measure_frames * config.repeat_count;
+    uint32_t presented_frames = 0;
+    const auto present_frame = [&]() -> bool
+    {
+        bool keep_running = true;
+        if (present_callback)
+            keep_running = present_callback(
+                presented_frames, total_frames, present_user_data);
+        else
+            dupdate();
+        ++presented_frames;
+        return keep_running;
+    };
+
     for (uint32_t i = 0; i < config.warmup_frames; ++i)
     {
         if (!render_scene_frame(instance, i))
@@ -890,7 +909,12 @@ bool run_benchmark(
             set_error_text(error, error_capacity, "warm-up render failed");
             return false;
         }
-        dupdate();
+        if (!present_frame())
+        {
+            finish_scene(instance);
+            set_error_text(error, error_capacity, "benchmark cancelled by user");
+            return false;
+        }
     }
 
     double samples[9] = {};
@@ -907,7 +931,13 @@ bool run_benchmark(
                 set_error_text(error, error_capacity, "measured render failed");
                 return false;
             }
-            dupdate();
+            if (!present_frame())
+            {
+                prof_leave(timer);
+                finish_scene(instance);
+                set_error_text(error, error_capacity, "benchmark cancelled by user");
+                return false;
+            }
         }
         prof_leave(timer);
         samples[repeat] = static_cast<double>(prof_time(timer)) /
