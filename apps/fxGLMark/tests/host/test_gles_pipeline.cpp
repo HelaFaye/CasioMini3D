@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cmath>
 
-#include "../../src/gles/pipeline.hpp"
+#include "gles/pipeline.hpp"
 
 namespace
 {

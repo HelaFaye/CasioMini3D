@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <limits>
 
-#include "../../src/gfx/texture.hpp"
+#include "gfx/texture.hpp"
 
 using gfx::Texture2DView;
 using gfx::TextureAddressMode;

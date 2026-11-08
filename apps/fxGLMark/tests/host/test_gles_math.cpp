@@ -2,7 +2,7 @@
 #include <cmath>
 #include <cstdio>
 
-#include "../../src/gles/math.hpp"
+#include "gles/math.hpp"
 
 namespace
 {

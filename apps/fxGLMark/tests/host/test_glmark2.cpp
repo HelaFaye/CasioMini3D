@@ -6,7 +6,7 @@
 #include <GLES2/gl2.h>
 #include <fxgl/platform.h>
 #include "../../src/glmark2/glmark2.hpp"
-#include "../../src/gles/context_internal.hpp"
+#include "gles/context_internal.hpp"
 
 uint32_t fxmark_test_prof_counter = 0;
 static uint32_t presentation_count = 0;

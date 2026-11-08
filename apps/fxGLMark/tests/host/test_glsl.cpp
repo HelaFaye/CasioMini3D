@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "../../src/gles/glsl.hpp"
+#include "gles/glsl.hpp"
 
 namespace
 {

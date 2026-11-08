@@ -7,7 +7,7 @@
 
 #include <GLES2/gl2.h>
 #include <fxgl/platform.h>
-#include "../../src/gles/context_internal.hpp"
+#include "gles/context_internal.hpp"
 
 namespace
 {
