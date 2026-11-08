@@ -156,6 +156,9 @@ static void test_mipmap_nearest_and_trilinear_filtering()
     assert(gfx::texture_valid(texture));
     assert(gfx::sample_texture(texture, ONE, ONE, sampler, 1.0f) == 0x07e0);
     assert(gfx::sample_texture(texture, ONE, ONE, sampler, 2.0f) == 0x001f);
+    // Nearest-mipmap filters round LOD to the closest integer level.
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 1.4f) == 0x07e0);
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 1.6f) == 0x001f);
 
     sampler.min_filter = gfx::TextureMinFilter::LinearMipmapNearest;
     assert(gfx::sample_texture(texture, ONE, ONE, sampler, 1.0f) == 0x07e0);
@@ -168,6 +171,15 @@ static void test_mipmap_nearest_and_trilinear_filtering()
 
     sampler.min_filter = gfx::TextureMinFilter::Linear;
     assert(gfx::sample_texture(texture, ONE, ONE, sampler, 2.0f) == 0xf800);
+
+    const TextureMipLevel partial_levels[1] = {
+        {level1_pixels, 2, 2, 2}
+    };
+    const Texture2DView incomplete = {
+        base_pixels, 4, 4, 4, partial_levels, 1
+    };
+    sampler.min_filter = gfx::TextureMinFilter::NearestMipmapNearest;
+    assert(gfx::sample_texture(incomplete, ONE, ONE, sampler, 1.0f) == 0);
 }
 
 static void test_mipmap_view_and_sampler_validation()
