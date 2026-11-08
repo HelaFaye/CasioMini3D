@@ -129,6 +129,61 @@ static void test_mirrored_repeat_addressing()
     assert(gfx::sample_texture(texture, -2 * ONE, ONE, mirrored) == 0xffff);
 }
 
+static void test_mipmap_nearest_and_trilinear_filtering()
+{
+    const uint16_t base_pixels[16] = {
+        0xf800, 0xf800, 0xf800, 0xf800,
+        0xf800, 0xf800, 0xf800, 0xf800,
+        0xf800, 0xf800, 0xf800, 0xf800,
+        0xf800, 0xf800, 0xf800, 0xf800
+    };
+    const uint16_t level1_pixels[4] = {
+        0x07e0, 0x07e0,
+        0x07e0, 0x07e0
+    };
+    const uint16_t level2_pixels[1] = {0x001f};
+    const TextureMipLevel levels[2] = {
+        {level1_pixels, 2, 2, 2},
+        {level2_pixels, 1, 1, 1}
+    };
+    const Texture2DView texture = {
+        base_pixels, 4, 4, 4, levels, 2
+    };
+
+    TextureSampler sampler = nearest_clamp();
+    sampler.min_filter = gfx::TextureMinFilter::NearestMipmapNearest;
+    assert(gfx::texture_valid(texture));
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 1.0f) == 0x07e0);
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 2.0f) == 0x001f);
+
+    sampler.min_filter = gfx::TextureMinFilter::LinearMipmapNearest;
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 1.0f) == 0x07e0);
+
+    sampler.min_filter = gfx::TextureMinFilter::NearestMipmapLinear;
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 0.5f) == 0x8400);
+
+    sampler.min_filter = gfx::TextureMinFilter::LinearMipmapLinear;
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 0.5f) == 0x8400);
+
+    sampler.min_filter = gfx::TextureMinFilter::Linear;
+    assert(gfx::sample_texture(texture, ONE, ONE, sampler, 2.0f) == 0xf800);
+}
+
+static void test_mipmap_view_and_sampler_validation()
+{
+    const uint16_t base[16] = {};
+    const uint16_t bad_level[1] = {};
+    const TextureMipLevel bad_levels[1] = {
+        {bad_level, 1, 1, 1}
+    };
+    // A 4x4 base must have a 2x2 first mip, not a 1x1 level.
+    assert(!gfx::texture_valid({base, 4, 4, 4, bad_levels, 1}));
+
+    TextureSampler sampler = nearest_clamp();
+    sampler.min_filter = static_cast<gfx::TextureMinFilter>(99);
+    assert(!gfx::sampler_valid(sampler));
+}
+
 static void test_invalid_inputs_fail_closed()
 {
     const uint16_t pixels[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
@@ -153,6 +208,8 @@ int main()
     test_negative_fractional_coordinates_use_floor();
     test_bilinear_interpolation_rgb565();
     test_mirrored_repeat_addressing();
+    test_mipmap_nearest_and_trilinear_filtering();
+    test_mipmap_view_and_sampler_validation();
     test_invalid_inputs_fail_closed();
 
     std::puts("texture sampler tests: PASS");
