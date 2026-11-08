@@ -2353,16 +2353,31 @@ bool execute_glsl(
                     case BuiltinFunction::Pow:
                     case BuiltinFunction::Mod:
                     case BuiltinFunction::Step:
-                        if (instruction.argument_count != 2 ||
-                            args[0].type != instruction.type ||
-                            (args[1].type != instruction.type &&
-                             !(is_vector(instruction.type) &&
-                               args[1].type == ShaderType::Float)))
+                    {
+                        if (instruction.argument_count != 2)
                             return false;
+                        if (function == BuiltinFunction::Step)
+                        {
+                            if (args[1].type != instruction.type ||
+                                (args[0].type != instruction.type &&
+                                 !(is_vector(instruction.type) &&
+                                   args[0].type == ShaderType::Float)))
+                                return false;
+                        }
+                        else if (args[0].type != instruction.type ||
+                                 (args[1].type != instruction.type &&
+                                  !(is_vector(instruction.type) &&
+                                    args[1].type == ShaderType::Float)))
+                        {
+                            return false;
+                        }
+
                         for (size_t i = 0; i < component_count(instruction.type); ++i)
                         {
-                            const float x = args[0].data[i];
-                            const float y = component(args[1], i);
+                            const float x = function == BuiltinFunction::Step
+                                ? component(args[1], i) : args[0].data[i];
+                            const float y = function == BuiltinFunction::Step
+                                ? component(args[0], i) : component(args[1], i);
                             float output = 0.0f;
                             switch (function)
                             {
@@ -2372,12 +2387,13 @@ bool execute_glsl(
                                     output = y == 0.0f ? 0.0f :
                                         x - y * std::floor(x / y);
                                     break;
-                                case BuiltinFunction::Step: output = y < x ? 0.0f : 1.0f; break;
+                                case BuiltinFunction::Step: output = x < y ? 0.0f : 1.0f; break;
                                 default: return false;
                             }
                             result.data[i] = output;
                         }
                         break;
+                    }
 
                     case BuiltinFunction::Distance:
                         if (instruction.argument_count != 2 ||
