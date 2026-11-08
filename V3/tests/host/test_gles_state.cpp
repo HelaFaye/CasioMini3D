@@ -1401,8 +1401,12 @@ void test_gles_mipmap_generation_and_level_uploads()
 
     gfx::Texture2DView view = {};
     gfx::TextureSampler sampler = {};
-    assert(!fxgl::get_texture_binding(0, view, sampler));
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.mip_level_count == 0);
     assert(glGetError() == GL_NO_ERROR);
+    // A mipmapped sampler with an incomplete chain is an incomplete texture,
+    // not an API error. Sampling it returns black.
+    assert(gfx::sample_texture(view, 0, 0, sampler, 1.0f) == 0);
 
     glGenerateMipmap(GL_TEXTURE_2D);
     assert(glGetError() == GL_NO_ERROR);
