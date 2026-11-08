@@ -441,6 +441,49 @@ static void test_matrix_component_multiply_and_scalar_broadcast()
     assert(near(runtime.fragment_color.data[3], 2.0f));
 }
 
+static void test_ivec_bvec_constructors_swizzles_and_vector_relations()
+{
+    static const char source[] =
+        "#version 100\n"
+        "void main() {\n"
+        "  ivec3 integers = ivec3(1.9, 2.2, -3.8);\n"
+        "  bvec3 flags = greaterThan(integers, ivec3(0));\n"
+        "  bvec3 equal_flags = equal(flags, bvec3(false, true, false));\n"
+        "  bool any_flag = any(flags);\n"
+        "  bool all_flags = all(not(equal_flags));\n"
+        "  bvec3 inverted = not(flags);\n"
+        "  gl_FragColor = vec4(float(integers.y), float(any_flag), "
+        "float(all_flags), float(inverted.x));\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 2.0f));
+    assert(near(runtime.fragment_color.data[1], 1.0f));
+    assert(near(runtime.fragment_color.data[2], 0.0f));
+    assert(near(runtime.fragment_color.data[3], 0.0f));
+
+    static const char ordering_source[] =
+        "void main() {\n"
+        "  bvec2 lt = lessThan(vec2(1.0, 3.0), vec2(2.0, 2.0));\n"
+        "  bvec2 le = lessThanEqual(ivec2(2, 4), ivec2(2, 3));\n"
+        "  bvec2 gt = greaterThanEqual(vec2(3.0, 4.0), vec2(2.0, 4.0));\n"
+        "  gl_FragColor = vec4(float(all(lt)), float(any(le)), "
+        "float(all(gt)), 1.0);\n"
+        "}\n";
+
+    module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, ordering_source, module));
+    runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.0f));
+    assert(near(runtime.fragment_color.data[1], 1.0f));
+    assert(near(runtime.fragment_color.data[2], 1.0f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+}
+
 static void test_compiler_rejects_unsupported_or_invalid_source()
 {
     const char *unsupported[] = {
@@ -493,6 +536,7 @@ int main()
     test_non_terminating_shader_hits_execution_budget();
     test_essl_math_and_geometric_builtins();
     test_matrix_component_multiply_and_scalar_broadcast();
+    test_ivec_bvec_constructors_swizzles_and_vector_relations();
     test_compiler_rejects_unsupported_or_invalid_source();
     test_instruction_budget_and_stack_safety();
 
