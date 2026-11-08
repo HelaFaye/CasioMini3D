@@ -120,6 +120,12 @@ static GLenum gl_type_for_shader_type(fxgl::ShaderType type)
         case fxgl::ShaderType::Vec2: return GL_FLOAT_VEC2;
         case fxgl::ShaderType::Vec3: return GL_FLOAT_VEC3;
         case fxgl::ShaderType::Vec4: return GL_FLOAT_VEC4;
+        case fxgl::ShaderType::IVec2: return GL_INT_VEC2;
+        case fxgl::ShaderType::IVec3: return GL_INT_VEC3;
+        case fxgl::ShaderType::IVec4: return GL_INT_VEC4;
+        case fxgl::ShaderType::BVec2: return GL_BOOL_VEC2;
+        case fxgl::ShaderType::BVec3: return GL_BOOL_VEC3;
+        case fxgl::ShaderType::BVec4: return GL_BOOL_VEC4;
         case fxgl::ShaderType::Mat2: return GL_FLOAT_MAT2;
         case fxgl::ShaderType::Mat3: return GL_FLOAT_MAT3;
         case fxgl::ShaderType::Mat4: return GL_FLOAT_MAT4;
@@ -212,6 +218,12 @@ static size_t shader_component_count(fxgl::ShaderType type)
         case fxgl::ShaderType::Vec2: return 2;
         case fxgl::ShaderType::Vec3: return 3;
         case fxgl::ShaderType::Vec4: return 4;
+        case fxgl::ShaderType::IVec2:
+        case fxgl::ShaderType::BVec2: return 2;
+        case fxgl::ShaderType::IVec3:
+        case fxgl::ShaderType::BVec3: return 3;
+        case fxgl::ShaderType::IVec4:
+        case fxgl::ShaderType::BVec4: return 4;
         case fxgl::ShaderType::Mat2: return 4;
         case fxgl::ShaderType::Mat3: return 9;
         case fxgl::ShaderType::Mat4: return 16;
@@ -431,6 +443,78 @@ static bool valid_uniform_location(
     const fxgl::ShaderVariable& uniform = program.uniforms[location];
     return uniform.type == type &&
            shader_component_count(type) == components;
+}
+
+static void set_uniform_integer(
+    GLint location,
+    const GLint *values,
+    size_t components)
+{
+    if (!fxglHasCurrentContext())
+        return;
+    if (location == -1)
+        return;
+    ProgramObject *program = current_program();
+    if (!program)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (!values || location < 0 ||
+        static_cast<size_t>(location) >= program->uniform_count)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    const fxgl::ShaderType declared = program->uniforms[location].type;
+    fxgl::ShaderType expected = fxgl::ShaderType::Invalid;
+    switch (components)
+    {
+        case 1:
+            if (declared == fxgl::ShaderType::Int ||
+                declared == fxgl::ShaderType::Bool ||
+                declared == fxgl::ShaderType::Sampler2D)
+                expected = declared;
+            break;
+        case 2:
+            if (declared == fxgl::ShaderType::IVec2 ||
+                declared == fxgl::ShaderType::BVec2)
+                expected = declared;
+            break;
+        case 3:
+            if (declared == fxgl::ShaderType::IVec3 ||
+                declared == fxgl::ShaderType::BVec3)
+                expected = declared;
+            break;
+        case 4:
+            if (declared == fxgl::ShaderType::IVec4 ||
+                declared == fxgl::ShaderType::BVec4)
+                expected = declared;
+            break;
+        default:
+            break;
+    }
+    if (expected == fxgl::ShaderType::Invalid)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    fxgl::ShaderValue& destination = program->uniform_values[location];
+    destination = {};
+    destination.type = expected;
+    for (size_t i = 0; i < components; ++i)
+    {
+        const float value = static_cast<float>(values[i]);
+        destination.data[i] =
+            (expected == fxgl::ShaderType::Bool ||
+             expected == fxgl::ShaderType::BVec2 ||
+             expected == fxgl::ShaderType::BVec3 ||
+             expected == fxgl::ShaderType::BVec4)
+                ? (value != 0.0f ? 1.0f : 0.0f)
+                : value;
+    }
 }
 
 static void set_uniform(
@@ -1156,7 +1240,10 @@ void glUniform1i(GLint location, GLint v0)
 
     program->uniform_values[location] = {};
     program->uniform_values[location].type = type;
-    program->uniform_values[location].data[0] = static_cast<float>(v0);
+    program->uniform_values[location].data[0] =
+        type == fxgl::ShaderType::Bool
+            ? (v0 != 0 ? 1.0f : 0.0f)
+            : static_cast<float>(v0);
 }
 
 void glUniform1fv(GLint location, GLsizei count, const GLfloat *value)
@@ -1247,6 +1334,68 @@ void glGetUniformiv(GLuint program_name, GLint location, GLint *params)
     const size_t components = shader_component_count(value.type);
     for (size_t i = 0; i < components; ++i)
         params[i] = static_cast<GLint>(value.data[i]);
+}
+
+void glUniform2i(GLint location, GLint v0, GLint v1)
+{
+    const GLint values[2] = {v0, v1};
+    set_uniform_integer(location, values, 2);
+}
+
+void glUniform3i(GLint location, GLint v0, GLint v1, GLint v2)
+{
+    const GLint values[3] = {v0, v1, v2};
+    set_uniform_integer(location, values, 3);
+}
+
+void glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3)
+{
+    const GLint values[4] = {v0, v1, v2, v3};
+    set_uniform_integer(location, values, 4);
+}
+
+void glUniform1iv(GLint location, GLsizei count, const GLint *value)
+{
+    if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform_integer(location, value, 1);
+}
+
+void glUniform2iv(GLint location, GLsizei count, const GLint *value)
+{
+    if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform_integer(location, value, 2);
+}
+
+void glUniform3iv(GLint location, GLsizei count, const GLint *value)
+{
+    if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform_integer(location, value, 3);
+}
+
+void glUniform4iv(GLint location, GLsizei count, const GLint *value)
+{
+    if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
+    if (count != 1 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    set_uniform_integer(location, value, 4);
 }
 
 void glUniformMatrix2fv(
