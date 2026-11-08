@@ -309,6 +309,18 @@ static size_t texture_level_bytes(uint16_t width, uint16_t height)
     return static_cast<size_t>(width) * height * sizeof(uint16_t);
 }
 
+static GLint texture_max_level(uint16_t width, uint16_t height)
+{
+    uint16_t extent = std::max(width, height);
+    GLint level = 0;
+    while (extent > 1)
+    {
+        extent = static_cast<uint16_t>(extent / 2);
+        ++level;
+    }
+    return level;
+}
+
 static void destroy_textures(Context& context)
 {
     for (TextureObject& object : context.textures)
@@ -2623,6 +2635,11 @@ void glTexImage2D(
         if (!object->pixels || object->width == 0 || object->height == 0)
         {
             set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        if (level > texture_max_level(object->width, object->height))
+        {
+            set_error(GL_INVALID_VALUE);
             return;
         }
         GLsizei expected_width = object->width;
