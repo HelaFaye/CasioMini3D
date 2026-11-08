@@ -1,5 +1,8 @@
 #include "display.hpp"
 #include "glmark2/glmark2.hpp"
+#include "gfx/texture.hpp"
+#include "gles/glsl.hpp"
+#include "gles/pipeline.hpp"
 
 #include <GLES2/gl2.h>
 #include <fxgl/platform.h>
@@ -37,6 +40,34 @@ static bool g_selected[TEST_COUNT] = {};
 static size_t g_cursor = 0;
 static char g_status[64] = "Choose individual tests or a battery";
 static uint16_t g_depth_buffer[DWIDTH * DHEIGHT];
+
+constexpr uint32_t MICROBENCH_REPEATS = 3;
+constexpr size_t MICROBENCH_COUNT = 4;
+constexpr uint32_t MICROBENCH_TEXTURE_SAMPLES = 16384;
+constexpr uint32_t MICROBENCH_RASTER_TRIANGLES = 8;
+constexpr uint32_t MICROBENCH_SHADER_EXECUTIONS = 1024;
+constexpr uint32_t MICROBENCH_PRESENT_CALLS = 8;
+
+struct RendererMicrobenchResult
+{
+    const char *stage;
+    uint32_t iterations;
+    double min_us_per_iteration;
+    double max_us_per_iteration;
+    double mean_us_per_iteration;
+    double operations_per_second;
+};
+
+static uint16_t g_microbench_texture_pixels[32 * 32];
+static volatile uint16_t g_microbench_texture_sink = 0;
+static volatile float g_microbench_shader_sink = 0.0f;
+static fxgl::RenderSurface g_microbench_surface = {};
+static fxgl::PipelineState g_microbench_pipeline_state = {};
+static fxgl::ClipVertex g_microbench_triangle[3] = {};
+static fxgl::ShaderModule g_microbench_shader = {};
+static fxgl::ShaderRuntime g_microbench_runtime = {};
+static bool g_microbench_raster_ready = false;
+static bool g_microbench_shader_ready = false;
 
 struct CsvWriteArgs
 {
@@ -138,6 +169,369 @@ static bool append_result_csv(const fxglmark2::BenchmarkResult& result)
     return status == 0 && args.error_number == 0;
 }
 
+struct MicrobenchCsvWriteArgs
+{
+    const RendererMicrobenchResult *result;
+    int error_number;
+};
+
+static int append_microbench_csv_os_world(void *opaque)
+{
+    MicrobenchCsvWriteArgs *args = static_cast<MicrobenchCsvWriteArgs *>(opaque);
+    args->error_number = 0;
+    static const char path[] = "/glmark2-renderer-microbench-v1.csv";
+    static const char header[] =
+        "schema_version,stage,iterations,min_us_per_iteration,"
+        "max_us_per_iteration,mean_us_per_iteration,operations_per_second\n";
+
+    struct stat before = {};
+    long long expected = 0;
+    errno = 0;
+    if (stat(path, &before) == 0)
+    {
+        if (before.st_size < 0)
+        {
+            args->error_number = EIO;
+            return -1;
+        }
+        expected = static_cast<long long>(before.st_size);
+    }
+    else if (errno != ENOENT)
+    {
+        args->error_number = errno;
+        return -1;
+    }
+
+    errno = 0;
+    FILE *file = fopen(path, "a");
+    if (!file)
+    {
+        args->error_number = errno;
+        return -1;
+    }
+
+    bool failed = false;
+    if (expected == 0)
+    {
+        const int count = fprintf(file, "%s", header);
+        if (count < 0)
+            failed = true;
+        else
+            expected += static_cast<long long>(sizeof(header) - 1);
+    }
+
+    const RendererMicrobenchResult& result = *args->result;
+    if (!failed)
+    {
+        const int count = fprintf(file,
+            "1,%s,%lu,%.3f,%.3f,%.3f,%.3f\n",
+            result.stage,
+            static_cast<unsigned long>(result.iterations),
+            result.min_us_per_iteration,
+            result.max_us_per_iteration,
+            result.mean_us_per_iteration,
+            result.operations_per_second);
+        if (count < 0)
+            failed = true;
+        else
+            expected += count;
+    }
+
+    if (!failed && fflush(file) != 0)
+        failed = true;
+    if (ferror(file))
+        failed = true;
+    if (fclose(file) != 0)
+        failed = true;
+
+    if (!failed)
+    {
+        struct stat after = {};
+        if (stat(path, &after) != 0 ||
+            static_cast<long long>(after.st_size) != expected)
+        {
+            failed = true;
+            args->error_number = errno ? errno : EIO;
+        }
+    }
+
+    if (failed && args->error_number == 0)
+        args->error_number = errno ? errno : EIO;
+    return failed ? -1 : 0;
+}
+
+static bool append_microbench_csv(const RendererMicrobenchResult& result)
+{
+    MicrobenchCsvWriteArgs args = {&result, 0};
+    const int status = gint_world_switch(
+        GINT_CALL(append_microbench_csv_os_world, &args));
+    if (status != 0 && args.error_number == 0)
+        args.error_number = status;
+    return status == 0 && args.error_number == 0;
+}
+
+static bool microbench_fragment(
+    const fxgl::FragmentInput&,
+    float rgba[4],
+    void *)
+{
+    rgba[0] = 0.22f;
+    rgba[1] = 0.58f;
+    rgba[2] = 0.91f;
+    rgba[3] = 1.0f;
+    return true;
+}
+
+static bool prepare_renderer_microbenchmarks()
+{
+    for (size_t i = 0; i < sizeof(g_microbench_texture_pixels) /
+                            sizeof(g_microbench_texture_pixels[0]); ++i)
+    {
+        const unsigned x = static_cast<unsigned>(i % 32);
+        const unsigned y = static_cast<unsigned>(i / 32);
+        const unsigned red = (x * 7u + y * 3u) & 0xffu;
+        const unsigned green = (x * 5u + y * 11u) & 0xffu;
+        const unsigned blue = (x * 13u + y * 2u) & 0xffu;
+        g_microbench_texture_pixels[i] = static_cast<uint16_t>(
+            ((red & 0xf8u) << 8) |
+            ((green & 0xfcu) << 3) |
+            ((blue & 0xf8u) >> 3));
+    }
+
+    const char *fragment_source =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "varying vec4 v_color;\n"
+        "void main() {\n"
+        "  vec3 lit = v_color.rgb * 0.75 + vec3(0.125);\n"
+        "  gl_FragColor = vec4(lit, v_color.a);\n"
+        "}\n";
+    g_microbench_shader_ready = fxgl::compile_glsl(
+        fxgl::ShaderStage::Fragment, fragment_source, g_microbench_shader);
+    if (!g_microbench_shader_ready)
+        return false;
+
+    g_microbench_runtime = {};
+    g_microbench_runtime.varyings[0].type = fxgl::ShaderType::Vec4;
+    g_microbench_runtime.varyings[0].data[0] = 0.25f;
+    g_microbench_runtime.varyings[0].data[1] = 0.50f;
+    g_microbench_runtime.varyings[0].data[2] = 0.75f;
+    g_microbench_runtime.varyings[0].data[3] = 1.0f;
+
+    fxgl::pipeline_default_state(
+        g_microbench_pipeline_state, SCREEN_WIDTH, SCREEN_HEIGHT);
+    g_microbench_triangle[0].position = {-0.72f, -0.72f, 0.0f, 1.0f};
+    g_microbench_triangle[1].position = {0.18f, -0.72f, 0.0f, 1.0f};
+    g_microbench_triangle[2].position = {-0.27f, 0.20f, 0.0f, 1.0f};
+    g_microbench_raster_ready = true;
+    return true;
+}
+
+static bool benchmark_texture_sampling(uint32_t iterations)
+{
+    const gfx::Texture2DView texture = {
+        g_microbench_texture_pixels, 32, 32, 32
+    };
+    const gfx::TextureSampler sampler = {
+        gfx::TextureFilter::Nearest,
+        gfx::TextureAddressMode::Clamp,
+        gfx::TextureAddressMode::Clamp
+    };
+
+    for (uint32_t i = 0; i < iterations; ++i)
+    {
+        const int64_t u = static_cast<int64_t>(
+            ((i * 977u) & 0x001fffffu));
+        const int64_t v = static_cast<int64_t>(
+            ((i * 3253u + 7919u) & 0x001fffffu));
+        g_microbench_texture_sink = gfx::sample_texture_validated(
+            texture, u, v, sampler);
+    }
+    return true;
+}
+
+static bool benchmark_triangle_rasterization(uint32_t iterations)
+{
+    if (!g_microbench_raster_ready || !g_microbench_surface.color)
+        return false;
+
+    for (uint32_t i = 0; i < iterations; ++i)
+    {
+        if (!fxgl::draw_triangle(g_microbench_surface,
+                g_microbench_pipeline_state, g_microbench_triangle, 0,
+                microbench_fragment, nullptr))
+            return false;
+    }
+    return true;
+}
+
+static bool benchmark_shader_execution(uint32_t iterations)
+{
+    if (!g_microbench_shader_ready)
+        return false;
+
+    for (uint32_t i = 0; i < iterations; ++i)
+    {
+        if (!fxgl::execute_glsl(g_microbench_shader, g_microbench_runtime))
+            return false;
+        g_microbench_shader_sink =
+            g_microbench_runtime.fragment_color.data[0];
+    }
+    return true;
+}
+
+static bool benchmark_framebuffer_presentation(uint32_t iterations)
+{
+    for (uint32_t i = 0; i < iterations; ++i)
+        dupdate();
+    return true;
+}
+
+using MicrobenchWork = bool (*)(uint32_t iterations);
+
+static bool measure_microbench_stage(
+    const char *name,
+    uint32_t iterations,
+    MicrobenchWork work,
+    RendererMicrobenchResult& result)
+{
+    if (!name || !work || iterations == 0 || !work(1))
+        return false;
+
+    double samples[MICROBENCH_REPEATS] = {};
+    for (uint32_t repeat = 0; repeat < MICROBENCH_REPEATS; ++repeat)
+    {
+        prof_t timer = prof_make();
+        prof_enter(timer);
+        const bool completed = work(iterations);
+        prof_leave(timer);
+        if (!completed)
+            return false;
+        samples[repeat] = prof_time(timer) /
+            static_cast<double>(iterations);
+    }
+
+    double sum = 0.0;
+    double minimum = samples[0];
+    double maximum = samples[0];
+    for (uint32_t i = 0; i < MICROBENCH_REPEATS; ++i)
+    {
+        sum += samples[i];
+        if (samples[i] < minimum) minimum = samples[i];
+        if (samples[i] > maximum) maximum = samples[i];
+    }
+
+    result.stage = name;
+    result.iterations = iterations;
+    result.min_us_per_iteration = minimum;
+    result.max_us_per_iteration = maximum;
+    result.mean_us_per_iteration =
+        sum / static_cast<double>(MICROBENCH_REPEATS);
+    result.operations_per_second =
+        result.mean_us_per_iteration > 0.0
+            ? 1000000.0 / result.mean_us_per_iteration : 0.0;
+    return true;
+}
+
+static void show_renderer_microbench_results(
+    const RendererMicrobenchResult *results,
+    const bool *valid,
+    const bool *logged)
+{
+    dclear(C_BLACK);
+    dtext(8, 5, C_WHITE, "Renderer component microbenchmarks");
+    for (size_t i = 0; i < MICROBENCH_COUNT; ++i)
+    {
+        const int y = 24 + static_cast<int>(i) * 39;
+        if (!valid[i])
+        {
+            dtext(8, y, C_WHITE, "FAILED: component benchmark");
+            continue;
+        }
+
+        char metric[72];
+        snprintf(metric, sizeof(metric), "mean %.3f us/op  %.1f op/s  %s",
+            results[i].mean_us_per_iteration,
+            results[i].operations_per_second,
+            logged[i] ? "CSV OK" : "CSV ERROR");
+        dtext(8, y, C_WHITE, results[i].stage);
+        dtext(8, y + 13, C_WHITE, metric);
+    }
+    dtext(8, 190, C_WHITE, "Saved to /glmark2-renderer-microbench-v1.csv");
+    dtext(8, 207, C_WHITE, "EXE or MENU to return");
+    dupdate();
+    while (!keydown(KEY_EXE) && !keydown(KEY_MENU))
+        clearevents();
+    while (keydown(KEY_EXE) || keydown(KEY_MENU))
+        clearevents();
+}
+
+static void run_renderer_microbenchmarks()
+{
+    static const char *const names[MICROBENCH_COUNT] = {
+        "texture-sample",
+        "triangle-raster",
+        "shader-vm",
+        "framebuffer-present"
+    };
+    static const uint32_t iterations[MICROBENCH_COUNT] = {
+        MICROBENCH_TEXTURE_SAMPLES,
+        MICROBENCH_RASTER_TRIANGLES,
+        MICROBENCH_SHADER_EXECUTIONS,
+        MICROBENCH_PRESENT_CALLS
+    };
+    static const MicrobenchWork work[MICROBENCH_COUNT] = {
+        benchmark_texture_sampling,
+        benchmark_triangle_rasterization,
+        benchmark_shader_execution,
+        benchmark_framebuffer_presentation
+    };
+
+    RendererMicrobenchResult results[MICROBENCH_COUNT] = {};
+    bool valid[MICROBENCH_COUNT] = {};
+    bool logged[MICROBENCH_COUNT] = {};
+
+    if (!prepare_renderer_microbenchmarks())
+    {
+        dclear(C_BLACK);
+        dtext(8, 16, C_WHITE, "Could not prepare renderer microbenchmarks");
+        dtext(8, 205, C_WHITE, "EXE or MENU to return");
+        dupdate();
+        while (!keydown(KEY_EXE) && !keydown(KEY_MENU))
+            clearevents();
+        while (keydown(KEY_EXE) || keydown(KEY_MENU))
+            clearevents();
+        return;
+    }
+
+    for (size_t i = 0; i < MICROBENCH_COUNT; ++i)
+    {
+        dclear(C_BLACK);
+        dtext(8, 8, C_WHITE, "Running renderer microbenchmarks...");
+        dtext(8, 27, C_WHITE, names[i]);
+        dupdate();
+
+        if (i == 1)
+        {
+            g_microbench_surface.color =
+                reinterpret_cast<uint16_t *>(gint_vram);
+            g_microbench_surface.depth = nullptr;
+            g_microbench_surface.stencil = nullptr;
+            g_microbench_surface.width = SCREEN_WIDTH;
+            g_microbench_surface.height = SCREEN_HEIGHT;
+            g_microbench_surface.stride = DWIDTH;
+        }
+
+        valid[i] = measure_microbench_stage(
+            names[i], iterations[i], work[i], results[i]);
+        if (valid[i])
+            logged[i] = append_microbench_csv(results[i]);
+    }
+
+    show_renderer_microbench_results(results, valid, logged);
+    snprintf(g_status, sizeof(g_status), "Renderer microbenchmarks complete");
+}
+
 static void release_all_selection()
 {
     for (bool& selected : g_selected)
@@ -186,7 +580,7 @@ static void draw_menu()
     dtext(8, 5, C_WHITE, "fxGLMark2 | fx-CG50 graphics benchmark");
     dtext(8, 19, C_WHITE, "STANDARD BATTERIES");
     dtext(8, 32, C_WHITE, "F1 Quick Smoke (2)   F2 glmark2 Supported Default (5)");
-    dtext(8, 44, C_WHITE, "F3 All Implemented (6)   F4 Pending");
+    dtext(8, 44, C_WHITE, "F3 All Implemented (6)   F4 Renderer Microbench");
     dtext(8, 61, C_WHITE, "SELECT TESTS  [EXE/F6 toggle]  [UP/DOWN move]");
 
     for (size_t i = 0; i < TEST_COUNT; ++i)
@@ -389,35 +783,12 @@ static void run_selected_benchmarks()
              static_cast<unsigned long>(completed));
 }
 
-static void show_pending_scenes()
-{
-    dclear(C_BLACK);
-    dtext(8, 8, C_WHITE, "PENDING glmark2 SCENE FAMILIES");
-    dtext(8, 30, C_WHITE, "buffer       - dynamic/static update and map/subdata");
-    dtext(8, 46, C_WHITE, "bump         - normal and height-map shading");
-    dtext(8, 62, C_WHITE, "effect2d     - convolution and post-processing");
-    dtext(8, 78, C_WHITE, "pulsar       - animated textured quad workloads");
-    dtext(8, 94, C_WHITE, "desktop      - multi-window blur and shadows");
-    dtext(8, 110, C_WHITE, "ideas        - animated shader effects");
-    dtext(8, 126, C_WHITE, "jellyfish    - animated multi-object geometry");
-    dtext(8, 142, C_WHITE, "terrain      - height-field rendering");
-    dtext(8, 158, C_WHITE, "shadow       - shadow-map rendering");
-    dtext(8, 174, C_WHITE, "refract      - environment/refraction");
-    dtext(8, 190, C_WHITE, "conditionals / function / loop - shader stress");
-    dtext(8, 214, C_WHITE, "Not selectable yet | EXE or MENU to return");
-    dupdate();
-    while (!keydown(KEY_EXE) && !keydown(KEY_MENU))
-        clearevents();
-    while (keydown(KEY_EXE) || keydown(KEY_MENU))
-        clearevents();
-}
-
 static void wait_for_key_release()
 {
     while (keydown(KEY_UP) || keydown(KEY_DOWN) ||
            keydown(KEY_EXE) || keydown(KEY_EXIT) || keydown(KEY_F1) ||
            keydown(KEY_F2) || keydown(KEY_F3) ||
-           keydown(KEY_F5) || keydown(KEY_F6))
+           keydown(KEY_F4) || keydown(KEY_F5) || keydown(KEY_F6))
         clearevents();
 }
 
@@ -476,7 +847,7 @@ int main()
         }
         else if (keydown(KEY_F4))
         {
-            show_pending_scenes();
+            run_renderer_microbenchmarks();
             wait_for_key_release();
         }
         else if (keydown(KEY_F5))
