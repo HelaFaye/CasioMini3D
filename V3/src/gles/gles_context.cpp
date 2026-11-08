@@ -20,6 +20,7 @@ constexpr size_t FXGL_MAX_TEXTURES = 8;
 constexpr size_t FXGL_MAX_TEXTURE_UNITS = 2;
 constexpr size_t FXGL_MAX_TEXTURE_BYTES = 64u * 1024u;
 constexpr GLint FXGL_MAX_TEXTURE_SIZE = 128;
+constexpr size_t FXGL_MAX_TEXTURE_LEVELS = 8;
 constexpr size_t FXGL_MAX_FRAMEBUFFERS = 4;
 constexpr size_t FXGL_MAX_RENDERBUFFERS = 8;
 constexpr size_t FXGL_MAX_RENDERBUFFER_BYTES = 128u * 1024u;
@@ -34,9 +35,18 @@ struct BufferObject
     bool alive = false;
 };
 
+struct TextureMipObject
+{
+    uint16_t *pixels = nullptr;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    size_t bytes = 0;
+};
+
 struct TextureObject
 {
     uint16_t *pixels = nullptr;
+    TextureMipObject mip_levels[FXGL_MAX_TEXTURE_LEVELS - 1] = {};
     uint16_t width = 0;
     uint16_t height = 0;
     size_t bytes = 0;
@@ -249,8 +259,29 @@ static TextureObject *bound_texture(GLenum target)
 static gfx::TextureSampler make_sampler(const TextureObject& object)
 {
     gfx::TextureSampler sampler = {};
-    sampler.filter = object.min_filter == GL_LINEAR
+    sampler.filter = object.mag_filter == GL_LINEAR
         ? gfx::TextureFilter::Bilinear : gfx::TextureFilter::Nearest;
+    switch (object.min_filter)
+    {
+        case GL_LINEAR:
+            sampler.min_filter = gfx::TextureMinFilter::Linear;
+            break;
+        case GL_NEAREST_MIPMAP_NEAREST:
+            sampler.min_filter = gfx::TextureMinFilter::NearestMipmapNearest;
+            break;
+        case GL_LINEAR_MIPMAP_NEAREST:
+            sampler.min_filter = gfx::TextureMinFilter::LinearMipmapNearest;
+            break;
+        case GL_NEAREST_MIPMAP_LINEAR:
+            sampler.min_filter = gfx::TextureMinFilter::NearestMipmapLinear;
+            break;
+        case GL_LINEAR_MIPMAP_LINEAR:
+            sampler.min_filter = gfx::TextureMinFilter::LinearMipmapLinear;
+            break;
+        default:
+            sampler.min_filter = gfx::TextureMinFilter::Nearest;
+            break;
+    }
     sampler.address_u = object.wrap_s == GL_REPEAT
         ? gfx::TextureAddressMode::Repeat :
         (object.wrap_s == GL_MIRRORED_REPEAT
@@ -264,11 +295,26 @@ static gfx::TextureSampler make_sampler(const TextureObject& object)
     return sampler;
 }
 
+static void release_texture_mips(TextureObject& object)
+{
+    for (TextureMipObject& level : object.mip_levels)
+    {
+        std::free(level.pixels);
+        level = {};
+    }
+}
+
+static size_t texture_level_bytes(uint16_t width, uint16_t height)
+{
+    return static_cast<size_t>(width) * height * sizeof(uint16_t);
+}
+
 static void destroy_textures(Context& context)
 {
     for (TextureObject& object : context.textures)
     {
         std::free(object.pixels);
+        release_texture_mips(object);
         object = {};
     }
     context.texture_bytes = 0;
@@ -1907,6 +1953,7 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
         {
             g_context.texture_bytes -= object->bytes;
             std::free(object->pixels);
+            release_texture_mips(*object);
         }
         *object = {};
     }
