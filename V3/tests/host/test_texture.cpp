@@ -429,11 +429,68 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
                 fast_texture, coordinate[0], coordinate[1], edge_actual));
             assert(edge_actual == edge_expected);
         }
+        // Per-draw prepared state removes dimension conversions,
+        // masks and row-stride multiplication from every fragment.
+        static uint16_t packed_pixels[fast_height * fast_width] = {};
+        for (uint16_t y = 0; y < fast_height; ++y)
+        {
+            for (uint16_t x = 0; x < fast_width; ++x)
+            {
+                packed_pixels[static_cast<size_t>(y) * fast_width + x] =
+                    static_cast<uint16_t>(
+                        (static_cast<uint32_t>(x) * 47u +
+                         static_cast<uint32_t>(y) * 113u) ^
+                        (static_cast<uint32_t>(x) << 9));
+            }
+        }
+        const Texture2DView packed_texture = {
+            packed_pixels, fast_width, fast_height, fast_width
+        };
+        gfx::TextureNearestRepeatPow2Sampler prepared = {};
+        assert(gfx::prepare_texture_nearest_repeat_pow2_sampler(
+            packed_texture, repeat, prepared));
+        for (int i = 0; i < 20000; ++i)
+        {
+            const uint32_t u_bits =
+                (static_cast<uint32_t>(i) * 2654435761u + 17u) & 0x00ffffffu;
+            const uint32_t v_bits =
+                (static_cast<uint32_t>(i) * 2246822519u + 101u) & 0x00ffffffu;
+            const float u = static_cast<float>(u_bits) *
+                (128.0f / 16777216.0f) - 64.0f;
+            const float v = static_cast<float>(v_bits) *
+                (128.0f / 16777216.0f) - 64.0f;
+            const int64_t fixed_u = static_cast<int64_t>(std::floor(
+                static_cast<double>(u) * fast_width * 65536.0));
+            const int64_t fixed_v = static_cast<int64_t>(std::floor(
+                static_cast<double>(v) * fast_height * 65536.0));
+            const uint16_t expected = gfx::sample_texture_validated(
+                packed_texture, fixed_u, fixed_v, repeat, 0.0f);
+            uint16_t actual = 0;
+            assert(gfx::sample_texture_nearest_repeat_pow2_cached(
+                prepared, u, v, actual));
+            assert(actual == expected);
+        }
+
+        gfx::TextureNearestRepeatPow2Sampler rejected_preparation = {};
+        assert(!gfx::prepare_texture_nearest_repeat_pow2_sampler(
+            fast_texture, repeat, rejected_preparation));
+        const TextureSampler wrong_sampler = {
+            TextureFilter::Nearest, TextureAddressMode::Clamp,
+            TextureAddressMode::Repeat
+        };
+        assert(!gfx::prepare_texture_nearest_repeat_pow2_sampler(
+            packed_texture, wrong_sampler, rejected_preparation));
+
         uint16_t rejected = 0;
         assert(!gfx::sample_texture_nearest_repeat_pow2_validated(
             fast_texture, 64.0f, 0.0f, rejected));
         assert(!gfx::sample_texture_nearest_repeat_pow2_validated(
             fast_texture, std::numeric_limits<float>::quiet_NaN(),
+            0.0f, rejected));
+        assert(!gfx::sample_texture_nearest_repeat_pow2_cached(
+            prepared, 64.0f, 0.0f, rejected));
+        assert(!gfx::sample_texture_nearest_repeat_pow2_cached(
+            prepared, std::numeric_limits<float>::infinity(),
             0.0f, rejected));
     }
 

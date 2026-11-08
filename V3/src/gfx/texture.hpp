@@ -71,6 +71,33 @@ uint16_t sample_texture_validated(
     const TextureSampler& sampler,
     float lod = 0.0f);
 
+/* Precomputed state for a tightly packed, power-of-two Repeat/Repeat texture.
+   The pixel storage must outlive the prepared sampler. */
+struct TextureNearestRepeatPow2Sampler
+{
+    const uint16_t *pixels;
+    float scale_u;
+    float scale_v;
+    uint16_t mask_u;
+    uint16_t mask_v;
+    uint8_t row_shift;
+};
+
+/* Prepare once per draw; returns false unless the texture/sampler is exactly
+   nearest/nearest, Repeat/Repeat, power-of-two, and tightly packed. */
+bool prepare_texture_nearest_repeat_pow2_sampler(
+    const Texture2DView& texture,
+    const TextureSampler& sampler,
+    TextureNearestRepeatPow2Sampler& prepared);
+
+/* Sample using state prepared once per draw. Returns false outside [-64, 64)
+   or for non-finite coordinates. */
+bool sample_texture_nearest_repeat_pow2_cached(
+    const TextureNearestRepeatPow2Sampler& sampler,
+    float u,
+    float v,
+    uint16_t& pixel);
+
 /* Direct two-axis Repeat sampler for validated nearest textures whose
    nonzero width and height are powers of two. Returns false outside [-64, 64)
    so the caller can use the general full-range sampler. */

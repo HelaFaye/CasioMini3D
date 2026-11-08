@@ -879,6 +879,7 @@ struct CachedTextureBinding
     bool valid;
     bool nearest_repeat_power_of_two;
     bool requires_derivatives;
+    gfx::TextureNearestRepeatPow2Sampler repeat_sampler;
 };
 
 struct DrawInvocation
@@ -966,14 +967,8 @@ static void initialize_draw_invocation(
         cached.valid = fxgl::get_texture_binding(
             unit, cached.view, cached.sampler);
         cached.nearest_repeat_power_of_two = cached.valid &&
-            cached.sampler.filter == gfx::TextureFilter::Nearest &&
-            cached.sampler.min_filter == gfx::TextureMinFilter::Nearest &&
-            cached.sampler.address_u == gfx::TextureAddressMode::Repeat &&
-            cached.sampler.address_v == gfx::TextureAddressMode::Repeat &&
-            (cached.view.width &
-             static_cast<uint16_t>(cached.view.width - 1)) == 0 &&
-            (cached.view.height &
-             static_cast<uint16_t>(cached.view.height - 1)) == 0;
+            gfx::prepare_texture_nearest_repeat_pow2_sampler(
+                cached.view, cached.sampler, cached.repeat_sampler);
         cached.requires_derivatives = !cached.valid ||
             gfx::sampler_requires_implicit_derivatives(cached.sampler);
     }
@@ -1040,8 +1035,8 @@ static bool sample_bound_texture(
     if (cached.nearest_repeat_power_of_two)
     {
         uint16_t pixel = 0;
-        if (gfx::sample_texture_nearest_repeat_pow2_validated(
-                texture, u, v, pixel))
+        if (gfx::sample_texture_nearest_repeat_pow2_cached(
+                cached.repeat_sampler, u, v, pixel))
         {
             rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
             rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;

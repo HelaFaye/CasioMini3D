@@ -389,6 +389,66 @@ uint16_t sample_texture_validated(
     return sample_texture_impl(texture, u_16_16, v_16_16, sampler, lod);
 }
 
+bool prepare_texture_nearest_repeat_pow2_sampler(
+    const Texture2DView& texture,
+    const TextureSampler& sampler,
+    TextureNearestRepeatPow2Sampler& prepared)
+{
+    if (!texture.pixels || texture.width == 0 || texture.height == 0 ||
+        texture.stride != texture.width ||
+        (texture.width & static_cast<uint16_t>(texture.width - 1)) != 0 ||
+        (texture.height & static_cast<uint16_t>(texture.height - 1)) != 0 ||
+        sampler.filter != TextureFilter::Nearest ||
+        sampler.min_filter != TextureMinFilter::Nearest ||
+        sampler.address_u != TextureAddressMode::Repeat ||
+        sampler.address_v != TextureAddressMode::Repeat)
+        return false;
+
+    uint8_t row_shift = 0;
+    while ((static_cast<uint32_t>(1) << row_shift) < texture.width)
+        ++row_shift;
+
+    prepared.pixels = texture.pixels;
+    prepared.scale_u = static_cast<float>(texture.width);
+    prepared.scale_v = static_cast<float>(texture.height);
+    prepared.mask_u = static_cast<uint16_t>(texture.width - 1);
+    prepared.mask_v = static_cast<uint16_t>(texture.height - 1);
+    prepared.row_shift = row_shift;
+    return true;
+}
+
+bool sample_texture_nearest_repeat_pow2_cached(
+    const TextureNearestRepeatPow2Sampler& sampler,
+    float u,
+    float v,
+    uint16_t& pixel)
+{
+    // Range comparisons reject NaN and infinities before integer conversion.
+    if (!(u >= -64.0f && u < 64.0f &&
+          v >= -64.0f && v < 64.0f))
+        return false;
+
+    const float scaled_u = u * sampler.scale_u;
+    const float scaled_v = v * sampler.scale_v;
+    int32_t x = static_cast<int32_t>(scaled_u);
+    int32_t y = static_cast<int32_t>(scaled_v);
+
+    // The glmark2 sphere supplies nonnegative UVs, where truncation equals floor.
+    if (u < 0.0f)
+        if (static_cast<float>(x) > scaled_u) --x;
+    if (v < 0.0f)
+        if (static_cast<float>(y) > scaled_v) --y;
+
+    const uint32_t addressed_x =
+        static_cast<uint32_t>(x) & sampler.mask_u;
+    const uint32_t addressed_y =
+        static_cast<uint32_t>(y) & sampler.mask_v;
+    const size_t offset =
+        (static_cast<size_t>(addressed_y) << sampler.row_shift) | addressed_x;
+    pixel = sampler.pixels[offset];
+    return true;
+}
+
 bool sample_texture_nearest_repeat_pow2_validated(
     const Texture2DView& texture,
     float u,
