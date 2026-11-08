@@ -309,10 +309,58 @@ static void test_nested_if_else_and_boolean_not()
     assert(near(runtime.fragment_color.data[0], 0.8f));
 }
 
+static void test_bounded_for_and_while_loops()
+{
+    static const char for_source[] =
+        "#version 100\n"
+        "void main() {\n"
+        "  float accumulated = 0.0;\n"
+        "  for (int i = 0; i < 4; i++) {\n"
+        "    accumulated = accumulated + 0.25;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(accumulated);\n"
+        "}\n";
+
+    ShaderModule for_module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, for_source, for_module));
+    ShaderRuntime for_runtime = {};
+    assert(fxgl::execute_glsl(for_module, for_runtime));
+    assert(near(for_runtime.fragment_color.data[0], 1.0f));
+
+    static const char while_source[] =
+        "void main() {\n"
+        "  int i = 0;\n"
+        "  float accumulated = 0.0;\n"
+        "  while (i < 3) {\n"
+        "    accumulated = accumulated + 0.5;\n"
+        "    i = i + 1;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(accumulated);\n"
+        "}\n";
+
+    ShaderModule while_module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, while_source, while_module));
+    ShaderRuntime while_runtime = {};
+    assert(fxgl::execute_glsl(while_module, while_runtime));
+    assert(near(while_runtime.fragment_color.data[0], 1.5f));
+}
+
+static void test_non_terminating_shader_hits_execution_budget()
+{
+    static const char source[] =
+        "void main() {\n"
+        "  while (true) { }\n"
+        "}\n";
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+    ShaderRuntime runtime = {};
+    assert(!fxgl::execute_glsl(module, runtime));
+}
+
 static void test_compiler_rejects_unsupported_or_invalid_source()
 {
     const char *unsupported[] = {
-        "void main() { while (true) { gl_FragColor = vec4(1.0); } }",
+        "void main() { do { gl_FragColor = vec4(1.0); } while (false); }",
         "attribute vec4 a_position[4]; void main() { gl_Position = a_position[0]; }",
         "void main() { gl_FragColor = unknown_name; }",
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
@@ -357,6 +405,8 @@ int main()
     test_matrix_construction_and_dimension_conversion();
     test_if_else_comparisons_and_logical_operators();
     test_nested_if_else_and_boolean_not();
+    test_bounded_for_and_while_loops();
+    test_non_terminating_shader_hits_execution_budget();
     test_compiler_rejects_unsupported_or_invalid_source();
     test_instruction_budget_and_stack_safety();
 
