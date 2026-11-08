@@ -9,8 +9,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(
-    "\${CMAKE_CURRENT_SOURCE_DIR}/../../../../lib/fxOGL"
-    "\${CMAKE_CURRENT_BINARY_DIR}/fxOGL"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../lib/fxOGL"
+    "${CMAKE_CURRENT_BINARY_DIR}/fxOGL"
 )
 
 add_executable(fxogl_point_size_smoke main.cpp)
@@ -22,6 +22,6 @@ generate_g3a(
     OUTPUT "fxogl-point-size-smoke.g3a"
     NAME "fxOGL Point Size Smoke"
     ICONS
-        "\${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-uns.png"
-        "\${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-sel.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-uns.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-sel.png"
 )
