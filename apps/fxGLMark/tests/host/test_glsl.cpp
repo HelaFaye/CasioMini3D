@@ -437,6 +437,62 @@ static void test_loop_break_continue_and_nested_targets()
     assert(near(nested_runtime.fragment_color.data[1], 2.0f));
 }
 
+static void test_user_defined_functions_and_value_returns()
+{
+    static const char source[] =
+        "float square(float value) {\n"
+        "  float result = value * value;\n"
+        "  return result;\n"
+        "}\n"
+        "float signed_square(float value) {\n"
+        "  if (value < 0.0) return -square(-value);\n"
+        "  return square(value);\n"
+        "}\n"
+        "vec3 make_color(float red, float green) {\n"
+        "  return vec3(red, green, red + green);\n"
+        "}\n"
+        "void write_color(vec4 color) {\n"
+        "  if (color.a > 0.5) { gl_FragColor = color; return; }\n"
+        "  gl_FragColor = vec4(0.0);\n"
+        "}\n"
+        "void main() {\n"
+        "  vec3 rgb = make_color(0.25, signed_square(-3.0));\n"
+        "  write_color(vec4(rgb, 1.0));\n"
+        "}\n";
+
+    ShaderModule module = {};
+    const bool compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, source, module);
+    if (!compiled)
+        std::fprintf(stderr, "user-function diagnostic: %s\n", module.info_log);
+    assert(compiled);
+    assert(module.has_main);
+    assert(module.function_count == 5);
+    assert(module.functions[0].parameter_count == 1);
+    assert(module.functions[2].return_type == ShaderType::Vec3);
+
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.25f));
+    assert(near(runtime.fragment_color.data[1], -9.0f));
+    assert(near(runtime.fragment_color.data[2], -8.75f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+}
+
+static void test_user_function_call_depth_is_bounded()
+{
+    static const char source[] =
+        "float recurse(float value) {\n"
+        "  return recurse(value + 1.0);\n"
+        "}\n"
+        "void main() { gl_FragColor = vec4(recurse(0.0)); }\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+    ShaderRuntime runtime = {};
+    assert(!fxgl::execute_glsl(module, runtime));
+}
+
 static void test_non_terminating_shader_hits_execution_budget()
 {
     static const char source[] =
@@ -579,6 +635,9 @@ static void test_compiler_rejects_unsupported_or_invalid_source()
         "void main() { gl_FragColor = unknown_name; }",
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
         "void main() { gl_Position = vec4(1.0); }",
+        "float helper(float value); void main() { gl_FragColor = vec4(1.0); }",
+        "void main() { gl_FragColor = vec4(later(1.0)); } float later(float value) { return value; }",
+        "float helper(float value) { return value; } void main() { gl_FragColor = vec4(helper(vec2(1.0))); }",
         "void main() { break; gl_FragColor = vec4(1.0); }",
         "void main() { continue; gl_FragColor = vec4(1.0); }"
     };
@@ -680,6 +739,8 @@ int main()
     test_nested_if_else_and_boolean_not();
     test_bounded_for_and_while_loops();
     test_loop_break_continue_and_nested_targets();
+    test_user_defined_functions_and_value_returns();
+    test_user_function_call_depth_is_bounded();
     test_non_terminating_shader_hits_execution_budget();
     test_essl_math_and_geometric_builtins();
     test_matrix_component_multiply_and_scalar_broadcast();
