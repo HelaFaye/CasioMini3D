@@ -858,8 +858,34 @@ static bool fetch_vertex_attribute(
 struct DrawInvocation
 {
     fxgl::LinkedProgramView program;
+    int passthrough_varying_offset;
     bool fragment_failed;
 };
+
+static int find_passthrough_varying_offset(
+    const fxgl::LinkedProgramView& program)
+{
+    const fxgl::ShaderModule& module = *program.fragment_shader;
+    if (module.stage != fxgl::ShaderStage::Fragment ||
+        module.instruction_count != 2 ||
+        module.varying_count == 0)
+        return -1;
+
+    const fxgl::ShaderInstruction& load = module.instructions[0];
+    const fxgl::ShaderInstruction& store = module.instructions[1];
+    if (load.op != fxgl::ShaderOp::LoadVarying ||
+        store.op != fxgl::ShaderOp::StoreFragmentColor ||
+        load.type != fxgl::ShaderType::Vec4 ||
+        store.type != fxgl::ShaderType::Vec4 ||
+        load.index >= module.varying_count ||
+        module.varyings[load.index].type != fxgl::ShaderType::Vec4)
+        return -1;
+
+    const size_t offset = program.fragment_varying_offsets[load.index];
+    if (offset + 4 > program.varying_scalar_count)
+        return -1;
+    return static_cast<int>(offset);
+}
 
 static bool sample_bound_texture(
     int unit,
@@ -924,6 +950,24 @@ static bool execute_fragment(
     const size_t varying_count = input.varying_count;
     DrawInvocation& invocation = *static_cast<DrawInvocation *>(user_data);
     const fxgl::ShaderModule& module = *invocation.program.fragment_shader;
+
+    // The common Gouraud/unlit fragment form is just
+    // "gl_FragColor = varying_vec4;". Bypass per-fragment VM setup and
+    // interpretation for this exact, side-effect-free two-op program.
+    if (invocation.passthrough_varying_offset >= 0)
+    {
+        const size_t offset =
+            static_cast<size_t>(invocation.passthrough_varying_offset);
+        if (!varyings || offset + 4 > varying_count)
+        {
+            invocation.fragment_failed = true;
+            return false;
+        }
+        for (size_t i = 0; i < 4; ++i)
+            rgba[i] = varyings[offset + i];
+        return true;
+    }
+
     fxgl::ShaderRuntime runtime = {};
 
     for (size_t i = 0; i < module.uniform_count; ++i)
@@ -1047,7 +1091,7 @@ static bool draw_vertex_triangle(
         !execute_vertex(program, third, vertices[2]))
         return false;
 
-    DrawInvocation invocation = {program, false};
+    DrawInvocation invocation = {program, find_passthrough_varying_offset(program), false};
     fxgl::draw_clip_triangle(
         vertices,
         program.varying_scalar_count,
