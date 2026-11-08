@@ -2501,18 +2501,30 @@ bool execute_glsl(
     TextureSampleFunction texture_sample,
     void *user_data)
 {
-    if (!module.compiled)
+    if (!module.compiled || !module.has_main ||
+        module.main_function >= module.function_count)
         return false;
+
+    struct CallFrame
+    {
+        size_t return_pc;
+        size_t stack_base;
+        ShaderValue locals[GLSL_MAX_LOCALS];
+    };
+
+    CallFrame call_frames[GLSL_MAX_CALL_DEPTH] = {};
+    size_t call_depth = 0;
+    bool main_returned = false;
 
     // Stack slots are written by push_value before they can be read.
     // Clearing all 32 large ShaderValue objects for every fragment shader
     // invocation is unnecessary on this bounded interpreter.
     ShaderValue stack[GLSL_MAX_STACK];
     size_t stack_size = 0;
-    size_t pc = 0;
+    size_t pc = module.functions[module.main_function].entry_pc;
     size_t executed_steps = 0;
 
-    while (pc < module.instruction_count)
+    while (pc < module.instruction_count && !main_returned)
     {
         if (++executed_steps > GLSL_MAX_EXECUTION_STEPS)
             return false;
@@ -2524,6 +2536,8 @@ bool execute_glsl(
         ShaderValue b;
         ShaderValue c;
         ShaderValue result;
+        ShaderValue *locals = call_depth == 0
+            ? runtime.locals : call_frames[call_depth - 1].locals;
 
         switch (instruction.op)
         {
@@ -2552,7 +2566,7 @@ bool execute_glsl(
                 break;
             case ShaderOp::LoadLocal:
                 if (instruction.index >= GLSL_MAX_LOCALS ||
-                    !push_value(stack, stack_size, runtime.locals[instruction.index]))
+                    !push_value(stack, stack_size, locals[instruction.index]))
                     return false;
                 break;
 
@@ -2568,7 +2582,7 @@ bool execute_glsl(
                     instruction.index >= GLSL_MAX_LOCALS ||
                     a.type != instruction.type)
                     return false;
-                copy_shader_value(runtime.locals[instruction.index], a);
+                copy_shader_value(locals[instruction.index], a);
                 break;
             case ShaderOp::StorePosition:
                 if (!pop_value(stack, stack_size, a) ||
@@ -2597,6 +2611,76 @@ bool execute_glsl(
                     return false;
                 pc = instruction.index;
                 break;
+
+            case ShaderOp::Call:
+            {
+                if (instruction.index >= module.function_count ||
+                    call_depth >= GLSL_MAX_CALL_DEPTH)
+                    return false;
+                const ShaderFunction& function =
+                    module.functions[instruction.index];
+                const size_t argument_count = instruction.argument_count;
+                if (!function.defined ||
+                    argument_count != function.parameter_count ||
+                    stack_size < argument_count)
+                    return false;
+
+                CallFrame& frame = call_frames[call_depth];
+                frame.return_pc = pc;
+                frame.stack_base = stack_size - argument_count;
+                for (size_t i = 0; i < function.local_count; ++i)
+                {
+                    const ShaderVariable& local = function.locals[i];
+                    if (local.index >= GLSL_MAX_LOCALS)
+                        return false;
+                    set_zero_value(frame.locals[local.index], local.type);
+                }
+
+                for (size_t i = argument_count; i > 0; --i)
+                {
+                    if (!pop_value(stack, stack_size, a) ||
+                        a.type != function.parameters[i - 1].type)
+                        return false;
+                    copy_shader_value(frame.locals[i - 1], a);
+                }
+
+                ++call_depth;
+                pc = function.entry_pc;
+                break;
+            }
+
+            case ShaderOp::Return:
+            {
+                const bool returns_value =
+                    instruction.type != ShaderType::Invalid;
+                if (instruction.argument_count !=
+                    static_cast<uint8_t>(returns_value ? 1 : 0))
+                    return false;
+
+                if (returns_value)
+                {
+                    if (!pop_value(stack, stack_size, result) ||
+                        result.type != instruction.type)
+                        return false;
+                }
+
+                if (call_depth == 0)
+                {
+                    if (returns_value || stack_size != 0)
+                        return false;
+                    main_returned = true;
+                    break;
+                }
+
+                const CallFrame& frame = call_frames[call_depth - 1];
+                if (stack_size != frame.stack_base)
+                    return false;
+                pc = frame.return_pc;
+                --call_depth;
+                if (returns_value && !push_value(stack, stack_size, result))
+                    return false;
+                break;
+            }
 
             case ShaderOp::LogicalNot:
                 if (!pop_value(stack, stack_size, a) ||
@@ -3334,7 +3418,7 @@ bool execute_glsl(
         }
     }
 
-    return stack_size == 0;
+    return main_returned && call_depth == 0 && stack_size == 0;
 }
 
 } // namespace fxgl
