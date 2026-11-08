@@ -183,6 +183,72 @@ static void test_vector_builtins_and_functions()
     assert(near(runtime.fragment_color.data[3], 1.0f));
 }
 
+static void test_mat2_mat3_uniforms_and_matrix_vector_multiplication()
+{
+    static const char source[] =
+        "#version 100\n"
+        "attribute vec2 a_position;\n"
+        "uniform mat2 u_rotation;\n"
+        "uniform mat3 u_scale;\n"
+        "void main() {\n"
+        "  vec2 rotated = u_rotation * a_position;\n"
+        "  vec3 transformed = u_scale * vec3(rotated, 1.0);\n"
+        "  gl_Position = vec4(transformed, 1.0);\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Vertex, source, module));
+    assert(module.attribute_count == 1);
+    assert(module.uniform_count == 2);
+    assert(module.attributes[0].type == ShaderType::Vec2);
+    assert(module.uniforms[0].type == ShaderType::Mat2);
+    assert(module.uniforms[1].type == ShaderType::Mat3);
+
+    ShaderRuntime runtime = {};
+    runtime.attributes[0] = value(ShaderType::Vec2, 2.0f, 3.0f);
+    runtime.uniforms[0] = {};
+    runtime.uniforms[0].type = ShaderType::Mat2;
+    runtime.uniforms[0].data[0] = 0.0f;
+    runtime.uniforms[0].data[1] = -1.0f;
+    runtime.uniforms[0].data[2] = 1.0f;
+    runtime.uniforms[0].data[3] = 0.0f;
+
+    runtime.uniforms[1] = {};
+    runtime.uniforms[1].type = ShaderType::Mat3;
+    runtime.uniforms[1].data[0] = 2.0f;
+    runtime.uniforms[1].data[4] = 3.0f;
+    runtime.uniforms[1].data[8] = 4.0f;
+
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.position.data[0], 6.0f));
+    assert(near(runtime.position.data[1], -6.0f));
+    assert(near(runtime.position.data[2], 4.0f));
+    assert(near(runtime.position.data[3], 1.0f));
+}
+
+static void test_matrix_construction_and_dimension_conversion()
+{
+    static const char source[] =
+        "void main() {\n"
+        "  mat2 m2 = mat2(2.0);\n"
+        "  mat3 m3 = mat3(m2);\n"
+        "  vec3 p = m3 * vec3(1.0, 2.0, 3.0);\n"
+        "  gl_Position = vec4(p, 1.0);\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Vertex, source, module));
+    assert(module.local_count == 3);
+
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.position.data[0], 2.0f));
+    assert(near(runtime.position.data[1], 4.0f));
+    // mat3(mat2) promotes the new third row/column with an identity diagonal.
+    assert(near(runtime.position.data[2], 3.0f));
+    assert(near(runtime.position.data[3], 1.0f));
+}
+
 static void test_compiler_rejects_unsupported_or_invalid_source()
 {
     const char *unsupported[] = {
@@ -227,6 +293,8 @@ int main()
     test_compile_and_execute_texture_fragment_shader();
     test_constructors_swizzles_locals_and_scalar_vector_math();
     test_vector_builtins_and_functions();
+    test_mat2_mat3_uniforms_and_matrix_vector_multiplication();
+    test_matrix_construction_and_dimension_conversion();
     test_compiler_rejects_unsupported_or_invalid_source();
     test_instruction_budget_and_stack_safety();
 
