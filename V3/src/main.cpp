@@ -394,6 +394,10 @@ static bool benchmark_texture_nearest_repeat(uint32_t iterations)
         gfx::TextureAddressMode::Repeat,
         gfx::TextureAddressMode::Repeat
     };
+    gfx::TextureNearestRepeatPow2Sampler prepared_sampler = {};
+    if (!gfx::prepare_texture_nearest_repeat_pow2_sampler(
+            texture, sampler, prepared_sampler))
+        return false;
 
     uint16_t checksum = 0;
     for (uint32_t i = 0; i < iterations; ++i)
@@ -407,8 +411,9 @@ static bool benchmark_texture_nearest_repeat(uint32_t iterations)
             (6.0f / 16777216.0f);
 
         uint16_t pixel = 0;
-        if (!gfx::sample_texture_nearest_validated(
-                texture, u, v, sampler, pixel))
+        // Exercise the exact precomputed sampler used by GLES fragments.
+        if (!gfx::sample_texture_nearest_repeat_pow2_cached(
+                prepared_sampler, u, v, pixel))
             return false;
         checksum = static_cast<uint16_t>(checksum ^ pixel);
     }
