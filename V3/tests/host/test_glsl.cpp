@@ -322,7 +322,12 @@ static void test_bounded_for_and_while_loops()
         "}\n";
 
     ShaderModule for_module = {};
-    assert(fxgl::compile_glsl(ShaderStage::Fragment, for_source, for_module));
+    const bool for_compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, for_source, for_module);
+    if (!for_compiled)
+        std::fprintf(stderr, "for-loop compile diagnostic: %s\\n",
+            for_module.info_log);
+    assert(for_compiled);
     ShaderRuntime for_runtime = {};
     assert(fxgl::execute_glsl(for_module, for_runtime));
     assert(near(for_runtime.fragment_color.data[0], 1.0f));
