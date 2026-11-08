@@ -11,6 +11,12 @@
 
 No glmark2 assets or test data are intentionally redistributed by this project.
 
+## Native fxGLMark2 workload port
+
+The active V3 application now includes a native fx-CG50 benchmark selector and a partial glmark2-inspired workload port. The upstream glmark2 repository is consulted for scene-family names, default-benchmark organization, and workload intent. The local workloads are independently implemented against the CasioMini3D software renderer; they use a generated sphere/texture and do not intentionally redistribute upstream source code, models, textures, or other assets.
+
+The selectable set is currently limited to clear, build (client arrays/VBO), texture (nearest/linear), and Gouraud shading. The five-workload preset is explicitly a supported subset, not the complete upstream default suite. See [fxglmark2-port.md](fxglmark2-port.md) for the exact mapping and remaining scene families.
+
 ## Gint and fxSDK
 
 The active V3 application depends on Gint and the fxSDK build/conversion toolchain. They are separate projects; this repository does not claim ownership of their code. Consult the respective upstream projects and their license files for applicable copyright and license terms.
