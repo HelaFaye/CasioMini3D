@@ -479,6 +479,49 @@ static void test_user_defined_functions_and_value_returns()
     assert(near(runtime.fragment_color.data[3], 1.0f));
 }
 
+static void test_user_function_prototypes_and_forward_definitions()
+{
+    // main() calls a function declared above it but defined after it. The
+    // compiler must patch the function table and keep main from falling into
+    // the later function's bytecode.
+    static const char main_forward_source[] =
+        "float scale_value(float);\n"
+        "void main() {\n"
+        "  gl_FragColor = vec4(scale_value(2.0), scale_value(-1.0), 0.0, 1.0);\n"
+        "}\n"
+        "float scale_value(float input) { return input * 2.5; }\n";
+
+    ShaderModule main_forward_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, main_forward_source, main_forward_module));
+    assert(main_forward_module.function_count == 2);
+    assert(main_forward_module.main_function == 1);
+    assert(main_forward_module.functions[0].defined);
+    assert(main_forward_module.functions[1].defined);
+    ShaderRuntime main_forward_runtime = {};
+    assert(fxgl::execute_glsl(main_forward_module, main_forward_runtime));
+    assert(near(main_forward_runtime.fragment_color.data[0], 5.0f));
+    assert(near(main_forward_runtime.fragment_color.data[1], -2.5f));
+    assert(near(main_forward_runtime.fragment_color.data[3], 1.0f));
+
+    // A helper may call a later-defined helper when its prototype was
+    // declared first. Parameter identifiers may differ between prototype
+    // and definition; the signature is based on parameter types.
+    static const char nested_forward_source[] =
+        "float deferred(float value);\n"
+        "float caller(float argument) { return deferred(argument) + 1.0; }\n"
+        "float deferred(float input) { return input * 3.0; }\n"
+        "void main() { gl_FragColor = vec4(caller(2.0)); }\n";
+
+    ShaderModule nested_forward_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, nested_forward_source, nested_forward_module));
+    assert(nested_forward_module.function_count == 3);
+    ShaderRuntime nested_forward_runtime = {};
+    assert(fxgl::execute_glsl(nested_forward_module, nested_forward_runtime));
+    assert(near(nested_forward_runtime.fragment_color.data[0], 7.0f));
+}
+
 static void test_user_function_call_depth_is_bounded()
 {
     static const char source[] =
@@ -635,7 +678,9 @@ static void test_compiler_rejects_unsupported_or_invalid_source()
         "void main() { gl_FragColor = unknown_name; }",
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
         "void main() { gl_Position = vec4(1.0); }",
-        "float helper(float value); void main() { gl_FragColor = vec4(1.0); }",
+        "float missing(float value); void main() { gl_FragColor = vec4(1.0); }",
+        "float helper(float value); float helper(vec2 value) { return 1.0; } void main() { gl_FragColor = vec4(1.0); }",
+        "float helper(float value); float helper(float input) { return input; } float helper(float other) { return other; } void main() { gl_FragColor = vec4(1.0); }",
         "void main() { gl_FragColor = vec4(later(1.0)); } float later(float value) { return value; }",
         "float helper(float value) { return value; } void main() { gl_FragColor = vec4(helper(vec2(1.0))); }",
         "void main() { break; gl_FragColor = vec4(1.0); }",
@@ -740,6 +785,7 @@ int main()
     test_bounded_for_and_while_loops();
     test_loop_break_continue_and_nested_targets();
     test_user_defined_functions_and_value_returns();
+    test_user_function_prototypes_and_forward_definitions();
     test_user_function_call_depth_is_bounded();
     test_non_terminating_shader_hits_execution_budget();
     test_essl_math_and_geometric_builtins();

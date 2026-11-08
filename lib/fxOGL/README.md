@@ -15,8 +15,9 @@ The library currently contains:
   mirrored-repeat address modes.
 - Depth, stencil, scissor, blending, color masks and framebuffer objects.
 - A bounded GLSL ES 1.00 compiler and bytecode VM with conditional/loop control
-  flow, loop jumps, and user-defined functions with typed value parameters,
-  returns, local call frames and bounded call depth.
+  flow, loop jumps, and user-defined functions with prototypes, forward
+  definitions, typed value parameters and returns, local call frames and
+  bounded call depth.
 
 This is an incremental compatibility implementation, not full OpenGL ES 2.0
 support and not a Khronos-conformant implementation. See

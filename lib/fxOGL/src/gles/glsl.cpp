@@ -390,7 +390,8 @@ public:
     Parser(ShaderStage stage, const char *source, ShaderModule& module)
         : stage_(stage), lexer_(source), module_(module), current_(),
           failed_(false), recursion_depth_(0), active_function_(NO_ACTIVE_FUNCTION),
-          loop_stack_{}, jump_patches_{}, loop_depth_(0), jump_patch_count_(0)
+          main_terminated_(false), loop_stack_{}, jump_patches_{},
+          loop_depth_(0), jump_patch_count_(0)
     {
         advance();
     }
@@ -404,24 +405,35 @@ public:
         while (!failed_ && current_.kind != TokenKind::End)
         {
             if (is_identifier("precision"))
+            {
+                if (module_.has_main)
+                {
+                    fail("precision declarations must precede main()");
+                    break;
+                }
                 parse_precision();
+            }
             else if (is_identifier("attribute") ||
                      is_identifier("uniform") ||
                      is_identifier("varying"))
             {
                 if (module_.has_main)
                 {
-                    fail("main must be the final function definition");
+                    fail("global declarations must precede main()");
                     break;
                 }
                 parse_global_declaration();
             }
             else
             {
-                if (module_.has_main)
+                // main() may call a function whose prototype appeared earlier
+                // and whose definition follows main(). Terminate main's bytecode
+                // before emitting any later function body.
+                if (module_.has_main && !main_terminated_)
                 {
-                    fail("main must be the final function definition");
-                    break;
+                    if (!emit_simple(ShaderOp::Return, ShaderType::Invalid))
+                        break;
+                    main_terminated_ = true;
                 }
                 parse_function_definition();
             }
@@ -429,6 +441,17 @@ public:
 
         if (!failed_ && !module_.has_main)
             fail("shader must define void main()");
+        if (!failed_)
+        {
+            for (size_t i = 0; i < module_.function_count; ++i)
+            {
+                if (!module_.functions[i].defined)
+                {
+                    fail("function prototype has no definition");
+                    break;
+                }
+            }
+        }
         return !failed_;
     }
 
@@ -782,6 +805,8 @@ private:
         std::snprintf(name, sizeof(name), "%s", current_.text);
         advance();
         expect_punctuation('(');
+        if (failed_)
+            return;
 
         ShaderVariable parameters[GLSL_MAX_PARAMETERS] = {};
         size_t parameter_count = 0;
@@ -797,17 +822,31 @@ private:
                 const ShaderType parameter_type = parse_type();
                 if (failed_)
                     return;
-                if (current_.kind != TokenKind::Identifier)
-                {
-                    fail("expected parameter name");
-                    return;
-                }
+
                 ShaderVariable& parameter = parameters[parameter_count];
-                std::snprintf(parameter.name, sizeof(parameter.name), "%s",
-                              current_.text);
                 parameter.type = parameter_type;
                 parameter.index = static_cast<uint8_t>(parameter_count);
-                advance();
+                if (current_.kind == TokenKind::Identifier)
+                {
+                    std::snprintf(parameter.name, sizeof(parameter.name), "%s",
+                                  current_.text);
+                    advance();
+                    for (size_t i = 0; i < parameter_count; ++i)
+                    {
+                        if (parameters[i].name[0] &&
+                            std::strcmp(parameters[i].name, parameter.name) == 0)
+                        {
+                            fail("duplicate function parameter name");
+                            return;
+                        }
+                    }
+                }
+                else if (!is_punctuation(',') && !is_punctuation(')'))
+                {
+                    fail("expected parameter name, ',' or ')'");
+                    return;
+                }
+
                 if (accept_punctuation('['))
                 {
                     fail("array parameters are not supported");
@@ -828,38 +867,80 @@ private:
             fail("main must have signature void main()");
             return;
         }
-        if (find_function(name) >= 0)
+
+        const bool is_prototype = accept_punctuation(';');
+        if (is_main && is_prototype)
         {
-            fail("function redefinitions and overloads are unsupported");
+            fail("main must be defined, not prototyped");
             return;
         }
-        if (module_.function_count >= GLSL_MAX_FUNCTIONS)
+        if (!is_prototype && !is_punctuation('{'))
         {
-            fail("function count limit exceeded");
-            return;
-        }
-        if (!is_punctuation('{'))
-        {
-            fail("function prototypes are not supported; define functions before use");
+            fail("expected ';' or a function body");
             return;
         }
 
-        const size_t function_index = module_.function_count++;
+        int existing_index = find_function(name);
+        size_t function_index = 0;
+        if (existing_index >= 0)
+        {
+            function_index = static_cast<size_t>(existing_index);
+            ShaderFunction& existing = module_.functions[function_index];
+            bool matches = existing.return_type == return_type &&
+                           existing.parameter_count == parameter_count;
+            for (size_t i = 0; matches && i < parameter_count; ++i)
+                matches = existing.parameters[i].type == parameters[i].type;
+            if (!matches)
+            {
+                fail("conflicting function declaration or unsupported overload");
+                return;
+            }
+            if (is_prototype)
+                return;
+            if (existing.defined)
+            {
+                fail("function redefinition is unsupported");
+                return;
+            }
+        }
+        else
+        {
+            if (module_.function_count >= GLSL_MAX_FUNCTIONS)
+            {
+                fail("function count limit exceeded");
+                return;
+            }
+            function_index = module_.function_count++;
+            ShaderFunction& function = module_.functions[function_index];
+            std::snprintf(function.name, sizeof(function.name), "%s", name);
+            function.return_type = return_type;
+            function.parameter_count = parameter_count;
+            for (size_t i = 0; i < parameter_count; ++i)
+                function.parameters[i] = parameters[i];
+            if (is_prototype)
+                return;
+        }
+
         ShaderFunction& function = module_.functions[function_index];
-        std::snprintf(function.name, sizeof(function.name), "%s", name);
         function.return_type = return_type;
         function.parameter_count = parameter_count;
-        function.entry_pc = module_.instruction_count;
-        function.defined = true;
-
+        function.local_count = 0;
+        function.has_return = false;
         for (size_t i = 0; i < parameter_count; ++i)
         {
+            if (parameters[i].name[0] == '\0')
+            {
+                fail("function definitions require parameter names");
+                return;
+            }
             function.parameters[i] = parameters[i];
             if (!add_function_local(
                     function, parameters[i].name, parameters[i].type))
                 return;
         }
 
+        function.entry_pc = module_.instruction_count;
+        function.defined = true;
         active_function_ = function_index;
         advance(); /* opening brace */
         while (!failed_ && !is_punctuation('}') &&
@@ -873,9 +954,10 @@ private:
             fail("non-void function must contain a return statement");
             return;
         }
-        // Main returns implicitly at the end of its bytecode range. Do not
-        // append an opcode there: some exact-shape fragment fast paths depend
-        // on the original two-instruction shader form.
+        // main() at end-of-source retains its original implicit fallthrough
+        // representation for the two-instruction fragment fast path. If
+        // another function follows main(), parse() inserts an explicit
+        // void Return before that function's bytecode.
         if (!failed_ && !is_main)
         {
             ShaderInstruction implicit_return = {};
@@ -2232,6 +2314,7 @@ private:
     bool failed_;
     size_t recursion_depth_;
     size_t active_function_;
+    bool main_terminated_;
     static constexpr size_t NO_ACTIVE_FUNCTION = static_cast<size_t>(-1);
     LoopFrame loop_stack_[MAX_LOOP_NESTING];
     LoopJumpPatch jump_patches_[GLSL_MAX_INSTRUCTIONS];
