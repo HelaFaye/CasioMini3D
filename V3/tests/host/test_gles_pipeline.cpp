@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
 
 #include "../../src/gles/pipeline.hpp"
 
@@ -316,6 +317,63 @@ void test_line_clipping_and_scissor_fragment_bounds()
     assert(color[2 * 4 + 3] == 0x0000);
 }
 
+struct GradientCapture
+{
+    size_t calls;
+    float dudx;
+    float dvdx;
+    float dudy;
+    float dvdy;
+};
+
+bool capture_gradients(const fxgl::FragmentInput& input,
+                       float rgba[4], void *user_data)
+{
+    GradientCapture& capture = *static_cast<GradientCapture *>(user_data);
+    ++capture.calls;
+    if (input.varying_count < 2)
+        return false;
+    capture.dudx = input.varying_ddx[0];
+    capture.dvdx = input.varying_ddx[1];
+    capture.dudy = input.varying_ddy[0];
+    capture.dvdy = input.varying_ddy[1];
+    rgba[0] = rgba[1] = rgba[2] = 1.0f;
+    rgba[3] = 1.0f;
+    return true;
+}
+
+void test_perspective_correct_screen_space_varying_gradients()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+
+    ClipVertex triangle[3];
+    full_screen_triangle(triangle);
+    triangle[0].varying[0] = 0.0f;
+    triangle[0].varying[1] = 0.0f;
+    triangle[1].varying[0] = 1.0f;
+    triangle[1].varying[1] = 0.0f;
+    triangle[2].varying[0] = 0.0f;
+    triangle[2].varying[1] = 1.0f;
+
+    GradientCapture capture = {};
+    assert(fxgl::draw_triangle(surface, state, triangle, 2,
+        capture_gradients, &capture));
+    assert(capture.calls > 0);
+    // The 4-pixel viewport maps each normalized coordinate axis over four
+    // screen pixels, so adjacent-pixel derivatives are 1/4.
+    assert(std::fabs(capture.dudx - 0.25f) < 0.001f);
+    assert(std::fabs(capture.dvdx) < 0.001f);
+    assert(std::fabs(capture.dudy) < 0.001f);
+    assert(std::fabs(capture.dvdy - 0.25f) < 0.001f);
+}
+
 void test_perspective_correct_varying_interpolation()
 {
     uint16_t color[16];
@@ -356,6 +414,7 @@ int main()
     test_point_rasterization_and_clip_rejection();
     test_line_clipping_and_scissor_fragment_bounds();
     test_perspective_correct_varying_interpolation();
+    test_perspective_correct_screen_space_varying_gradients();
 
     std::puts("GLES software pipeline tests: PASS");
     return 0;
