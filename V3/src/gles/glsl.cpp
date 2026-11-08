@@ -124,6 +124,20 @@ public:
             return token;
         }
 
+        if (std::strchr("=!<>&|", c))
+        {
+            const char next = source_[offset_ + 1];
+            const bool pair =
+                ((c == '=' || c == '!' || c == '<' || c == '>') && next == '=') ||
+                ((c == '&' || c == '|') && next == c);
+            token.kind = TokenKind::Punctuation;
+            token.text[0] = c;
+            token.text[1] = pair ? next : '\0';
+            token.text[pair ? 2 : 1] = '\0';
+            offset_ += pair ? 2 : 1;
+            return token;
+        }
+
         if (std::strchr("{}();,=.+-*/.", c))
         {
             token.kind = TokenKind::Punctuation;
@@ -601,8 +615,74 @@ private:
                std::strcmp(current_.text, "sampler2D") == 0;
     }
 
+    void parse_nested_statement()
+    {
+        if (accept_punctuation('{'))
+        {
+            while (!failed_ && current_.kind != TokenKind::End &&
+                   !is_punctuation('}'))
+                parse_statement();
+            expect_punctuation('}');
+        }
+        else
+        {
+            parse_statement();
+        }
+    }
+
+    void patch_branch_target(size_t instruction_index, size_t target)
+    {
+        if (instruction_index >= module_.instruction_count ||
+            target > module_.instruction_count || target > 255)
+        {
+            fail("control-flow target exceeds bytecode bounds");
+            return;
+        }
+        module_.instructions[instruction_index].index =
+            static_cast<uint8_t>(target);
+    }
+
+    void parse_if_statement()
+    {
+        advance(); /* if */
+        expect_punctuation('(');
+        const ShaderType condition_type = parse_expression(1);
+        expect_punctuation(')');
+        if (condition_type != ShaderType::Bool)
+        {
+            fail("if condition must be bool");
+            return;
+        }
+
+        const size_t branch_index = module_.instruction_count;
+        emit_simple(ShaderOp::BranchIfFalse, ShaderType::Bool);
+        parse_nested_statement();
+        if (failed_)
+            return;
+
+        if (is_identifier("else"))
+        {
+            const size_t end_jump_index = module_.instruction_count;
+            emit_simple(ShaderOp::Jump, ShaderType::Invalid);
+            patch_branch_target(branch_index, module_.instruction_count);
+            advance(); /* else */
+            parse_nested_statement();
+            patch_branch_target(end_jump_index, module_.instruction_count);
+        }
+        else
+        {
+            patch_branch_target(branch_index, module_.instruction_count);
+        }
+    }
+
     void parse_statement()
     {
+        if (is_identifier("if"))
+        {
+            parse_if_statement();
+            return;
+        }
+
         if (is_type_token())
         {
             parse_local_declaration();
@@ -711,15 +791,36 @@ private:
 
     int precedence() const
     {
-        if (is_punctuation('+') || is_punctuation('-'))
-            return 1;
-        if (is_punctuation('*') || is_punctuation('/'))
-            return 2;
+        if (current_.kind != TokenKind::Punctuation)
+            return 0;
+        if (std::strcmp(current_.text, "||") == 0) return 1;
+        if (std::strcmp(current_.text, "&&") == 0) return 2;
+        if (std::strcmp(current_.text, "==") == 0 ||
+            std::strcmp(current_.text, "!=") == 0) return 3;
+        if (std::strcmp(current_.text, "<") == 0 ||
+            std::strcmp(current_.text, "<=") == 0 ||
+            std::strcmp(current_.text, ">") == 0 ||
+            std::strcmp(current_.text, ">=") == 0) return 4;
+        if (is_punctuation('+') || is_punctuation('-')) return 5;
+        if (is_punctuation('*') || is_punctuation('/')) return 6;
         return 0;
     }
 
     void parse_unary(ShaderType& result_type)
     {
+        if (current_.kind == TokenKind::Punctuation &&
+            std::strcmp(current_.text, "!") == 0)
+        {
+            advance();
+            parse_unary(result_type);
+            if (result_type != ShaderType::Bool)
+            {
+                fail("logical not requires a bool operand");
+                return;
+            }
+            emit_simple(ShaderOp::LogicalNot, ShaderType::Bool);
+            return;
+        }
         if (accept_punctuation('-'))
         {
             parse_unary(result_type);
@@ -756,7 +857,8 @@ private:
             if (current_precedence < minimum_precedence || current_precedence == 0)
                 break;
 
-            const char operation = current_.text[0];
+            char operation[GLSL_NAME_BYTES] = {};
+            std::snprintf(operation, sizeof(operation), "%s", current_.text);
             advance();
             const ShaderType right_type = parse_expression(current_precedence + 1);
             const ShaderType result_type =
@@ -767,10 +869,24 @@ private:
                 break;
             }
 
-            const ShaderOp op = operation == '+' ? ShaderOp::Add :
-                                operation == '-' ? ShaderOp::Subtract :
-                                operation == '*' ? ShaderOp::Multiply :
-                                                   ShaderOp::Divide;
+            ShaderOp op = ShaderOp::Invalid;
+            if (std::strcmp(operation, "+") == 0) op = ShaderOp::Add;
+            else if (std::strcmp(operation, "-") == 0) op = ShaderOp::Subtract;
+            else if (std::strcmp(operation, "*") == 0) op = ShaderOp::Multiply;
+            else if (std::strcmp(operation, "/") == 0) op = ShaderOp::Divide;
+            else if (std::strcmp(operation, "==") == 0) op = ShaderOp::Equal;
+            else if (std::strcmp(operation, "!=") == 0) op = ShaderOp::NotEqual;
+            else if (std::strcmp(operation, "<") == 0) op = ShaderOp::Less;
+            else if (std::strcmp(operation, "<=") == 0) op = ShaderOp::LessEqual;
+            else if (std::strcmp(operation, ">") == 0) op = ShaderOp::Greater;
+            else if (std::strcmp(operation, ">=") == 0) op = ShaderOp::GreaterEqual;
+            else if (std::strcmp(operation, "&&") == 0) op = ShaderOp::LogicalAnd;
+            else if (std::strcmp(operation, "||") == 0) op = ShaderOp::LogicalOr;
+            if (op == ShaderOp::Invalid)
+            {
+                fail("unsupported binary operator");
+                break;
+            }
             emit_simple(op, result_type);
             left_type = result_type;
         }
@@ -780,14 +896,41 @@ private:
     }
 
     static ShaderType result_of_binary(
-        char operation,
+        const char *operation,
         ShaderType left,
         ShaderType right)
     {
         if (left == ShaderType::Invalid || right == ShaderType::Invalid)
             return ShaderType::Invalid;
 
-        if (operation == '+' || operation == '-')
+        if (std::strcmp(operation, "&&") == 0 ||
+            std::strcmp(operation, "||") == 0)
+            return left == ShaderType::Bool && right == ShaderType::Bool
+                ? ShaderType::Bool : ShaderType::Invalid;
+
+        if (std::strcmp(operation, "==") == 0 ||
+            std::strcmp(operation, "!=") == 0)
+        {
+            if (left == right &&
+                (left == ShaderType::Float || left == ShaderType::Int ||
+                 left == ShaderType::Bool || is_vector(left)))
+                return ShaderType::Bool;
+            return ShaderType::Invalid;
+        }
+
+        if (std::strcmp(operation, "<") == 0 ||
+            std::strcmp(operation, "<=") == 0 ||
+            std::strcmp(operation, ">") == 0 ||
+            std::strcmp(operation, ">=") == 0)
+        {
+            if ((left == ShaderType::Float || left == ShaderType::Int) &&
+                left == right)
+                return ShaderType::Bool;
+            return ShaderType::Invalid;
+        }
+
+        if (std::strcmp(operation, "+") == 0 ||
+            std::strcmp(operation, "-") == 0)
         {
             if (left == right &&
                 (left == ShaderType::Float || is_vector(left) || is_matrix(left)))
@@ -795,13 +938,13 @@ private:
             return ShaderType::Invalid;
         }
 
-        if (operation == '*')
+        if (std::strcmp(operation, "*") == 0)
         {
             const size_t left_dimension = matrix_dimension(left);
             const size_t right_dimension = matrix_dimension(right);
             if (left_dimension != 0 && right == vector_type(left_dimension))
                 return right;
-            if (left == vector_type(right_dimension) && right_dimension != 0)
+            if (right_dimension != 0 && left == vector_type(right_dimension))
                 return left;
             if (left_dimension != 0 && left_dimension == right_dimension)
                 return left;
@@ -819,7 +962,7 @@ private:
             return ShaderType::Invalid;
         }
 
-        if (operation == '/')
+        if (std::strcmp(operation, "/") == 0)
         {
             if (left == right &&
                 (left == ShaderType::Float || is_vector(left) || is_matrix(left)))
@@ -1343,10 +1486,14 @@ bool execute_glsl(
 
     ShaderValue stack[GLSL_MAX_STACK] = {};
     size_t stack_size = 0;
+    size_t pc = 0;
+    size_t executed_steps = 0;
 
-    for (size_t pc = 0; pc < module.instruction_count; ++pc)
+    while (pc < module.instruction_count)
     {
-        const ShaderInstruction& instruction = module.instructions[pc];
+        if (++executed_steps > GLSL_MAX_EXECUTION_STEPS)
+            return false;
+        const ShaderInstruction& instruction = module.instructions[pc++];
         ShaderValue a = {};
         ShaderValue b = {};
         ShaderValue c = {};
@@ -1408,6 +1555,31 @@ bool execute_glsl(
                     a.type != ShaderType::Vec4)
                     return false;
                 runtime.fragment_color = a;
+                break;
+
+            case ShaderOp::BranchIfFalse:
+                if (!pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Bool ||
+                    instruction.index > module.instruction_count)
+                    return false;
+                if (a.data[0] == 0.0f)
+                    pc = instruction.index;
+                break;
+
+            case ShaderOp::Jump:
+                if (instruction.index > module.instruction_count)
+                    return false;
+                pc = instruction.index;
+                break;
+
+            case ShaderOp::LogicalNot:
+                if (!pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Bool)
+                    return false;
+                result = zero_value(ShaderType::Bool);
+                result.data[0] = a.data[0] == 0.0f ? 1.0f : 0.0f;
+                if (!push_value(stack, stack_size, result))
+                    return false;
                 break;
 
             case ShaderOp::Construct:
@@ -1563,6 +1735,62 @@ bool execute_glsl(
 
                 apply_binary(instruction.op, a, b, instruction.type, result);
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
+                    return false;
+                break;
+            }
+
+            case ShaderOp::Equal:
+            case ShaderOp::NotEqual:
+            case ShaderOp::Less:
+            case ShaderOp::LessEqual:
+            case ShaderOp::Greater:
+            case ShaderOp::GreaterEqual:
+            case ShaderOp::LogicalAnd:
+            case ShaderOp::LogicalOr:
+            {
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != b.type)
+                    return false;
+
+                result = zero_value(ShaderType::Bool);
+                if (instruction.op == ShaderOp::LogicalAnd ||
+                    instruction.op == ShaderOp::LogicalOr)
+                {
+                    if (a.type != ShaderType::Bool)
+                        return false;
+                    result.data[0] = instruction.op == ShaderOp::LogicalAnd
+                        ? (a.data[0] != 0.0f && b.data[0] != 0.0f)
+                        : (a.data[0] != 0.0f || b.data[0] != 0.0f);
+                }
+                else if (instruction.op == ShaderOp::Less ||
+                         instruction.op == ShaderOp::LessEqual ||
+                         instruction.op == ShaderOp::Greater ||
+                         instruction.op == ShaderOp::GreaterEqual)
+                {
+                    if (a.type != ShaderType::Float &&
+                        a.type != ShaderType::Int)
+                        return false;
+                    if (instruction.op == ShaderOp::Less)
+                        result.data[0] = a.data[0] < b.data[0];
+                    else if (instruction.op == ShaderOp::LessEqual)
+                        result.data[0] = a.data[0] <= b.data[0];
+                    else if (instruction.op == ShaderOp::Greater)
+                        result.data[0] = a.data[0] > b.data[0];
+                    else
+                        result.data[0] = a.data[0] >= b.data[0];
+                }
+                else
+                {
+                    bool equal = true;
+                    const size_t components = component_count(a.type);
+                    for (size_t i = 0; i < components; ++i)
+                        if (a.data[i] != b.data[i])
+                            equal = false;
+                    result.data[0] = instruction.op == ShaderOp::Equal
+                        ? equal : !equal;
+                }
+                if (!push_value(stack, stack_size, result))
                     return false;
                 break;
             }
