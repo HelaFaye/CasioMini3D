@@ -819,10 +819,16 @@ static bool sample_bound_texture(
     int unit,
     float u,
     float v,
+    float dudx,
+    float dvdx,
+    float dudy,
+    float dvdy,
     float rgba[4],
     void *)
 {
-    if (unit < 0 || !std::isfinite(u) || !std::isfinite(v))
+    if (unit < 0 || !std::isfinite(u) || !std::isfinite(v) ||
+        !std::isfinite(dudx) || !std::isfinite(dvdx) ||
+        !std::isfinite(dudy) || !std::isfinite(dvdy))
         return false;
 
     gfx::Texture2DView texture = {};
@@ -864,11 +870,12 @@ static bool sample_bound_texture(
 }
 
 static bool execute_fragment(
-    const float *varyings,
-    size_t varying_count,
+    const fxgl::FragmentInput& input,
     float rgba[4],
     void *user_data)
 {
+    const float *varyings = input.varyings;
+    const size_t varying_count = input.varying_count;
     DrawInvocation& invocation = *static_cast<DrawInvocation *>(user_data);
     const fxgl::ShaderModule& module = *invocation.program.fragment_shader;
     fxgl::ShaderRuntime runtime = {};
@@ -897,7 +904,13 @@ static bool execute_fragment(
         runtime.varyings[i] = {};
         runtime.varyings[i].type = variable.type;
         for (size_t component = 0; component < components; ++component)
+        {
             runtime.varyings[i].data[component] = varyings[offset + component];
+            runtime.varyings[i].ddx[component] =
+                input.varying_ddx ? input.varying_ddx[offset + component] : 0.0f;
+            runtime.varyings[i].ddy[component] =
+                input.varying_ddy ? input.varying_ddy[offset + component] : 0.0f;
+        }
     }
 
     if (!fxgl::execute_glsl(module, runtime, sample_bound_texture, nullptr) ||
