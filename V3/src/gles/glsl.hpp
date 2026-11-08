@@ -11,6 +11,7 @@ constexpr size_t GLSL_MAX_UNIFORMS = 16;
 constexpr size_t GLSL_MAX_VARYINGS = 8;
 constexpr size_t GLSL_MAX_LOCALS = 8;
 constexpr size_t GLSL_MAX_INSTRUCTIONS = 128;
+constexpr size_t GLSL_MAX_EXECUTION_STEPS = 1024;
 constexpr size_t GLSL_MAX_STACK = 32;
 constexpr size_t GLSL_NAME_BYTES = 32;
 
@@ -74,6 +75,17 @@ enum class ShaderOp : uint8_t
     Clamp,
     Minimum,
     Maximum,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    LogicalAnd,
+    LogicalOr,
+    LogicalNot,
+    BranchIfFalse,
+    Jump,
     Texture2D
 };
 
