@@ -491,6 +491,18 @@ private:
             type = ShaderType::Vec3;
         else if (std::strcmp(current_.text, "vec4") == 0)
             type = ShaderType::Vec4;
+        else if (std::strcmp(current_.text, "ivec2") == 0)
+            type = ShaderType::IVec2;
+        else if (std::strcmp(current_.text, "ivec3") == 0)
+            type = ShaderType::IVec3;
+        else if (std::strcmp(current_.text, "ivec4") == 0)
+            type = ShaderType::IVec4;
+        else if (std::strcmp(current_.text, "bvec2") == 0)
+            type = ShaderType::BVec2;
+        else if (std::strcmp(current_.text, "bvec3") == 0)
+            type = ShaderType::BVec3;
+        else if (std::strcmp(current_.text, "bvec4") == 0)
+            type = ShaderType::BVec4;
         else if (std::strcmp(current_.text, "mat2") == 0)
             type = ShaderType::Mat2;
         else if (std::strcmp(current_.text, "mat3") == 0)
