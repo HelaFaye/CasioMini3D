@@ -357,8 +357,26 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
     // Dense deterministic differential coverage for the specialized
     // power-of-two repeat/repeat path over the complete bounded fast range.
     {
+        constexpr uint16_t fast_width = 32;
+        constexpr uint16_t fast_height = 32;
+        constexpr size_t fast_stride = 34;
+        static uint16_t fast_pixels[fast_height * fast_stride] = {};
+        for (uint16_t y = 0; y < fast_height; ++y)
+        {
+            for (uint16_t x = 0; x < fast_stride; ++x)
+            {
+                fast_pixels[static_cast<size_t>(y) * fast_stride + x] =
+                    static_cast<uint16_t>(
+                        (static_cast<uint32_t>(x) * 47u +
+                         static_cast<uint32_t>(y) * 113u) ^
+                        (static_cast<uint32_t>(x) << 9));
+            }
+        }
+        const Texture2DView fast_texture = {
+            fast_pixels, fast_width, fast_height, fast_stride
+        };
         const TextureSampler repeat = nearest_repeat();
-        assert(gfx::texture_valid(repeat_texture));
+        assert(gfx::texture_valid(fast_texture));
         for (int i = 0; i < 20000; ++i)
         {
             const uint32_t u_bits =
@@ -370,14 +388,14 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
             const float v = static_cast<float>(v_bits) *
                 (128.0f / 16777216.0f) - 64.0f;
             const int64_t fixed_u = static_cast<int64_t>(
-                std::floor(static_cast<double>(u) * width * 65536.0));
+                std::floor(static_cast<double>(u) * fast_width * 65536.0));
             const int64_t fixed_v = static_cast<int64_t>(
-                std::floor(static_cast<double>(v) * height * 65536.0));
+                std::floor(static_cast<double>(v) * fast_height * 65536.0));
             const uint16_t expected = gfx::sample_texture_validated(
-                repeat_texture, fixed_u, fixed_v, repeat, 0.0f);
+                fast_texture, fixed_u, fixed_v, repeat, 0.0f);
             uint16_t actual = 0;
             assert(gfx::sample_texture_nearest_validated(
-                repeat_texture, u, v, repeat, actual));
+                fast_texture, u, v, repeat, actual));
             assert(actual == expected);
         }
     }
