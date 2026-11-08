@@ -3,7 +3,7 @@
 #include <GLES2/gl2.h>
 #include <libprof.h>
 #include "../display.hpp"
-#include "../gles/math.hpp"
+#include "gles/math.hpp"
 
 #include <algorithm>
 #include <cmath>
