@@ -1189,6 +1189,101 @@ static void test_surface_refresh_preserves_gles_state()
     fxglReleaseCurrent();
 }
 
+void test_mat2_mat3_uniform_api_and_introspection()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "#version 100\n"
+        "attribute vec4 a_position;\n"
+        "uniform mat2 u_transform2;\n"
+        "uniform mat3 u_transform3;\n"
+        "void main() {\n"
+        "  vec2 p = u_transform2 * a_position.xy;\n"
+        "  vec3 q = u_transform3 * vec3(p, 1.0);\n"
+        "  gl_Position = vec4(q, 1.0);\n"
+        "}\n";
+    static const GLchar fragment_source[] =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "void main() { gl_FragColor = vec4(1.0); }\n";
+
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *vs_parts[] = {vertex_source};
+    const GLchar *fs_parts[] = {fragment_source};
+    glShaderSource(vs, 1, vs_parts, nullptr);
+    glShaderSource(fs, 1, fs_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+    GLint value = GL_FALSE;
+    glGetShaderiv(vs, GL_COMPILE_STATUS, &value);
+    assert(value == GL_TRUE);
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &value);
+    assert(value == GL_TRUE);
+
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &value);
+    assert(value == GL_TRUE);
+    glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &value);
+    assert(value == 2);
+
+    bool saw_mat2 = false;
+    bool saw_mat3 = false;
+    for (GLuint i = 0; i < 2; ++i)
+    {
+        GLchar name[32] = {};
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveUniform(program, i, sizeof(name),
+            &length, &size, &type, name);
+        if (std::strcmp(name, "u_transform2") == 0)
+            saw_mat2 = type == GL_FLOAT_MAT2;
+        if (std::strcmp(name, "u_transform3") == 0)
+            saw_mat3 = type == GL_FLOAT_MAT3;
+    }
+    assert(saw_mat2 && saw_mat3);
+
+    const GLint mat2_location =
+        glGetUniformLocation(program, "u_transform2");
+    const GLint mat3_location =
+        glGetUniformLocation(program, "u_transform3");
+    assert(mat2_location >= 0 && mat3_location >= 0);
+    glUseProgram(program);
+
+    const GLfloat mat2[4] = {0.0f, -1.0f, 1.0f, 0.0f};
+    const GLfloat mat3[9] = {
+        2.0f, 0.0f, 0.0f,
+        0.0f, 3.0f, 0.0f,
+        0.0f, 0.0f, 4.0f
+    };
+    glUniformMatrix2fv(mat2_location, 1, GL_FALSE, mat2);
+    glUniformMatrix3fv(mat3_location, 1, GL_FALSE, mat3);
+
+    GLfloat retrieved2[4] = {};
+    GLfloat retrieved3[9] = {};
+    glGetUniformfv(program, mat2_location, retrieved2);
+    glGetUniformfv(program, mat3_location, retrieved3);
+    for (size_t i = 0; i < 4; ++i) assert(retrieved2[i] == mat2[i]);
+    for (size_t i = 0; i < 9; ++i) assert(retrieved3[i] == mat3[i]);
+
+    glUniformMatrix2fv(mat2_location, 1, GL_TRUE, mat2);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glUniformMatrix3fv(mat3_location, -1, GL_FALSE, mat3);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    glDeleteProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    fxglReleaseCurrent();
+}
+
 int main()
 {
     test_surface_binding_and_default_state();
@@ -1202,6 +1297,7 @@ int main()
     test_state_validation_and_error_latching();
     test_gles_framebuffer_and_renderbuffer_objects();
     test_shader_and_program_object_lifecycle();
+    test_mat2_mat3_uniform_api_and_introspection();
     test_gles_draw_arrays_and_elements();
     test_shader_compile_and_program_link_failures();
     test_context_drives_software_pipeline();
