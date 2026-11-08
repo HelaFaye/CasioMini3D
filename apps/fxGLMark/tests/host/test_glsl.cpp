@@ -793,26 +793,26 @@ static void test_user_function_out_and_inout_parameters()
 static void test_user_function_stage_output_copyout()
 {
     static const char vertex_source[] =
-        "attribute vec4 a_position;\\n"
-        "attribute vec2 a_uv;\\n"
-        "varying vec2 v_uv;\\n"
-        "void place(out vec4 position, in vec4 source);\\n"
-        "void publish(in vec2 source, out vec2 target);\\n"
-        "void write_x(out float component);\\n"
-        "void main() {\\n"
-        "  place(gl_Position, a_position);\\n"
-        "  publish(a_uv, v_uv.yx);\\n"
-        "  write_x(gl_Position.x);\\n"
-        "}\\n"
-        "void place(out vec4 position, in vec4 source) { position = source * 2.0; }\\n"
-        "void publish(in vec2 source, out vec2 target) { target = source * 2.0; }\\n"
-        "void write_x(out float component) { component = 7.0; }\\n";
+        "attribute vec4 a_position;\n"
+        "attribute vec2 a_uv;\n"
+        "varying vec2 v_uv;\n"
+        "void place(out vec4 position, in vec4 source);\n"
+        "void publish(in vec2 source, out vec2 target);\n"
+        "void write_x(out float component);\n"
+        "void main() {\n"
+        "  place(gl_Position, a_position);\n"
+        "  publish(a_uv, v_uv.yx);\n"
+        "  write_x(gl_Position.x);\n"
+        "}\n"
+        "void place(out vec4 position, in vec4 source) { position = source * 2.0; }\n"
+        "void publish(in vec2 source, out vec2 target) { target = source * 2.0; }\n"
+        "void write_x(out float component) { component = 7.0; }\n";
 
     ShaderModule vertex_module = {};
     const bool vertex_compiled =
         fxgl::compile_glsl(ShaderStage::Vertex, vertex_source, vertex_module);
     if (!vertex_compiled)
-        std::fprintf(stderr, "vertex output copy-out diagnostic: %s\\n",
+        std::fprintf(stderr, "vertex output copy-out diagnostic: %s\n",
                      vertex_module.info_log);
     assert(vertex_compiled);
 
@@ -828,17 +828,17 @@ static void test_user_function_stage_output_copyout()
     assert(near(vertex_runtime.varyings[0].data[1], 0.5f));
 
     static const char fragment_source[] =
-        "void produce(out vec4 color);\\n"
-        "void brighten(inout vec4 color);\\n"
-        "void main() { produce(gl_FragColor); brighten(gl_FragColor); }\\n"
-        "void produce(out vec4 color) { color = vec4(0.1, 0.2, 0.3, 1.0); }\\n"
-        "void brighten(inout vec4 color) { color = color + vec4(0.1, 0.1, 0.1, 0.0); }\\n";
+        "void produce(out vec4 color);\n"
+        "void brighten(inout vec4 color);\n"
+        "void main() { produce(gl_FragColor); brighten(gl_FragColor); }\n"
+        "void produce(out vec4 color) { color = vec4(0.1, 0.2, 0.3, 1.0); }\n"
+        "void brighten(inout vec4 color) { color = color + vec4(0.1, 0.1, 0.1, 0.0); }\n";
 
     ShaderModule fragment_module = {};
     const bool fragment_compiled =
         fxgl::compile_glsl(ShaderStage::Fragment, fragment_source, fragment_module);
     if (!fragment_compiled)
-        std::fprintf(stderr, "fragment output copy-out diagnostic: %s\\n",
+        std::fprintf(stderr, "fragment output copy-out diagnostic: %s\n",
                      fragment_module.info_log);
     assert(fragment_compiled);
     ShaderRuntime fragment_runtime = {};
@@ -849,9 +849,9 @@ static void test_user_function_stage_output_copyout()
     assert(near(fragment_runtime.fragment_color.data[3], 1.0f));
 
     static const char fragment_readback_source[] =
-        "void shade(inout vec4 color);\\n"
-        "void main() { gl_FragColor = vec4(0.25, 0.5, 0.75, 1.0); shade(gl_FragColor); }\\n"
-        "void shade(inout vec4 color) { color = color * 2.0; }\\n";
+        "void shade(inout vec4 color);\n"
+        "void main() { gl_FragColor = vec4(0.25, 0.5, 0.75, 1.0); shade(gl_FragColor); }\n"
+        "void shade(inout vec4 color) { color = color * 2.0; }\n";
     ShaderModule readback_module = {};
     assert(fxgl::compile_glsl(
         ShaderStage::Fragment, fragment_readback_source, readback_module));
