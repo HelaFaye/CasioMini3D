@@ -869,7 +869,8 @@ private:
                 break;
             }
 
-            ShaderOp op = ShaderOp::Invalid;
+            ShaderOp op = ShaderOp::Add;
+            bool operator_found = true;
             if (std::strcmp(operation, "+") == 0) op = ShaderOp::Add;
             else if (std::strcmp(operation, "-") == 0) op = ShaderOp::Subtract;
             else if (std::strcmp(operation, "*") == 0) op = ShaderOp::Multiply;
@@ -882,7 +883,8 @@ private:
             else if (std::strcmp(operation, ">=") == 0) op = ShaderOp::GreaterEqual;
             else if (std::strcmp(operation, "&&") == 0) op = ShaderOp::LogicalAnd;
             else if (std::strcmp(operation, "||") == 0) op = ShaderOp::LogicalOr;
-            if (op == ShaderOp::Invalid)
+            else operator_found = false;
+            if (!operator_found)
             {
                 fail("unsupported binary operator");
                 break;
