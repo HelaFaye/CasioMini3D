@@ -1099,7 +1099,8 @@ private:
             std::strcmp(operation, "-") == 0)
         {
             if (left == right &&
-                (left == ShaderType::Float || is_vector(left) || is_matrix(left)))
+                (left == ShaderType::Float || left == ShaderType::Int ||
+                 is_vector(left) || is_matrix(left)))
                 return left;
             return ShaderType::Invalid;
         }
@@ -1119,7 +1120,8 @@ private:
             if (left == ShaderType::Float && right_dimension != 0)
                 return right;
             if (left == right &&
-                (left == ShaderType::Float || is_vector(left)))
+                (left == ShaderType::Float || left == ShaderType::Int ||
+                 is_vector(left)))
                 return left;
             if (left == ShaderType::Float && is_vector(right))
                 return right;
@@ -1854,8 +1856,8 @@ bool execute_glsl(
                     instruction.op == ShaderOp::Subtract)
                 {
                     if (a.type == b.type &&
-                        (a.type == ShaderType::Float || is_vector(a.type) ||
-                         is_matrix(a.type)))
+                        (a.type == ShaderType::Float || a.type == ShaderType::Int ||
+                         is_vector(a.type) || is_matrix(a.type)))
                         expected_type = a.type;
                 }
                 else if (instruction.op == ShaderOp::Multiply)
@@ -1877,7 +1879,8 @@ bool execute_glsl(
                     else if (is_vector(a.type) && b.type == ShaderType::Float)
                         expected_type = a.type;
                     else if (a.type == b.type &&
-                             (a.type == ShaderType::Float || is_vector(a.type)))
+                             (a.type == ShaderType::Float || a.type == ShaderType::Int ||
+                               is_vector(a.type)))
                         expected_type = a.type;
                 }
                 else if (instruction.op == ShaderOp::Divide)
@@ -1890,8 +1893,8 @@ bool execute_glsl(
                              b.type == ShaderType::Float)
                         expected_type = a.type;
                     else if (a.type == b.type &&
-                             (a.type == ShaderType::Float || is_vector(a.type) ||
-                              is_matrix(a.type)))
+                             (a.type == ShaderType::Float || a.type == ShaderType::Int ||
+                              is_vector(a.type) || is_matrix(a.type)))
                         expected_type = a.type;
                 }
 
@@ -1900,6 +1903,9 @@ bool execute_glsl(
                     return false;
 
                 apply_binary(instruction.op, a, b, instruction.type, result);
+                if (instruction.type == ShaderType::Int)
+                    result.data[0] = static_cast<float>(
+                        static_cast<int32_t>(result.data[0]));
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
                 break;
