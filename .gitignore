@@ -68,3 +68,16 @@ src/.vscode/settings.json
 /V2/.vscode
 /V3/build-cg/
 .documentation-backups/
+
+
+# Generated CMake and fxSDK build trees (any project depth)
+**/build/
+**/build-cg/
+**/build-fx/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+
+# Local editor state and autosave backups
+**/.vscode/
+*.blend1
