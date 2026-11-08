@@ -354,11 +354,11 @@ static bool prepare_renderer_microbenchmarks()
         return false;
 
     const char *texture_fragment_source =
-        "#version 100\\n"
-        "precision mediump float;\\n"
-        "uniform sampler2D u_texture;\\n"
-        "varying vec2 v_uv;\\n"
-        "void main() { gl_FragColor = texture2D(u_texture, v_uv); }\\n";
+        "#version 100\n"
+        "precision mediump float;\n"
+        "uniform sampler2D u_texture;\n"
+        "varying vec2 v_uv;\n"
+        "void main() { gl_FragColor = texture2D(u_texture, v_uv); }\n";
     g_microbench_texture_shader_ready = fxgl::compile_glsl(
         fxgl::ShaderStage::Fragment, texture_fragment_source,
         g_microbench_texture_shader);
