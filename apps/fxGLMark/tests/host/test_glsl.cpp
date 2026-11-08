@@ -797,7 +797,6 @@ static void test_user_function_out_inout_rejections()
         "void store(out float value); void main() { float x = 1.0; store(x + 1.0); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
         "uniform float u_value; void store(out float value); void main() { store(u_value); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
         "void store(out vec2 value); void main() { vec3 color = vec3(1.0); store(color.xx); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(0.0); }",
-        "void store(out vec2 value); void main() { vec3 color = vec3(1.0); store(color.xy); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(0.0); }",
         "void store(out vec3 value); void main() { vec3 color = vec3(1.0); store(color.xy); gl_FragColor = vec4(1.0); } void store(out vec3 value) { value = vec3(0.0); }",
         "void store(out vec2 first, out vec2 second); void main() { vec4 color = vec4(1.0); store(color.xy, color.yz); gl_FragColor = color; } void store(out vec2 first, out vec2 second) { first = vec2(0.0); second = vec2(0.0); }",
         "void store(out float value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(inout float value) { value = 2.0; }",
