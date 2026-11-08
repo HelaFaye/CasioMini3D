@@ -485,11 +485,11 @@ static void test_user_function_prototypes_and_forward_definitions()
     // compiler must patch the function table and keep main from falling into
     // the later function's bytecode.
     static const char main_forward_source[] =
-        "float scale_value(float);\\n"
-        "void main() {\\n"
-        "  gl_FragColor = vec4(scale_value(2.0), scale_value(-1.0), 0.0, 1.0);\\n"
-        "}\\n"
-        "float scale_value(float input) { return input * 2.5; }\\n";
+        "float scale_value(float);\n"
+        "void main() {\n"
+        "  gl_FragColor = vec4(scale_value(2.0), scale_value(-1.0), 0.0, 1.0);\n"
+        "}\n"
+        "float scale_value(float input) { return input * 2.5; }\n";
 
     ShaderModule main_forward_module = {};
     assert(fxgl::compile_glsl(
@@ -508,10 +508,10 @@ static void test_user_function_prototypes_and_forward_definitions()
     // declared first. Parameter identifiers may differ between prototype
     // and definition; the signature is based on parameter types.
     static const char nested_forward_source[] =
-        "float deferred(float value);\\n"
-        "float caller(float argument) { return deferred(argument) + 1.0; }\\n"
-        "float deferred(float input) { return input * 3.0; }\\n"
-        "void main() { gl_FragColor = vec4(caller(2.0)); }\\n";
+        "float deferred(float value);\n"
+        "float caller(float argument) { return deferred(argument) + 1.0; }\n"
+        "float deferred(float input) { return input * 3.0; }\n"
+        "void main() { gl_FragColor = vec4(caller(2.0)); }\n";
 
     ShaderModule nested_forward_module = {};
     assert(fxgl::compile_glsl(
