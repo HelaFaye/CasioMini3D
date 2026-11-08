@@ -370,6 +370,73 @@ static void test_bounded_for_and_while_loops()
     assert(near(while_runtime.fragment_color.data[0], 1.5f));
 }
 
+static void test_loop_break_continue_and_nested_targets()
+{
+    static const char for_source[] =
+        "void main() {\n"
+        "  int visited = 0;\n"
+        "  float accumulated = 0.0;\n"
+        "  for (int i = 0; i < 8; i++) {\n"
+        "    if (i == 2) continue;\n"
+        "    if (i == 6) break;\n"
+        "    visited = visited + 1;\n"
+        "    accumulated = accumulated + 0.25;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(accumulated, float(visited), 0.0, 1.0);\n"
+        "}\n";
+
+    ShaderModule for_module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, for_source, for_module));
+    ShaderRuntime for_runtime = {};
+    assert(fxgl::execute_glsl(for_module, for_runtime));
+    assert(near(for_runtime.fragment_color.data[0], 1.25f));
+    assert(near(for_runtime.fragment_color.data[1], 5.0f));
+
+    static const char while_source[] =
+        "void main() {\n"
+        "  int i = 0;\n"
+        "  float accumulated = 0.0;\n"
+        "  while (i < 8) {\n"
+        "    i = i + 1;\n"
+        "    if (i == 3) continue;\n"
+        "    if (i == 6) break;\n"
+        "    accumulated = accumulated + 0.25;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(accumulated);\n"
+        "}\n";
+
+    ShaderModule while_module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, while_source, while_module));
+    ShaderRuntime while_runtime = {};
+    assert(fxgl::execute_glsl(while_module, while_runtime));
+    assert(near(while_runtime.fragment_color.data[0], 1.0f));
+
+    static const char nested_source[] =
+        "void main() {\n"
+        "  int outer_count = 0;\n"
+        "  float accumulated = 0.0;\n"
+        "  for (int i = 0; i < 3; i++) {\n"
+        "    if (i == 1) continue;\n"
+        "    int inner = 0;\n"
+        "    while (inner < 3) {\n"
+        "      inner = inner + 1;\n"
+        "      if (inner == 2) break;\n"
+        "      accumulated = accumulated + 0.5;\n"
+        "    }\n"
+        "    outer_count = outer_count + 1;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(accumulated, float(outer_count), 0.0, 1.0);\n"
+        "}\n";
+
+    ShaderModule nested_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, nested_source, nested_module));
+    ShaderRuntime nested_runtime = {};
+    assert(fxgl::execute_glsl(nested_module, nested_runtime));
+    assert(near(nested_runtime.fragment_color.data[0], 1.0f));
+    assert(near(nested_runtime.fragment_color.data[1], 2.0f));
+}
+
 static void test_non_terminating_shader_hits_execution_budget()
 {
     static const char source[] =
@@ -511,7 +578,9 @@ static void test_compiler_rejects_unsupported_or_invalid_source()
         "attribute vec4 a_position[4]; void main() { gl_Position = a_position[0]; }",
         "void main() { gl_FragColor = unknown_name; }",
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
-        "void main() { gl_Position = vec4(1.0); }"
+        "void main() { gl_Position = vec4(1.0); }",
+        "void main() { break; gl_FragColor = vec4(1.0); }",
+        "void main() { continue; gl_FragColor = vec4(1.0); }"
     };
 
     for (const char *source : unsupported)
@@ -610,6 +679,7 @@ int main()
     test_if_else_comparisons_and_logical_operators();
     test_nested_if_else_and_boolean_not();
     test_bounded_for_and_while_loops();
+    test_loop_break_continue_and_nested_targets();
     test_non_terminating_shader_hits_execution_budget();
     test_essl_math_and_geometric_builtins();
     test_matrix_component_multiply_and_scalar_broadcast();
