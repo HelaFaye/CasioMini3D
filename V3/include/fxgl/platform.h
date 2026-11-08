@@ -24,6 +24,11 @@ typedef struct fxgl_surface
 /* Returns GL_TRUE on success. Invalid descriptors leave the current context
    unchanged. Binding resets API state to the GLES defaults for this surface. */
 GLboolean fxglMakeCurrent(const fxgl_surface_t *surface);
+/* Update the caller-owned surface addresses without resetting GLES state.
+   This is intended for display backends whose drawing buffer pointer changes
+   after presentation (for example fx-CG VRAM switching). Dimensions/stride
+   must remain unchanged; all storage remains caller-owned. */
+GLboolean fxglUpdateSurface(const fxgl_surface_t *surface);
 void fxglReleaseCurrent(void);
 GLboolean fxglHasCurrentContext(void);
 
