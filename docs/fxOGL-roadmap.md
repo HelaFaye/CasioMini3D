@@ -48,7 +48,7 @@ globals.
 | Fragment pipeline | Fragment execution/discard, scissor, depth, stencil, blend equations/factors, color masks and RGB565 writes | Multisample behavior, alpha-capable targets and full blend/logic semantics |
 | GLSL ES front end/VM | Bounded lexer/parser/typed bytecode VM; float/int/bool, vec2/3/4, mat2/3/4, sampler2D; attributes/uniforms/varyings; constructors, swizzles, arithmetic, selected vector functions, if/else, for/while, break/continue and texture2D | User-defined functions and parameter/return handling, arrays/structs, do-while/switch, full built-in library, precision model, preprocessor and complete overload/type rules |
 | Shader/program objects | Create/source/compile, attach/detach, link, use, delete-pending lifetime, attribute/uniform locations, selected vector/matrix/sampler setters, active-variable and source/log queries | Full active-variable semantics, uniform arrays, full setter/query coverage and relinking edge cases |
-| Textures | Two units; bounded RGB565 image/sub-image upload; unpack alignment; nearest/linear sampling; clamp/repeat/mirrored-repeat | RGBA/alpha/luminance formats, mipmaps and filters, texture completeness and full pixel-store behavior |
+| Textures | Two units; bounded RGB565 image/sub-image upload; unpack alignment; explicit mip-level upload and glGenerateMipmap; nearest/linear sampling and GLES minification filters; clamp/repeat/mirrored-repeat | RGBA/alpha/luminance formats, texture-completeness edge cases and full pixel-store behavior |
 | Render state and queries | Common viewport/scissor/cull/depth/blend/stencil state and selected queries | Full GLES state/query coverage, extensions, limits and exact invalid-operation rules |
 | Calculator integration | fxOGL core has no Gint framebuffer dependency; fxGLMark binds calculator VRAM/depth surfaces and presents through dupdate(); SH cross-build and physical fx-CG50 runs completed | Broader workload, memory, stability and output validation; no claim of Khronos conformance |
 
@@ -79,8 +79,7 @@ configuration-specific and not directly comparable to desktop/mobile glmark2.
 ## Priorities
 
 1. Add user-defined GLSL ES functions with bounded parameter/return handling, then expand the built-in function and overload coverage.
-2. Add additional texture formats and close remaining mip-level/filter and texture-completeness edge cases.
-   behavior.
+2. Add additional texture formats and close remaining texture-completeness and pixel-store edge cases.
 3. Increase coverage of GLES state, queries, errors and resource lifetime.
 4. Add differential tests for every new shader and pipeline optimization.
 5. Measure memory high-water and long-run behavior on physical hardware.
