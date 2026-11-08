@@ -879,16 +879,53 @@ struct DrawInvocation
     bool fragment_failed;
 };
 
-static bool fragment_shader_uses_texture(
+static bool fragment_shader_requires_texture_derivatives(
     const fxgl::LinkedProgramView& program)
 {
     if (!program.fragment_shader)
         return false;
+
     const fxgl::ShaderModule& module = *program.fragment_shader;
+    bool uses_texture = false;
     for (size_t i = 0; i < module.instruction_count; ++i)
+    {
         if (module.instructions[i].op == fxgl::ShaderOp::Texture2D)
+        {
+            uses_texture = true;
+            break;
+        }
+    }
+    if (!uses_texture)
+        return false;
+
+    bool found_sampler = false;
+    for (size_t i = 0; i < module.uniform_count; ++i)
+    {
+        if (module.uniforms[i].type != fxgl::ShaderType::Sampler2D)
+            continue;
+        found_sampler = true;
+
+        const uint8_t location = program.fragment_uniform_map[i];
+        if (location >= program.uniform_count)
             return true;
-    return false;
+
+        const float unit_value = program.uniform_values[location].data[0];
+        if (!std::isfinite(unit_value) || unit_value < 0.0f ||
+            unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
+            std::floor(unit_value) != unit_value)
+            return true;
+
+        gfx::Texture2DView texture = {};
+        gfx::TextureSampler sampler = {};
+        if (!fxgl::get_texture_binding(
+                static_cast<size_t>(unit_value), texture, sampler) ||
+            gfx::sampler_requires_implicit_derivatives(sampler))
+            return true;
+    }
+
+    // Be conservative if a texture operation has no identifiable sampler
+    // uniform: preserve the full derivative path rather than guessing.
+    return !found_sampler;
 }
 
 static int find_passthrough_varying_offset(
@@ -937,14 +974,18 @@ static bool sample_bound_texture(
     if (!fxgl::get_texture_binding(static_cast<size_t>(unit), texture, sampler))
         return false;
 
-    const float rho_x = std::sqrt(
-        (dudx * texture.width) * (dudx * texture.width) +
-        (dvdx * texture.height) * (dvdx * texture.height));
-    const float rho_y = std::sqrt(
-        (dudy * texture.width) * (dudy * texture.width) +
-        (dvdy * texture.height) * (dvdy * texture.height));
-    const float rho = std::max(rho_x, rho_y);
-    const float lod = rho > 0.0f ? std::log2(rho) : 0.0f;
+    float lod = 0.0f;
+    if (gfx::sampler_requires_implicit_derivatives(sampler))
+    {
+        const float rho_x = std::sqrt(
+            (dudx * texture.width) * (dudx * texture.width) +
+            (dvdx * texture.height) * (dvdx * texture.height));
+        const float rho_y = std::sqrt(
+            (dudy * texture.width) * (dudy * texture.width) +
+            (dvdy * texture.height) * (dvdy * texture.height));
+        const float rho = std::max(rho_x, rho_y);
+        lod = rho > 0.0f ? std::log2(rho) : 0.0f;
+    }
 
     const bool minifying = lod > 0.0f;
     const bool linear_filter = minifying
@@ -1144,7 +1185,7 @@ static bool draw_vertex_triangle(
         execute_fragment,
         &invocation,
         nullptr,
-        fragment_shader_uses_texture(program));
+        fragment_shader_requires_texture_derivatives(program));
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1168,7 +1209,7 @@ static bool draw_vertex_point(
         execute_fragment,
         &invocation,
         nullptr,
-        fragment_shader_uses_texture(program));
+        fragment_shader_requires_texture_derivatives(program));
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1194,7 +1235,7 @@ static bool draw_vertex_line(
         execute_fragment,
         &invocation,
         nullptr,
-        fragment_shader_uses_texture(program));
+        fragment_shader_requires_texture_derivatives(program));
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
