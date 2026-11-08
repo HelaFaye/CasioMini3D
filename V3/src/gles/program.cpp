@@ -120,6 +120,8 @@ static GLenum gl_type_for_shader_type(fxgl::ShaderType type)
         case fxgl::ShaderType::Vec2: return GL_FLOAT_VEC2;
         case fxgl::ShaderType::Vec3: return GL_FLOAT_VEC3;
         case fxgl::ShaderType::Vec4: return GL_FLOAT_VEC4;
+        case fxgl::ShaderType::Mat2: return GL_FLOAT_MAT2;
+        case fxgl::ShaderType::Mat3: return GL_FLOAT_MAT3;
         case fxgl::ShaderType::Mat4: return GL_FLOAT_MAT4;
         case fxgl::ShaderType::Sampler2D: return GL_SAMPLER_2D;
         default: return 0;
@@ -210,6 +212,8 @@ static size_t shader_component_count(fxgl::ShaderType type)
         case fxgl::ShaderType::Vec2: return 2;
         case fxgl::ShaderType::Vec3: return 3;
         case fxgl::ShaderType::Vec4: return 4;
+        case fxgl::ShaderType::Mat2: return 4;
+        case fxgl::ShaderType::Mat3: return 9;
         case fxgl::ShaderType::Mat4: return 16;
         default: return 0;
     }
@@ -1243,6 +1247,74 @@ void glGetUniformiv(GLuint program_name, GLint location, GLint *params)
     const size_t components = shader_component_count(value.type);
     for (size_t i = 0; i < components; ++i)
         params[i] = static_cast<GLint>(value.data[i]);
+}
+
+void glUniformMatrix2fv(
+    GLint location,
+    GLsizei count,
+    GLboolean transpose,
+    const GLfloat *value)
+{
+    if (!fxglHasCurrentContext()) return;
+    if (location == -1) return;
+    ProgramObject *program = current_program();
+    if (!program)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (count < 0 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (count == 0) return;
+    if (count != 1 || transpose != GL_FALSE || location < 0 ||
+        static_cast<size_t>(location) >= program->uniform_count ||
+        program->uniforms[location].type != fxgl::ShaderType::Mat2)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    fxgl::ShaderValue& destination = program->uniform_values[location];
+    destination = {};
+    destination.type = fxgl::ShaderType::Mat2;
+    std::memcpy(destination.data, value, 4 * sizeof(GLfloat));
+}
+
+void glUniformMatrix3fv(
+    GLint location,
+    GLsizei count,
+    GLboolean transpose,
+    const GLfloat *value)
+{
+    if (!fxglHasCurrentContext()) return;
+    if (location == -1) return;
+    ProgramObject *program = current_program();
+    if (!program)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (count < 0 || !value)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (count == 0) return;
+    if (count != 1 || transpose != GL_FALSE || location < 0 ||
+        static_cast<size_t>(location) >= program->uniform_count ||
+        program->uniforms[location].type != fxgl::ShaderType::Mat3)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    fxgl::ShaderValue& destination = program->uniform_values[location];
+    destination = {};
+    destination.type = fxgl::ShaderType::Mat3;
+    std::memcpy(destination.data, value, 9 * sizeof(GLfloat));
 }
 
 void glUniformMatrix4fv(
