@@ -354,6 +354,34 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
         }
     }
 
+    // Dense deterministic differential coverage for the specialized
+    // power-of-two repeat/repeat path over the complete bounded fast range.
+    {
+        const TextureSampler repeat = nearest_repeat();
+        assert(gfx::texture_valid(repeat_texture));
+        for (int i = 0; i < 20000; ++i)
+        {
+            const uint32_t u_bits =
+                (static_cast<uint32_t>(i) * 2654435761u + 17u) & 0x00ffffffu;
+            const uint32_t v_bits =
+                (static_cast<uint32_t>(i) * 2246822519u + 101u) & 0x00ffffffu;
+            const float u = static_cast<float>(u_bits) *
+                (128.0f / 16777216.0f) - 64.0f;
+            const float v = static_cast<float>(v_bits) *
+                (128.0f / 16777216.0f) - 64.0f;
+            const int64_t fixed_u = static_cast<int64_t>(
+                std::floor(static_cast<double>(u) * width * 65536.0));
+            const int64_t fixed_v = static_cast<int64_t>(
+                std::floor(static_cast<double>(v) * height * 65536.0));
+            const uint16_t expected = gfx::sample_texture_validated(
+                repeat_texture, fixed_u, fixed_v, repeat, 0.0f);
+            uint16_t actual = 0;
+            assert(gfx::sample_texture_nearest_validated(
+                repeat_texture, u, v, repeat, actual));
+            assert(actual == expected);
+        }
+    }
+
     uint16_t unchanged = 0x1234;
     assert(!gfx::sample_texture_nearest_validated(
         texture, 0.5f, 0.5f,
