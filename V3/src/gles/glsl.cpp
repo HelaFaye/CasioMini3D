@@ -229,7 +229,9 @@ enum class BuiltinFunction : uint8_t
     Sin, Cos, Tan, Asin, Acos, Atan, Exp, Log, Exp2, Log2,
     Sqrt, InverseSqrt, Abs, Sign, Floor, Ceil, Fract, Radians, Degrees,
     Atan2, Pow, Mod, Step, Distance, Cross, FaceForward, Reflect,
-    Refract, SmoothStep, MatrixCompMult
+    Refract, SmoothStep, MatrixCompMult,
+    LessThan, LessThanEqual, GreaterThan, GreaterThanEqual,
+    EqualVector, NotEqualVector, Any, All, NotVector
 };
 
 static size_t component_count(ShaderType type)
@@ -1586,6 +1588,77 @@ private:
             return arguments[0];
         }
 
+        if (std::strcmp(name, "lessThan") == 0 ||
+            std::strcmp(name, "lessThanEqual") == 0 ||
+            std::strcmp(name, "greaterThan") == 0 ||
+            std::strcmp(name, "greaterThanEqual") == 0 ||
+            std::strcmp(name, "equal") == 0 ||
+            std::strcmp(name, "notEqual") == 0)
+        {
+            if (argument_count != 2 ||
+                !is_any_vector(arguments[0]) ||
+                arguments[0] != arguments[1] ||
+                (is_bool_vector(arguments[0]) &&
+                 std::strcmp(name, "equal") != 0 &&
+                 std::strcmp(name, "notEqual") != 0))
+            {
+                fail("vector relational function requires matching vector arguments");
+                return ShaderType::Invalid;
+            }
+            if ((std::strcmp(name, "lessThan") == 0 ||
+                 std::strcmp(name, "lessThanEqual") == 0 ||
+                 std::strcmp(name, "greaterThan") == 0 ||
+                 std::strcmp(name, "greaterThanEqual") == 0) &&
+                !is_vector(arguments[0]) && !is_int_vector(arguments[0]))
+            {
+                fail("ordered vector comparison requires float or integer vectors");
+                return ShaderType::Invalid;
+            }
+
+            if (std::strcmp(name, "lessThan") == 0)
+                builtin = BuiltinFunction::LessThan;
+            else if (std::strcmp(name, "lessThanEqual") == 0)
+                builtin = BuiltinFunction::LessThanEqual;
+            else if (std::strcmp(name, "greaterThan") == 0)
+                builtin = BuiltinFunction::GreaterThan;
+            else if (std::strcmp(name, "greaterThanEqual") == 0)
+                builtin = BuiltinFunction::GreaterThanEqual;
+            else if (std::strcmp(name, "equal") == 0)
+                builtin = BuiltinFunction::EqualVector;
+            else
+                builtin = BuiltinFunction::NotEqualVector;
+
+            emit_simple(ShaderOp::Builtin,
+                vector_type_for(vector_dimension(arguments[0]), ShaderType::Bool),
+                static_cast<uint8_t>(builtin), 2);
+            return vector_type_for(vector_dimension(arguments[0]), ShaderType::Bool);
+        }
+
+        if (std::strcmp(name, "any") == 0 || std::strcmp(name, "all") == 0)
+        {
+            if (argument_count != 1 || !is_bool_vector(arguments[0]))
+            {
+                fail("any/all requires a boolean vector argument");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, ShaderType::Bool,
+                static_cast<uint8_t>(std::strcmp(name, "any") == 0
+                    ? BuiltinFunction::Any : BuiltinFunction::All), 1);
+            return ShaderType::Bool;
+        }
+
+        if (std::strcmp(name, "not") == 0)
+        {
+            if (argument_count != 1 || !is_bool_vector(arguments[0]))
+            {
+                fail("not requires a boolean vector argument");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, arguments[0],
+                        static_cast<uint8_t>(BuiltinFunction::NotVector), 1);
+            return arguments[0];
+        }
+
         if (std::strcmp(name, "dot") == 0)
         {
             if (argument_count != 2 || !is_vector(arguments[0]) ||
@@ -1698,7 +1771,7 @@ private:
         {
             const size_t count = component_count(arguments[i]);
             if (count == 0 || arguments[i] == ShaderType::Sampler2D ||
-                arguments[i] == ShaderType::Bool)
+                is_matrix(arguments[i]))
                 return false;
             supplied += count;
         }
