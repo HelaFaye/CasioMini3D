@@ -129,7 +129,8 @@ public:
             const char next = source_[offset_ + 1];
             const bool pair =
                 ((c == '=' || c == '!' || c == '<' || c == '>') && next == '=') ||
-                ((c == '&' || c == '|') && next == c);
+                ((c == '&' || c == '|') && next == c) ||
+                ((c == '+' || c == '-') && next == c);
             token.kind = TokenKind::Punctuation;
             token.text[0] = c;
             token.text[1] = pair ? next : '\0';
