@@ -392,7 +392,7 @@ static void test_essl_math_and_geometric_builtins()
         "  vec3 smooth = smoothstep(0.0, 1.0, vec3(0.25, 0.5, 0.75));\n"
         "  float angle = radians(180.0);\n"
         "  float back = degrees(angle);\n"
-        "  gl_FragColor = vec4(stepped.x, stepped.y, smooth.z, reflected.y);\n"
+        "  gl_FragColor = vec4(stepped.x, stepped.y, smooth.z, back / 180.0);\n"
         "}\n";
 
     module = {};
@@ -427,7 +427,8 @@ static void test_matrix_component_multiply_and_scalar_broadcast()
         "  mat2 b = mat2(3.0);\n"
         "  mat2 c = matrixCompMult(a, b);\n"
         "  vec2 values = min(vec2(4.0, 2.0), 3.0);\n"
-        "  gl_FragColor = vec4(c[0][0], c[1][1], values.x, values.y);\n"
+        "  vec2 diagonal = c * vec2(1.0, 1.0);\n"
+        "  gl_FragColor = vec4(diagonal.x, diagonal.y, values.x, values.y);\n"
         "}\n";
 
     ShaderModule module = {};
