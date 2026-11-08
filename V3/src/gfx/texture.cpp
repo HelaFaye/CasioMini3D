@@ -287,7 +287,7 @@ uint16_t sample_texture(
         sampler.address_u, sampler.address_v);
     const uint32_t fraction = static_cast<uint32_t>(
         (clamped_lod - static_cast<float>(selected_level)) * 65536.0f + 0.5f);
-    return interpolate_rgb565(first, second, std::min(fraction, 65536u));
+    return interpolate_rgb565(first, second, std::min<uint32_t>(fraction, 65536u));
 }
 
 } // namespace gfx
