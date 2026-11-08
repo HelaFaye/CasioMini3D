@@ -319,6 +319,8 @@ static bool process_fragment(
     int x,
     int y,
     const float *varyings,
+    const float *varying_ddx,
+    const float *varying_ddy,
     size_t varying_count,
     float ndc_depth,
     bool front,
@@ -331,7 +333,10 @@ static bool process_fragment(
 
     ++stats.tested_fragments;
     float source[4] = {};
-    if (!fragment_shader(varyings, varying_count, source, user_data))
+    const FragmentInput input = {
+        varyings, varying_ddx, varying_ddy, varying_count
+    };
+    if (!fragment_shader(input, source, user_data))
         return false;
     ++stats.shaded_fragments;
 
@@ -406,6 +411,38 @@ static bool process_fragment(
     }
 
     ++stats.written_fragments;
+    return true;
+}
+
+static bool interpolate_varyings_at(
+    const ScreenVertex vertices[3],
+    float area,
+    float x,
+    float y,
+    size_t varying_count,
+    float output[MAX_VARYINGS])
+{
+    const float e0 = edge(vertices[1], vertices[2], x, y);
+    const float e1 = edge(vertices[2], vertices[0], x, y);
+    const float e2 = edge(vertices[0], vertices[1], x, y);
+    const float w0 = e0 / area;
+    const float w1 = e1 / area;
+    const float w2 = e2 / area;
+    const float reciprocal_w =
+        w0 * vertices[0].inverse_w +
+        w1 * vertices[1].inverse_w +
+        w2 * vertices[2].inverse_w;
+    if (!std::isfinite(reciprocal_w) || reciprocal_w <= 0.0f)
+        return false;
+
+    for (size_t i = 0; i < varying_count; ++i)
+    {
+        const float interpolated =
+            w0 * vertices[0].varying_over_w[i] +
+            w1 * vertices[1].varying_over_w[i] +
+            w2 * vertices[2].varying_over_w[i];
+        output[i] = interpolated / reciprocal_w;
+    }
     return true;
 }
 
@@ -486,6 +523,9 @@ static bool rasterize_one(
 
     bool wrote_any = false;
     float varyings[MAX_VARYINGS] = {};
+    float varyings_dx[MAX_VARYINGS] = {};
+    float varyings_dy[MAX_VARYINGS] = {};
+    float adjacent[MAX_VARYINGS] = {};
     for (int64_t y = y0; y <= y1; ++y)
     {
         for (int64_t x = x0; x <= x1; ++x)
@@ -526,9 +566,23 @@ static bool rasterize_one(
                 w0 * vertices[0].z_over_w +
                 w1 * vertices[1].z_over_w +
                 w2 * vertices[2].z_over_w;
+
+            if (varying_count != 0)
+            {
+                if (interpolate_varyings_at(vertices, area, px + 1.0f, py,
+                                             varying_count, adjacent))
+                    for (size_t i = 0; i < varying_count; ++i)
+                        varyings_dx[i] = adjacent[i] - varyings[i];
+                if (interpolate_varyings_at(vertices, area, px, py + 1.0f,
+                                             varying_count, adjacent))
+                    for (size_t i = 0; i < varying_count; ++i)
+                        varyings_dy[i] = adjacent[i] - varyings[i];
+            }
+
             if (process_fragment(surface, state,
                     static_cast<int>(x), static_cast<int>(y),
-                    varyings, varying_count, ndc_depth, front,
+                    varyings, varyings_dx, varyings_dy,
+                    varying_count, ndc_depth, front,
                     fragment_shader, user_data, stats))
                 wrote_any = true;
         }
@@ -784,10 +838,12 @@ bool draw_point(
     const int x = static_cast<int>(std::floor(screen.x));
     const int y = static_cast<int>(std::floor(screen.y));
     float varyings[MAX_VARYINGS] = {};
+    float zero_derivatives[MAX_VARYINGS] = {};
     for (size_t i = 0; i < varying_count; ++i)
         varyings[i] = input.varying[i];
 
     return process_fragment(surface, state, x, y, varyings,
+        zero_derivatives, zero_derivatives,
         varying_count, screen.z_over_w, true,
         fragment_shader, user_data, stats);
 }
@@ -895,6 +951,7 @@ bool draw_line(
     int previous_x = std::numeric_limits<int>::min();
     int previous_y = std::numeric_limits<int>::min();
     float varyings[MAX_VARYINGS] = {};
+    float zero_derivatives[MAX_VARYINGS] = {};
 
     for (int step = 0; step <= total_steps; ++step)
     {
@@ -922,7 +979,8 @@ bool draw_line(
             a.z_over_w + (b.z_over_w - a.z_over_w) * t;
 
         if (process_fragment(surface, state, x, y,
-                varyings, varying_count, ndc_depth, true,
+                varyings, zero_derivatives, zero_derivatives,
+                varying_count, ndc_depth, true,
                 fragment_shader, user_data, stats))
             wrote_any = true;
     }
