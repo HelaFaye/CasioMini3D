@@ -33,11 +33,12 @@ jobs:
               raise SystemExit("Unexpected fxSDK Dockerfile layout; refusing to patch it")
           ordered_steps = "\n".join((
               "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc",
+              "RUN giteapc uninstall -k Lephenixnoir/sh-elf-gcc",
               "RUN giteapc install -y Lephenixnoir/sh-elf-gcc",
               "RUN giteapc install -y Lephenixnoir/gint",
           ))
           dockerfile.write_text(source.replace(combined_step, ordered_steps))
-          print("Split the library install and added the post-fxlibc GCC pass for libstdc++-v3")
+          print("Reinstalled SH-4 GCC after fxlibc so libstdc++-v3 is built with target libc available")
           PY
 
       - name: Build fxSDK and SH-4A toolchain image
