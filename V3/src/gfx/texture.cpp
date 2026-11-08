@@ -70,24 +70,24 @@ static uint16_t address_index(
    32-bit path avoids the signed 64-bit modulo used by address_index().
    Return false for an ambiguous float-to-texel boundary so the caller can
    preserve the exact double-precision behavior. */
-static bool fast_address_index(
+static bool fast_address_index_bounded(
     float coordinate,
     uint16_t size,
     TextureAddressMode mode,
     uint16_t& result)
 {
+    // Caller guarantees a finite coordinate in (-64, 64). With a uint16
+    // texture extent, the scaled value is therefore safely inside int32.
+    const bool power_of_two = (size & static_cast<uint16_t>(size - 1)) == 0;
     const float scaled = coordinate * static_cast<float>(size);
-    if (!std::isfinite(scaled) || scaled <= -8388608.0f ||
-        scaled >= 8388608.0f)
-        return false;
-
     int32_t index = static_cast<int32_t>(scaled);
     if (static_cast<float>(index) > scaled)
         --index;
 
-    // If float multiplication rounded onto an integer boundary, verify that
-    // the exact product of the input float and extent is that same integer.
-    if (scaled == static_cast<float>(index))
+    // Multiplication by a power-of-two extent is an exact binary exponent
+    // adjustment for this bounded range. Only non-power-of-two dimensions
+    // need the double-precision ambiguity check.
+    if (!power_of_two && scaled == static_cast<float>(index))
     {
         const double exact = static_cast<double>(coordinate) * size;
         if (exact != static_cast<double>(index))
@@ -105,7 +105,6 @@ static bool fast_address_index(
         return true;
     }
 
-    const bool power_of_two = (size & static_cast<uint16_t>(size - 1)) == 0;
     if (mode == TextureAddressMode::Repeat)
     {
         if (power_of_two)
@@ -410,8 +409,8 @@ bool sample_texture_nearest_validated(
     {
         uint16_t x = 0;
         uint16_t y = 0;
-        if (fast_address_index(u, texture.width, sampler.address_u, x) &&
-            fast_address_index(v, texture.height, sampler.address_v, y))
+        if (fast_address_index_bounded(u, texture.width, sampler.address_u, x) &&
+            fast_address_index_bounded(v, texture.height, sampler.address_v, y))
         {
             pixel = texture.pixels[
                 static_cast<size_t>(y) * texture.stride + x];
