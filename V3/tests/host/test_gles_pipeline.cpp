@@ -414,6 +414,69 @@ void test_perspective_correct_varying_interpolation()
     assert(red >= 12 && red <= 14);
 }
 
+struct CountedColor
+{
+    size_t calls;
+    float rgba[4];
+};
+
+bool counted_color_fragment(const fxgl::FragmentInput&,
+                            float rgba[4], void *user_data)
+{
+    CountedColor& color = *static_cast<CountedColor *>(user_data);
+    ++color.calls;
+    for (size_t i = 0; i < 4; ++i)
+        rgba[i] = color.rgba[i];
+    return true;
+}
+
+void test_opaque_scanline_fast_path_matches_general_fragment_path()
+{
+    uint16_t fast_color[16] = {};
+    uint16_t reference_color[16] = {};
+    const RenderSurface fast_surface = {
+        fast_color, nullptr, nullptr, 4, 4, 4
+    };
+    const RenderSurface reference_surface = {
+        reference_color, nullptr, nullptr, 4, 4, 4
+    };
+
+    PipelineState fast_state = {};
+    fxgl::pipeline_default_state(fast_state, 4, 4);
+    PipelineState reference_state = fast_state;
+    reference_state.blend_enabled = true;
+    reference_state.blend_src_rgb = GL_ONE;
+    reference_state.blend_dst_rgb = GL_ZERO;
+    reference_state.blend_src_alpha = GL_ONE;
+    reference_state.blend_dst_alpha = GL_ZERO;
+
+    ClipVertex triangle[3];
+    full_screen_triangle(triangle);
+    CountedColor fast_input = {0, {0.25f, 0.60f, 0.85f, 0.35f}};
+    CountedColor reference_input = fast_input;
+    RasterStats fast_stats = {};
+    RasterStats reference_stats = {};
+
+    assert(fxgl::draw_triangle(fast_surface, fast_state, triangle, 0,
+        counted_color_fragment, &fast_input, &fast_stats));
+    assert(fxgl::draw_triangle(reference_surface, reference_state, triangle, 0,
+        counted_color_fragment, &reference_input, &reference_stats));
+
+    assert(fast_color[0] != 0);
+    for (size_t i = 0; i < 16; ++i)
+        assert(fast_color[i] == reference_color[i]);
+
+    // The fast path still invokes the callback once per covered fragment.
+    // It bypasses redundant per-pixel state handling, not shader semantics.
+    assert(fast_input.calls == fast_stats.shaded_fragments);
+    assert(reference_input.calls == reference_stats.shaded_fragments);
+    assert(fast_stats.tested_fragments == reference_stats.tested_fragments);
+    assert(fast_stats.shaded_fragments == reference_stats.shaded_fragments);
+    assert(fast_stats.depth_passed_fragments ==
+           reference_stats.depth_passed_fragments);
+    assert(fast_stats.written_fragments == reference_stats.written_fragments);
+}
+
 struct PerspectiveCapture
 {
     size_t calls;
@@ -493,6 +556,7 @@ int main()
     test_point_rasterization_and_clip_rejection();
     test_line_clipping_and_scissor_fragment_bounds();
     test_perspective_correct_varying_interpolation();
+    test_opaque_scanline_fast_path_matches_general_fragment_path();
     test_perspective_correct_screen_space_varying_gradients();
     test_perspective_planes_preserve_varyings_and_finite_difference_gradients();
 
