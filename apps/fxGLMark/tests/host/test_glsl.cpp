@@ -643,18 +643,18 @@ static void test_user_function_out_and_inout_parameters()
     // A non-void return value and output parameters must survive the same
     // return path: copy-outs update the caller while the result is pushed.
     static const char return_out_source[] =
-        "float update(inout float state, out float previous);\\n"
-        "void main() {\\n"
-        "  float state = 2.0;\\n"
-        "  float previous = 0.0;\\n"
-        "  float result = update(state, previous);\\n"
-        "  gl_FragColor = vec4(result, state, previous, 1.0);\\n"
-        "}\\n"
-        "float update(inout float value, out float old_value) {\\n"
-        "  old_value = value;\\n"
-        "  value = value + 2.0;\\n"
-        "  return value * 3.0;\\n"
-        "}\\n";
+        "float update(inout float state, out float previous);\n"
+        "void main() {\n"
+        "  float state = 2.0;\n"
+        "  float previous = 0.0;\n"
+        "  float result = update(state, previous);\n"
+        "  gl_FragColor = vec4(result, state, previous, 1.0);\n"
+        "}\n"
+        "float update(inout float value, out float old_value) {\n"
+        "  old_value = value;\n"
+        "  value = value + 2.0;\n"
+        "  return value * 3.0;\n"
+        "}\n";
 
     ShaderModule return_out_module = {};
     assert(fxgl::compile_glsl(
