@@ -20,21 +20,24 @@ bool draw_clip_point(
     size_t varying_count,
     FragmentShader fragment_shader,
     void *user_data,
-    RasterStats *stats = nullptr);
+    RasterStats *stats = nullptr,
+    bool varying_derivatives = false);
 
 bool draw_clip_line(
     const ClipVertex input[2],
     size_t varying_count,
     FragmentShader fragment_shader,
     void *user_data,
-    RasterStats *stats = nullptr);
+    RasterStats *stats = nullptr,
+    bool varying_derivatives = false);
 
 bool draw_clip_triangle(
     const ClipVertex input[3],
     size_t varying_count,
     FragmentShader fragment_shader,
     void *user_data,
-    RasterStats *stats = nullptr);
+    RasterStats *stats = nullptr,
+    bool varying_derivatives = false);
 
 /* The GLES-style API is intentionally single-context on the calculator. */
 void program_context_reset();
