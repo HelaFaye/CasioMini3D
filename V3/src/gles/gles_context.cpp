@@ -3682,25 +3682,6 @@ bool get_texture_binding(
     view.mip_level_count = static_cast<uint8_t>(level_count);
 
     sampler = make_sampler(*object);
-    const bool mip_filter =
-        object->min_filter == GL_NEAREST_MIPMAP_NEAREST ||
-        object->min_filter == GL_LINEAR_MIPMAP_NEAREST ||
-        object->min_filter == GL_NEAREST_MIPMAP_LINEAR ||
-        object->min_filter == GL_LINEAR_MIPMAP_LINEAR;
-    if (mip_filter)
-    {
-        size_t expected_levels = 0;
-        uint16_t width = object->width;
-        uint16_t height = object->height;
-        while (width > 1 || height > 1)
-        {
-            width = width > 1 ? static_cast<uint16_t>(width / 2) : 1;
-            height = height > 1 ? static_cast<uint16_t>(height / 2) : 1;
-            ++expected_levels;
-        }
-        if (level_count != expected_levels)
-            return false;
-    }
     return gfx::texture_valid(view) && gfx::sampler_valid(sampler);
 }
 
