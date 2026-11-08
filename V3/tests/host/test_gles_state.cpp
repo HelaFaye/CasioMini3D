@@ -342,7 +342,10 @@ void test_texture_objects_and_uploads()
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
         GL_LINEAR_MIPMAP_LINEAR);
-    assert(glGetError() == GL_INVALID_OPERATION);
+    assert(glGetError() == GL_NO_ERROR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+        GL_NEAREST_MIPMAP_NEAREST);
+    assert(glGetError() == GL_INVALID_ENUM);
     glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 1, 1, 0, GL_RGB,
         GL_UNSIGNED_SHORT_5_6_5, nullptr);
     assert(glGetError() == GL_INVALID_VALUE);
