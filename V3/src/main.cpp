@@ -452,13 +452,18 @@ static void show_renderer_microbench_results(
             continue;
         }
 
-        char metric[72];
-        snprintf(metric, sizeof(metric), "mean %.3f us/op  %.1f op/s  %s",
-            results[i].mean_us_per_iteration,
+        char timing[72];
+        char throughput[56];
+        snprintf(timing, sizeof(timing), "min/max/mean %.2f/%.2f/%.2f us",
+            results[i].min_us_per_iteration,
+            results[i].max_us_per_iteration,
+            results[i].mean_us_per_iteration);
+        snprintf(throughput, sizeof(throughput), "%.1f operations/sec  %s",
             results[i].operations_per_second,
             logged[i] ? "CSV OK" : "CSV ERROR");
         dtext(8, y, C_WHITE, results[i].stage);
-        dtext(8, y + 13, C_WHITE, metric);
+        dtext(8, y + 12, C_WHITE, timing);
+        dtext(8, y + 24, C_WHITE, throughput);
     }
     dtext(8, 190, C_WHITE, "Saved to /glmark2-renderer-microbench-v1.csv");
     dtext(8, 207, C_WHITE, "EXE or MENU to return");
