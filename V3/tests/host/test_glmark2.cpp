@@ -6,6 +6,7 @@
 #include <GLES2/gl2.h>
 #include <fxgl/platform.h>
 #include "../../src/glmark2/glmark2.hpp"
+#include "../../src/gles/context_internal.hpp"
 
 uint32_t fxmark_test_prof_counter = 0;
 static uint32_t presentation_count = 0;
@@ -161,6 +162,19 @@ static void test_scene_preparation_and_render()
     assert(parse_benchmark("shading:shading=gouraud", request,
         error, sizeof(error)));
     assert(prepare_scene(request, scene, error, sizeof(error)));
+    fxgl::LinkedProgramView linked = {};
+    assert(fxgl::get_current_program_view(linked));
+    assert(linked.fragment_shader != nullptr);
+    assert(linked.fragment_shader->instruction_count == 2);
+    assert(linked.fragment_shader->instructions[0].op ==
+        fxgl::ShaderOp::LoadVarying);
+    assert(linked.fragment_shader->instructions[0].type ==
+        fxgl::ShaderType::Vec4);
+    assert(linked.fragment_shader->instructions[1].op ==
+        fxgl::ShaderOp::StoreFragmentColor);
+    assert(linked.fragment_shader->varyings[
+        linked.fragment_shader->instructions[0].index].type ==
+        fxgl::ShaderType::Vec4);
     assert(render_scene_frame(scene, 4));
     finish_scene(scene);
 
