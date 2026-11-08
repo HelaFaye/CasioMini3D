@@ -1132,6 +1132,20 @@ GLboolean fxglMakeCurrent(const fxgl_surface_t *surface)
     return GL_TRUE;
 }
 
+GLboolean fxglUpdateSurface(const fxgl_surface_t *surface)
+{
+    if (!g_context.current || !surface || !surface->color ||
+        surface->width != g_context.surface.width ||
+        surface->height != g_context.surface.height ||
+        surface->stride != g_context.surface.stride)
+        return GL_FALSE;
+
+    // Retain the new caller-owned addresses without destroying resources,
+    // object names, uniforms, vertex attributes, or render state.
+    g_context.surface = *surface;
+    return GL_TRUE;
+}
+
 void fxglReleaseCurrent(void)
 {
     destroy_buffers(g_context);
