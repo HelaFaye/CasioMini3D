@@ -389,7 +389,8 @@ class Parser
 public:
     Parser(ShaderStage stage, const char *source, ShaderModule& module)
         : stage_(stage), lexer_(source), module_(module), current_(),
-          failed_(false), recursion_depth_(0)
+          failed_(false), recursion_depth_(0), loop_depth_(0),
+          jump_patch_count_(0), loop_stack_{}, jump_patches_{}
     {
         advance();
     }
@@ -414,6 +415,19 @@ public:
     }
 
 private:
+    static constexpr size_t MAX_LOOP_NESTING = 8;
+
+    struct LoopFrame
+    {
+        size_t patch_start;
+    };
+
+    struct LoopJumpPatch
+    {
+        size_t instruction;
+        bool is_break;
+    };
+
     void advance()
     {
         current_ = lexer_.next();
@@ -756,6 +770,60 @@ private:
             static_cast<uint8_t>(target);
     }
 
+    bool begin_loop()
+    {
+        if (loop_depth_ >= MAX_LOOP_NESTING)
+        {
+            fail("loop nesting limit exceeded");
+            return false;
+        }
+        loop_stack_[loop_depth_++].patch_start = jump_patch_count_;
+        return true;
+    }
+
+    void finish_loop(size_t continue_target, size_t break_target)
+    {
+        if (loop_depth_ == 0)
+        {
+            fail("internal loop stack underflow");
+            return;
+        }
+
+        const LoopFrame frame = loop_stack_[--loop_depth_];
+        for (size_t i = frame.patch_start; i < jump_patch_count_; ++i)
+        {
+            const LoopJumpPatch& patch = jump_patches_[i];
+            patch_branch_target(
+                patch.instruction,
+                patch.is_break ? break_target : continue_target);
+            if (failed_)
+                return;
+        }
+
+        // All jumps belonging to this loop have been resolved. Reuse their
+        // bounded patch slots for subsequent and enclosing loop bodies.
+        jump_patch_count_ = frame.patch_start;
+    }
+
+    void emit_loop_jump(bool is_break)
+    {
+        if (loop_depth_ == 0)
+        {
+            fail(is_break ? "break is only valid inside a loop"
+                          : "continue is only valid inside a loop");
+            return;
+        }
+        if (jump_patch_count_ >= GLSL_MAX_INSTRUCTIONS)
+        {
+            fail("loop jump patch budget exceeded");
+            return;
+        }
+
+        const size_t instruction = module_.instruction_count;
+        if (emit_simple(ShaderOp::Jump, ShaderType::Invalid))
+            jump_patches_[jump_patch_count_++] = {instruction, is_break};
+    }
+
     void parse_if_statement()
     {
         advance(); /* if */
@@ -915,6 +983,8 @@ private:
 
         const size_t branch_index = module_.instruction_count;
         emit_simple(ShaderOp::BranchIfFalse, ShaderType::Bool);
+        if (!begin_loop())
+            return;
         parse_nested_statement();
         if (failed_)
             return;
@@ -923,6 +993,7 @@ private:
         emit_simple(ShaderOp::Jump, ShaderType::Invalid);
         patch_branch_target(jump_index, condition_start);
         patch_branch_target(branch_index, module_.instruction_count);
+        finish_loop(condition_start, module_.instruction_count);
     }
 
     void parse_for_statement()
@@ -985,16 +1056,23 @@ private:
         if (failed_)
             return;
 
+        if (!begin_loop())
+            return;
         parse_nested_statement();
         if (failed_)
             return;
 
+        // A continue in a for-loop must execute the loop expression before
+        // re-checking the condition. The relocated increment block begins at
+        // the first instruction after the body.
+        const size_t continue_target = module_.instruction_count;
         for (size_t i = 0; i < increment_count; ++i)
             emit(increment_code[i]);
         const size_t jump_index = module_.instruction_count;
         emit_simple(ShaderOp::Jump, ShaderType::Invalid);
         patch_branch_target(jump_index, condition_start);
         patch_branch_target(branch_index, module_.instruction_count);
+        finish_loop(continue_target, module_.instruction_count);
     }
 
     void parse_statement()
@@ -1007,6 +1085,22 @@ private:
         if (is_identifier("while"))
         {
             parse_while_statement();
+            return;
+        }
+        if (is_identifier("break"))
+        {
+            advance();
+            expect_punctuation(';');
+            if (!failed_)
+                emit_loop_jump(true);
+            return;
+        }
+        if (is_identifier("continue"))
+        {
+            advance();
+            expect_punctuation(';');
+            if (!failed_)
+                emit_loop_jump(false);
             return;
         }
         if (is_identifier("for"))
@@ -1871,6 +1965,10 @@ private:
     Token current_;
     bool failed_;
     size_t recursion_depth_;
+    LoopFrame loop_stack_[MAX_LOOP_NESTING];
+    LoopJumpPatch jump_patches_[GLSL_MAX_INSTRUCTIONS];
+    size_t loop_depth_;
+    size_t jump_patch_count_;
 };
 
 static void set_zero_value(ShaderValue& value, ShaderType type)
