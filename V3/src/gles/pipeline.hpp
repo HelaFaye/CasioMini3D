@@ -35,6 +35,9 @@ struct PipelineState
     GLint viewport[4];
     GLint scissor[4];
     bool scissor_enabled;
+    /* Compute perspective-correct varying gradients only when a shader path
+       consumes implicit texture derivatives (e.g. mipmapped sampling). */
+    bool varying_derivatives;
 
     bool cull_enabled;
     GLenum cull_face;
