@@ -120,6 +120,21 @@ void finish_scene(SceneInstance& instance);
 
 /* The initial default set maps directly to supported glmark2 workloads:
    client arrays, VBOs, nearest/linear texturing, and Gouraud shading. */
+enum class BatteryId : uint8_t
+{
+    QuickSmoke,
+    Glmark2SupportedDefault,
+    AllImplemented
+};
+
+const char *battery_name(BatteryId battery);
+size_t battery_size(BatteryId battery);
+bool battery_request(BatteryId battery, size_t index, BenchmarkRequest& request,
+    char *error, size_t error_capacity);
+
+bool run_benchmark(const BenchmarkRequest& request, const RunConfig& config,
+    BenchmarkResult& result, char *error, size_t error_capacity);
+
 const char *default_benchmark_description(size_t index);
 size_t default_benchmark_count();
 
