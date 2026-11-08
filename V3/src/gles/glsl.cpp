@@ -1929,9 +1929,19 @@ static void apply_binary(
     {
         result = zero_value(right.type);
         for (size_t row = 0; row < left_dimension; ++row)
+        {
             for (size_t column = 0; column < left_dimension; ++column)
+            {
+                const size_t matrix_index = column * left_dimension + row;
                 result.data[row] +=
-                    left.data[column * left_dimension + row] * right.data[column];
+                    left.data[matrix_index] * right.data[column];
+                if (column < 4 && row < 4)
+                {
+                    result.ddx[row] += left.data[matrix_index] * right.ddx[column];
+                    result.ddy[row] += left.data[matrix_index] * right.ddy[column];
+                }
+            }
+        }
         return;
     }
 
@@ -1940,9 +1950,19 @@ static void apply_binary(
     {
         result = zero_value(left.type);
         for (size_t column = 0; column < right_dimension; ++column)
+        {
             for (size_t row = 0; row < right_dimension; ++row)
+            {
+                const size_t matrix_index = column * right_dimension + row;
                 result.data[column] +=
-                    left.data[row] * right.data[column * right_dimension + row];
+                    left.data[row] * right.data[matrix_index];
+                if (row < 4 && column < 4)
+                {
+                    result.ddx[column] += left.ddx[row] * right.data[matrix_index];
+                    result.ddy[column] += left.ddy[row] * right.data[matrix_index];
+                }
+            }
+        }
         return;
     }
 
@@ -2493,6 +2513,17 @@ bool execute_glsl(
                     const float factor = c.data[component_count(c.type) == 1 ? 0 : i];
                     result.data[i] = a.data[i] * (1.0f - factor) +
                                      b.data[i] * factor;
+                    if (i < 4)
+                    {
+                        const float factor_dx =
+                            c.ddx[component_count(c.type) == 1 ? 0 : i];
+                        const float factor_dy =
+                            c.ddy[component_count(c.type) == 1 ? 0 : i];
+                        result.ddx[i] = a.ddx[i] * (1.0f - factor) +
+                            b.ddx[i] * factor + (b.data[i] - a.data[i]) * factor_dx;
+                        result.ddy[i] = a.ddy[i] * (1.0f - factor) +
+                            b.ddy[i] * factor + (b.data[i] - a.data[i]) * factor_dy;
+                    }
                 }
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
