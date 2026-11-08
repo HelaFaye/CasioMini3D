@@ -2098,7 +2098,10 @@ bool execute_glsl(
     if (!module.compiled)
         return false;
 
-    ShaderValue stack[GLSL_MAX_STACK] = {};
+    // Stack slots are written by push_value before they can be read.
+    // Clearing all 32 large ShaderValue objects for every fragment shader
+    // invocation is unnecessary on this bounded interpreter.
+    ShaderValue stack[GLSL_MAX_STACK];
     size_t stack_size = 0;
     size_t pc = 0;
     size_t executed_steps = 0;
@@ -2108,10 +2111,13 @@ bool execute_glsl(
         if (++executed_steps > GLSL_MAX_EXECUTION_STEPS)
             return false;
         const ShaderInstruction& instruction = module.instructions[pc++];
-        ShaderValue a = {};
-        ShaderValue b = {};
-        ShaderValue c = {};
-        ShaderValue result = {};
+        // Each opcode initializes an operand with pop_value/load and
+        // initializes result before pushing it. Avoid zeroing four full
+        // ShaderValue temporaries for every bytecode instruction.
+        ShaderValue a;
+        ShaderValue b;
+        ShaderValue c;
+        ShaderValue result;
 
         switch (instruction.op)
         {
@@ -2202,7 +2208,7 @@ bool execute_glsl(
                     instruction.argument_count > 4 ||
                     stack_size < instruction.argument_count)
                     return false;
-                ShaderValue args[4] = {};
+                ShaderValue args[4];
                 for (size_t i = instruction.argument_count; i > 0; --i)
                     if (!pop_value(stack, stack_size, args[i - 1]))
                         return false;
@@ -2577,7 +2583,7 @@ bool execute_glsl(
                     stack_size < instruction.argument_count)
                     return false;
 
-                ShaderValue args[3] = {};
+                ShaderValue args[3];
                 for (size_t i = instruction.argument_count; i > 0; --i)
                     if (!pop_value(stack, stack_size, args[i - 1]))
                         return false;
