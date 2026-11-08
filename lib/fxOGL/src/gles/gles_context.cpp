@@ -1337,6 +1337,10 @@ static bool execute_vertex(
         runtime.position.data[2],
         runtime.position.data[3]
     };
+    /* An unwritten point size is undefined by GLSL ES; retain the renderer's
+       established one-pixel behavior as a deterministic subset fallback. */
+    output.point_size = runtime.point_size.type == fxgl::ShaderType::Float
+        ? runtime.point_size.data[0] : 1.0f;
 
     for (size_t i = 0; i < module.varying_count; ++i)
     {
@@ -3780,6 +3784,10 @@ void glGetIntegerv(GLenum pname, GLint *data)
             data[0] = g_context.surface.width;
             data[1] = g_context.surface.height;
             break;
+        case GL_ALIASED_POINT_SIZE_RANGE:
+            data[0] = 1;
+            data[1] = static_cast<GLint>(fxgl::MAX_POINT_SIZE);
+            break;
         default:
             set_error(GL_INVALID_ENUM);
             break;
@@ -3802,7 +3810,8 @@ void glGetBooleanv(GLenum pname, GLboolean *data)
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
-                      (pname == GL_MAX_VIEWPORT_DIMS ? 2 : 1);
+                      (pname == GL_MAX_VIEWPORT_DIMS ||
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
     for (int i = 0; i < count; ++i)
         data[i] = values[i] ? GL_TRUE : GL_FALSE;
 }
@@ -3841,7 +3850,8 @@ void glGetFloatv(GLenum pname, GLfloat *data)
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
-                      (pname == GL_MAX_VIEWPORT_DIMS ? 2 : 1);
+                      (pname == GL_MAX_VIEWPORT_DIMS ||
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
     for (int i = 0; i < count; ++i)
         data[i] = static_cast<GLfloat>(values[i]);
 }

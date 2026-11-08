@@ -214,6 +214,7 @@ enum class Storage : uint8_t
     Varying,
     Local,
     Position,
+    PointSize,
     FragmentColor
 };
 
@@ -229,14 +230,15 @@ struct ResolvedVariable
 
 static constexpr uint16_t CALL_OUTPUT_TARGET_FULL = 0x8000;
 static constexpr uint16_t CALL_OUTPUT_TARGET_NONE = 0xffff;
-static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_SHIFT = 12;
-static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_MASK = 0x3000;
+static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_SHIFT = 11;
+static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_MASK = 0x7800;
 
 enum class CallOutputStorage : uint8_t
 {
     Local,
     Varying,
     Position,
+    PointSize,
     FragmentColor
 };
 
@@ -703,6 +705,9 @@ private:
         if (stage_ == ShaderStage::Vertex &&
             std::strcmp(name, "gl_Position") == 0)
             return {Storage::Position, ShaderType::Vec4, 0, true};
+        if (stage_ == ShaderStage::Vertex &&
+            std::strcmp(name, "gl_PointSize") == 0)
+            return {Storage::PointSize, ShaderType::Float, 0, true};
         if (stage_ == ShaderStage::Fragment &&
             std::strcmp(name, "gl_FragColor") == 0)
             return {Storage::FragmentColor, ShaderType::Vec4, 0, true};
@@ -1265,6 +1270,8 @@ private:
                 return emit_simple(ShaderOp::StoreLocal, target.type, target.index);
             case Storage::Position:
                 return emit_simple(ShaderOp::StorePosition, target.type);
+            case Storage::PointSize:
+                return emit_simple(ShaderOp::StorePointSize, target.type);
             case Storage::FragmentColor:
                 return emit_simple(ShaderOp::StoreFragmentColor, target.type);
             default:
@@ -1839,8 +1846,10 @@ private:
             return;
         }
         if ((variable.storage == Storage::Position ||
+             variable.storage == Storage::PointSize ||
              variable.storage == Storage::FragmentColor) &&
             ((variable.storage == Storage::Position && stage_ != ShaderStage::Vertex) ||
+             (variable.storage == Storage::PointSize && stage_ != ShaderStage::Vertex) ||
              (variable.storage == Storage::FragmentColor && stage_ != ShaderStage::Fragment)))
         {
             fail("built-in variable is unavailable in this shader stage");
@@ -1857,6 +1866,7 @@ private:
             case Storage::Varying: op = ShaderOp::LoadVarying; break;
             case Storage::Local: op = ShaderOp::LoadLocal; break;
             case Storage::Position: op = ShaderOp::LoadPosition; break;
+            case Storage::PointSize: op = ShaderOp::LoadPointSize; break;
             case Storage::FragmentColor: op = ShaderOp::LoadFragmentColor; break;
         }
         emit_simple(op, variable.type, variable.index);
@@ -2299,6 +2309,10 @@ private:
                         storage_bits = static_cast<uint16_t>(
                             CallOutputStorage::Position) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
                         break;
+                    case Storage::PointSize:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::PointSize) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
                     case Storage::FragmentColor:
                         storage_bits = static_cast<uint16_t>(
                             CallOutputStorage::FragmentColor) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
@@ -2612,6 +2626,8 @@ static ShaderValue *call_output_target_value(
             return index < GLSL_MAX_VARYINGS ? &runtime.varyings[index] : nullptr;
         case CallOutputStorage::Position:
             return index == 0 ? &runtime.position : nullptr;
+        case CallOutputStorage::PointSize:
+            return index == 0 ? &runtime.point_size : nullptr;
         case CallOutputStorage::FragmentColor:
             return index == 0 ? &runtime.fragment_color : nullptr;
         default:
@@ -2648,6 +2664,8 @@ static ShaderType call_output_target_declared_type(
         case CallOutputStorage::Position:
         case CallOutputStorage::FragmentColor:
             return index == 0 ? ShaderType::Vec4 : ShaderType::Invalid;
+        case CallOutputStorage::PointSize:
+            return index == 0 ? ShaderType::Float : ShaderType::Invalid;
         default:
             return ShaderType::Invalid;
     }
@@ -2845,6 +2863,7 @@ void prepare_shader_runtime(
     // A reused output must not make an invocation appear successful when
     // its shader failed to write the required stage result.
     runtime.position.type = ShaderType::Invalid;
+    runtime.point_size.type = ShaderType::Invalid;
     runtime.fragment_color.type = ShaderType::Invalid;
 }
 
@@ -2940,6 +2959,16 @@ bool execute_glsl(
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
+            case ShaderOp::LoadPointSize:
+                if (instruction.type != ShaderType::Float)
+                    return false;
+                if (runtime.point_size.type == ShaderType::Float)
+                    copy_shader_value(result, runtime.point_size);
+                else
+                    set_zero_value(result, ShaderType::Float);
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
             case ShaderOp::LoadFragmentColor:
                 if (instruction.type != ShaderType::Vec4)
                     return false;
@@ -2975,6 +3004,12 @@ bool execute_glsl(
                     a.type != ShaderType::Vec4)
                     return false;
                 copy_shader_value(runtime.position, a);
+                break;
+            case ShaderOp::StorePointSize:
+                if (!pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Float)
+                    return false;
+                copy_shader_value(runtime.point_size, a);
                 break;
             case ShaderOp::StoreFragmentColor:
                 if (!pop_value(stack, stack_size, a) ||

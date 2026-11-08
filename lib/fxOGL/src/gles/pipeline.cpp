@@ -953,7 +953,8 @@ bool draw_point(
     stats = {};
 
     if (!valid_surface(surface) || !valid_state(state) ||
-        !fragment_shader || varying_count > MAX_VARYINGS)
+        !fragment_shader || varying_count > MAX_VARYINGS ||
+        !std::isfinite(input.point_size))
         return false;
 
     ++stats.input_points;
@@ -964,47 +965,72 @@ bool draw_point(
         return false;
 
     ScreenVertex screen = {};
-    if (!to_screen(input, varying_count, state, screen))
+    if (!to_screen(input, varying_count, state, screen) ||
+        !std::isfinite(screen.x) || !std::isfinite(screen.y))
         return false;
 
-    const float min_x = static_cast<float>(std::max(0, state.viewport[0]));
-    const float min_y = static_cast<float>(std::max(0, state.viewport[1]));
-    const float max_x = static_cast<float>(std::min(
-        static_cast<int64_t>(surface.width),
-        static_cast<int64_t>(state.viewport[0]) + state.viewport[2]));
-    const float max_y = static_cast<float>(std::min(
-        static_cast<int64_t>(surface.height),
-        static_cast<int64_t>(state.viewport[1]) + state.viewport[3]));
+    /* GLES point primitives are square. Clamp their bounded work to the range
+       reported by GL_ALIASED_POINT_SIZE_RANGE; intersect with the surface,
+       viewport and scissor before converting any floating bound to an integer. */
+    const float point_size = std::min(
+        std::max(input.point_size, 1.0f), MAX_POINT_SIZE);
+    const double half_size = static_cast<double>(point_size) * 0.5;
+    int64_t clip_left = std::max<int64_t>(0, state.viewport[0]);
+    int64_t clip_bottom = std::max<int64_t>(0, state.viewport[1]);
+    int64_t clip_right = std::min<int64_t>(
+        surface.width, static_cast<int64_t>(state.viewport[0]) + state.viewport[2]);
+    int64_t clip_top = std::min<int64_t>(
+        surface.height, static_cast<int64_t>(state.viewport[1]) + state.viewport[3]);
     if (state.scissor_enabled)
     {
-        if (min_x >= max_x || min_y >= max_y)
-            return false;
-        if (screen.x < std::max(min_x, static_cast<float>(state.scissor[0])) ||
-            screen.y < std::max(min_y, static_cast<float>(state.scissor[1])) ||
-            screen.x >= std::min(max_x,
-                static_cast<float>(static_cast<int64_t>(state.scissor[0]) +
-                                   state.scissor[2])) ||
-            screen.y >= std::min(max_y,
-                static_cast<float>(static_cast<int64_t>(state.scissor[1]) +
-                                   state.scissor[3])))
-            return false;
+        clip_left = std::max<int64_t>(clip_left, state.scissor[0]);
+        clip_bottom = std::max<int64_t>(clip_bottom, state.scissor[1]);
+        clip_right = std::min<int64_t>(
+            clip_right, static_cast<int64_t>(state.scissor[0]) + state.scissor[2]);
+        clip_top = std::min<int64_t>(
+            clip_top, static_cast<int64_t>(state.scissor[1]) + state.scissor[3]);
     }
-
-    if (screen.x < min_x || screen.y < min_y ||
-        screen.x >= max_x || screen.y >= max_y)
+    if (clip_left >= clip_right || clip_bottom >= clip_top)
         return false;
 
-    const int x = static_cast<int>(std::floor(screen.x));
-    const int y = static_cast<int>(std::floor(screen.y));
+    const double left_bound =
+        std::floor(static_cast<double>(screen.x) - half_size - 0.5) + 1.0;
+    const double right_bound =
+        std::floor(static_cast<double>(screen.x) + half_size - 0.5) + 1.0;
+    const double bottom_bound =
+        std::floor(static_cast<double>(screen.y) - half_size - 0.5) + 1.0;
+    const double top_bound =
+        std::floor(static_cast<double>(screen.y) + half_size - 0.5) + 1.0;
+    const int64_t left = static_cast<int64_t>(std::clamp(
+        left_bound, static_cast<double>(clip_left), static_cast<double>(clip_right)));
+    const int64_t right = static_cast<int64_t>(std::clamp(
+        right_bound, static_cast<double>(clip_left), static_cast<double>(clip_right)));
+    const int64_t bottom = static_cast<int64_t>(std::clamp(
+        bottom_bound, static_cast<double>(clip_bottom), static_cast<double>(clip_top)));
+    const int64_t top = static_cast<int64_t>(std::clamp(
+        top_bound, static_cast<double>(clip_bottom), static_cast<double>(clip_top)));
+    if (left >= right || bottom >= top)
+        return false;
+
     float varyings[MAX_VARYINGS] = {};
     float zero_derivatives[MAX_VARYINGS] = {};
     for (size_t i = 0; i < varying_count; ++i)
         varyings[i] = input.varying[i];
 
-    return process_fragment(surface, state, x, y, varyings,
-        zero_derivatives, zero_derivatives,
-        varying_count, screen.z_over_w, true,
-        fragment_shader, user_data, stats);
+    bool wrote_any = false;
+    for (int64_t y = bottom; y < top; ++y)
+    {
+        for (int64_t x = left; x < right; ++x)
+        {
+            if (process_fragment(
+                    surface, state, static_cast<int>(x), static_cast<int>(y),
+                    varyings, zero_derivatives, zero_derivatives,
+                    varying_count, screen.z_over_w, true,
+                    fragment_shader, user_data, stats))
+                wrote_any = true;
+        }
+    }
+    return wrote_any;
 }
 
 bool draw_line(
