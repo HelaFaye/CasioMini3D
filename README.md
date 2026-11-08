@@ -1,133 +1,82 @@
-# CasioMini3D
+# fxOGL
 
-A calculator-native 3D/software graphics renderer and benchmark suite for the Casio fx-CG50, built with Gint and fxSDK.
+**fxOGL** is a C++ software graphics library for Casio fx-CG calculators.
+**fxGLMark** is its native calculator benchmark application.
 
-## Project direction
+The project targets the SH-4A CPU and Gint/fxSDK environment. The renderer
+implements a growing subset of the OpenGL ES 2.0 programming model in
+software. It does not rely on a graphics GPU and does not currently claim
+full GLES 2.0 compatibility or Khronos conformance.
 
-The active V3 application is **fxGLMark2**, a native port of selected glmark2-inspired graphics workloads. It runs against the CasioMini3D software GLES-style renderer and writes results to the calculator filesystem. It is not the upstream Linux/EGL executable, and its results are not directly comparable with desktop/mobile glmark2 scores.
+## Projects
 
-The rendering library is being developed toward OpenGL ES 2.0 semantics. It already has an end-to-end programmable triangle path, selected GLES resource/state APIs, a constrained GLSL ES compiler/VM, texture sampling and off-screen framebuffer support. Full GLES compatibility and Khronos conformance have not been achieved.
+| Component | Location | Purpose |
+|---|---|---|
+| **fxOGL** | [`lib/fxOGL/`](lib/fxOGL/) | Reusable software graphics library, GLES-style API, shader VM, rasterizer and RGB565 texture sampler |
+| **fxGLMark** | [`apps/fxGLMark/`](apps/fxGLMark/) | Native fx-CG50 benchmark selector, glmark2-inspired scenes, test batteries and on-device CSV logging |
+| **Historical projects** | [`archive/`](archive/) | Earlier renderer generations and model-renderer experiments |
+| **Documentation** | [`docs/`](docs/) | Architecture, compatibility roadmap, benchmark design and third-party notices |
 
-## Current fxGLMark2 menu
+## Build fxGLMark for fx-CG50
 
-The add-in starts in a benchmark selector; it no longer launches a benchmark automatically.
-
-| Key | Action |
-|---|---|
-| Up / Down | Move through individual tests |
-| EXE or F6 | Toggle the selected test |
-| F1 | Select Quick Smoke (2 tests) |
-| F2 | Select glmark2 Supported Default (5 tests) |
-| F3 | Select All Implemented (6 tests) |
-| F4 | Run renderer component microbenchmarks |
-| F5 | Run the selected tests |
-| MENU | Exit |
-
-Initially the Quick Smoke battery is selected. Press F5 to start it, or change the selection first.
-
-### Implemented workloads
-
-| Workload | What it exercises |
-|---|---|
-| Clear baseline | Color/depth clear and Gint presentation |
-| Build / client arrays | Procedural sphere drawn from client-memory vertex arrays |
-| Build / VBO | Same sphere drawn from a vertex buffer object |
-| Texture / nearest | RGB565 texture sampling with nearest filtering |
-| Texture / linear | RGB565 texture sampling with bilinear filtering |
-| Shading / Gouraud | Vertex lighting, normal transformation, interpolated fragment color |
-
-The first geometry workload uses a generated 144-triangle sphere, not glmark2's upstream model files. The port aims to reproduce comparable graphics workload categories, but scene geometry and performance are not identical to upstream glmark2.
-
-### Test batteries
-
-- **Quick Smoke:** VBO build and nearest texture.
-- **glmark2 Supported Default:** client-array build, VBO build, nearest texture, linear texture, Gouraud shading.
-- **All Implemented:** all five of the supported default-subset tests plus clear baseline.
-
-The five-test glmark2 preset is an explicitly named subset, not the full upstream default battery. The remaining scene families are recognized by the parser but are disabled until implemented; see the scene catalog in [docs/fxglmark2-port.md](docs/fxglmark2-port.md).
-
-The current run configuration is 2 warm-up frames, 20 measured frames and 2 repetitions per test. Results report min/max/mean/median frame time and derived FPS. These are full-frame software-rendering measurements, including the Gint dupdate() call.
-
-Results append to `/glmark2-fx-cg50-v1.csv` in the calculator's filesystem. This logger is separate from the earlier `/benchmarks-v2.csv` fxmark hardware microbenchmark dataset, which is preserved and not overwritten.
-
-### Renderer component microbenchmarks
-
-Press **F4** from the main menu to measure four renderer components independently:
-
-| Stage | Timed operation |
-|---|---|
-| `texture-sample` | 16,384 nearest-filter RGB565 texture samples |
-| `triangle-raster` | 8 production GLES triangle draws into the calculator framebuffer |
-| `shader-vm` | 1,024 executions of a compiled GLSL ES fragment shader |
-| `framebuffer-present` | 8 calls to Gint `dupdate()` |
-
-Each stage performs an untimed warm-up, followed by three measured repetitions. The result screen and CSV report minimum, maximum and mean microseconds per operation, plus derived operations per second. Shader compilation/setup is outside the shader timing; the raster stage uses a minimal fixed-color fragment callback so it focuses on triangle rasterization. The presentation measurement is the duration of the `dupdate()` call, not physical LCD scanout completion.
-
-Microbenchmark rows append to the separate `/glmark2-renderer-microbench-v1.csv` file. These component timings are not directly comparable to the per-frame glmark2 results or to the earlier `/benchmarks-v2.csv` dataset.
-
-## Graphics library status
-
-Implemented areas include:
-
-- Single-current-context GLES-style C API and RGB565 render surfaces.
-- Bounded buffer, texture, framebuffer and renderbuffer object pools.
-- Client-memory and VBO vertex attributes.
-- glDrawArrays / glDrawElements with points, lines, strips, loops, triangles, triangle strips and fans.
-- Six-plane homogeneous clipping, perspective-correct varying interpolation and triangle/point/line raster paths.
-- Depth, stencil, scissor, culling, blending and color masks.
-- RGB565 nearest/bilinear texture sampling with clamp/repeat/mirrored-repeat.
-- Color/depth/stencil framebuffer attachments, texture-backed color targets, renderbuffer storage, completeness checks and glReadPixels.
-- Shader/program object lifecycle, link validation, attribute/uniform locations and selected queries/setters.
-- A constrained GLSL ES 1.00 compiler and bytecode VM supporting the shader constructs currently required by the first ported scenes.
-
-Still missing for broad OpenGL ES 2.0 compatibility are full GLSL ES control flow/functions/types/built-ins, broader texture formats and mipmaps, complete state/query/error semantics, and Khronos conformance. See [docs/opengl-compatibility-roadmap.md](docs/opengl-compatibility-roadmap.md).
-
-## Build
-
-From the repository root, use the fxSDK wrapper so the correct SH toolchain, CMake toolchain file, and fxSDK modules are selected:
+Install a working fxSDK/Gint toolchain, then run:
 
 ```sh
-cd V3
+cd apps/fxGLMark
 fxsdk build-cg
 ```
 
-The V3 CMake project requires Gint 2.11 or newer and LibProf 2.4 or newer, enables C++20, and generates `3D.g3a` for fx-CG50. For GiteaPC-managed LibProf installations, use the fxSDK sysroot and install the package before building.
+The generated add-in is `fxGLMark.g3a`.
 
-Inspect the generated add-in with `fxgxa -d 3D.g3a` before transferring it to the calculator. A raw CMake invocation is only appropriate when the equivalent fxSDK toolchain and module configuration is supplied.
+## Run host regression tests
 
-## Host regression tests
-
-From `V3/`:
+From the repository root:
 
 ```sh
-cmake -S tests/host -B /tmp/casiomini3d-host-tests
-cmake --build /tmp/casiomini3d-host-tests
-ctest --test-dir /tmp/casiomini3d-host-tests --output-on-failure
+cmake -S apps/fxGLMark/tests/host -B /tmp/fxogl-host-tests
+cmake --build /tmp/fxogl-host-tests --parallel 2
+ctest --test-dir /tmp/fxogl-host-tests --output-on-failure
 ```
 
-The host suite compiles production renderer code and the real app entry point against minimal Gint/fxlibc/LibProf stubs. It covers the triangle rasterizer, texture sampler, matrix/clipping code, GLES context/state, software pipeline, shader VM, glmark2 scene parser/batteries, and the first GL-backed workloads. Host tests validate CPU behavior; they do not replace the fxSDK/SH build or physical calculator testing.
+These tests compile the renderer and app integration against host-side Gint
+stubs. They validate CPU-side behavior but do not replace an SH cross-build or
+physical calculator validation.
 
-## Earlier fxmark baseline
+## Current graphics capabilities
 
-The repository retains the earlier four-workload fxmark microbenchmark source and its design notes. The previously hardware-validated `/benchmarks-v2.csv` results and the corresponding `main` branch baseline are kept separate from this fxGLMark2 feature work. The new menu does not modify or append to that old dataset.
+fxOGL currently provides a programmable vertex/fragment pipeline, a bounded
+GLSL ES 1.00 compiler/VM, client arrays and VBOs, primitive clipping and
+rasterization, RGB565 nearest/bilinear texture sampling, common depth/stencil/
+blend/scissor state, and off-screen framebuffer support.
 
-See [docs/fxmark-design.md](docs/fxmark-design.md) for the previous benchmark's timing semantics and validation history, and [docs/fxglmark2-port.md](docs/fxglmark2-port.md) for the current scene catalog and menu.
+The implementation remains a strict subset. Major gaps include broader GLSL
+control flow and functions, additional texture formats and mipmap behavior,
+complete GLES state/query semantics, and Khronos conformance testing. The
+current compatibility boundary is documented in
+[`docs/fxOGL-roadmap.md`](docs/fxOGL-roadmap.md).
 
-## Hardware validation still required
+## Hardware measurements
 
-The current host CI passing does not establish that the new add-in has been cross-built or run on the calculator. Before publishing fxGLMark2 results, complete:
+The fxGLMark nearest-texture scene has been measured on a physical fx-CG50.
+The latest supplied 24-frame run averaged 3.117216 seconds for 144 triangles
+per frame. The paired VBO build run averaged 3.133346 seconds. These are
+calculator-specific software-rendering measurements, not glmark2 scores
+comparable with desktop/mobile GPUs.
 
-1. An fxSDK/SH cross-build for the fx-CG50.
-2. G3A inspection and installation on the calculator.
-3. Menu/key handling, all six workloads, F4 component microbenchmarks, and both CSV files' creation/append/reopen testing.
-4. Memory high-water and run-time checks for each battery.
-5. Visual comparison against host reference output.
-6. Timing runs with calculator model, OS, clock state, build revision and configuration recorded.
+The device has also produced all seven F4 renderer microbenchmark stages.
+Further release validation remains: every battery and workload, CSV
+persistence across restart, memory high-water, long-run stability and
+reproducible visual output.
 
-The physical test target remains the fx-CG50 running OS 3.20.0202. That is the intended hardware environment, not a claim that this new benchmark port has already passed on-device testing.
+## Community contributions
 
-## Attribution
+fxOGL is intended to remain a reusable layer above Gint rather than duplicate
+Gint's low-level hardware drivers. Potential upstream contributions should be
+small and independently useful: fxSDK integration fixes, reproducible
+toolchain/build reports, or Gint driver/primitive bug fixes demonstrated by a
+minimal case. The software GLES renderer itself belongs here.
 
-The benchmark organization and scene-family names are inspired by [glmark2](https://github.com/glmark2/glmark2), Copyright © Linaro Limited and contributors, licensed upstream under GPL-3.0. The current V3 workload implementation is written for Gint/fxSDK and does not intentionally copy glmark2 source or redistribute its models/textures. See [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md) for scope and provenance caveats.
-
-Gint and fxSDK are separate projects; consult their upstream license notices for their own code and tools.
+See [`docs/repository-layout.md`](docs/repository-layout.md) for the full tree,
+[`docs/source-provenance.md`](docs/source-provenance.md) for inherited-code
+and licensing boundaries, and [`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md)
+for project references and attribution.

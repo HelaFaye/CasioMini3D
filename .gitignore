@@ -56,15 +56,22 @@ build-cg/*
 Capture d’écran 2024-08-09 024023.png
 calcemu
 make.bat
-3D.g3a
+fxGLMark.g3a
 .vscode/*
 test/*
-/v1/.vscode
-/V2/build-cg
-/v1/build-cg
 /v1/Azur
-/v1/src/.vscode
 src/.vscode/settings.json
-/V2/.vscode
-/V3/build-cg/
 .documentation-backups/
+
+
+# Generated CMake and fxSDK build trees (any project depth)
+**/build/
+**/build-cg/
+**/build-fx/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+
+# Local editor state and autosave backups
+**/.vscode/
+*.blend1

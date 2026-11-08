@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure host tests
-        run: cmake -S V3/tests/host -B build/host-tests
+        run: cmake -S apps/fxGLMark/tests/host -B build/host-tests
 
       - name: Build host tests
         run: cmake --build build/host-tests --parallel 2

@@ -3,24 +3,36 @@
 ## glmark2
 
 - **Project:** glmark2, an OpenGL 2.0 and OpenGL ES 2.0 benchmark
-- **Repository:** <https://github.com/glmark2/glmark2>
+- **Repository:** https://github.com/glmark2/glmark2
 - **Copyright:** Copyright © 2010–2011 Linaro Limited (as stated in source-file notices); individual source files also name their authors.
-- **License:** GNU General Public License, version 3.0 (GPL-3.0), as reported by the repository metadata. Consult the upstream repository and its `COPYING` file for the authoritative license text and full copyright details.
-- **Use here:** The scene/benchmark separation and high-level benchmark organization were used as design inspiration. During development, source references included `src/benchmark.cpp`, `src/benchmark.h`, `src/scene.h`, `src/scene.cpp`, and `src/main-loop.h`.
-- **Code use:** The current CasioMini3D benchmark implementation was written for the Gint/fxSDK target and does not intentionally copy glmark2 source code. The files above were consulted to understand organization and lifecycle concepts; the concepts are described here in our own words. This notice is not a comprehensive source-provenance audit of every file or historical revision in this repository.
+- **License:** GNU General Public License, version 3.0 (GPL-3.0), as reported by the repository metadata. Consult upstream and its COPYING file for authoritative terms.
+- **Use here:** Scene/benchmark separation, scene-family names and high-level workload organization informed fxGLMark's design.
+- **Code use:** fxGLMark is independently written for the Gint/fxSDK target. It does not intentionally copy glmark2 source or redistribute upstream scene assets. This is not a complete provenance audit of all historical repository content.
 
 No glmark2 assets or test data are intentionally redistributed by this project.
 
-## Native fxGLMark2 workload port
+## Inherited CasioMini3D source
 
-The active V3 application now includes a native fx-CG50 benchmark selector and a partial glmark2-inspired workload port. The upstream glmark2 repository is consulted for scene-family names, default-benchmark organization, and workload intent. The local workloads are independently implemented against the CasioMini3D software renderer; they use a generated sphere/texture and do not intentionally redistribute upstream source code, models, textures, or other assets.
-
-The selectable set is currently limited to clear, build (client arrays/VBO), texture (nearest/linear), and Gouraud shading. The five-workload preset is explicitly a supported subset, not the complete upstream default suite. See [fxglmark2-port.md](fxglmark2-port.md) for the exact mapping and remaining scene families.
+This repository retains active-app and historical source inherited from
+[`leofarhi/CasioMini3D`](https://github.com/leofarhi/CasioMini3D). The parent
+repository had no root LICENSE or COPYING file and no recognized license
+metadata at the time of the 2026-11-08 audit. Do not assume inherited source
+may be relicensed or submitted to other projects. See
+[`source-provenance.md`](source-provenance.md).
 
 ## Gint and fxSDK
 
-The active V3 application depends on Gint and the fxSDK build/conversion toolchain. They are separate projects; this repository does not claim ownership of their code. Consult the respective upstream projects and their license files for applicable copyright and license terms.
+fxGLMark uses Gint and the fxSDK for calculator hardware access, add-in
+runtime, build configuration and asset conversion. They are separate projects.
+fxOGL's software renderer is layered above Gint and does not replace Gint's
+low-level hardware drivers.
+
+Consult the upstream Gint/fxSDK repositories and their license notices for
+their current source, contribution and redistribution requirements.
 
 ## Attribution scope
 
-This document records third-party projects specifically consulted as references during the benchmark design work. It does not replace copyright or license notices that must accompany any third-party code or assets if such material is later copied or adapted. Before distribution, audit the full repository—including legacy directories and assets—for provenance and preserve any applicable notices.
+This file records specific upstream projects consulted as references. It does
+not replace notices required for third-party source or assets if any are
+later copied or adapted. Preserve the original notices when moving archived
+source, assets or historical project snapshots.
