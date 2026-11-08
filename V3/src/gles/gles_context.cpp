@@ -928,6 +928,22 @@ static void initialize_draw_invocation(
         return;
 
     const fxgl::ShaderModule& module = *program.fragment_shader;
+
+    // Fragment uniforms are immutable for the duration of a synchronous GL
+    // draw. Resolve and copy them once into the per-draw runtime rather than
+    // repeating the lookup and ShaderValue copy for every covered fragment.
+    for (size_t i = 0; i < module.uniform_count; ++i)
+    {
+        const uint8_t location = program.fragment_uniform_map[i];
+        if (location >= program.uniform_count)
+        {
+            invocation.fragment_failed = true;
+            return;
+        }
+        invocation.fragment_runtime.uniforms[i] =
+            program.uniform_values[location];
+    }
+
     bool uses_texture = false;
     for (size_t i = 0; i < module.instruction_count; ++i)
     {
@@ -998,15 +1014,19 @@ static bool sample_bound_texture(
     void *user_data)
 {
     if (unit < 0 || unit >= static_cast<int>(FXGL_MAX_TEXTURE_UNITS) ||
-        !std::isfinite(u) || !std::isfinite(v) ||
-        !std::isfinite(dudx) || !std::isfinite(dvdx) ||
-        !std::isfinite(dudy) || !std::isfinite(dvdy))
+        !std::isfinite(u) || !std::isfinite(v))
         return false;
 
     DrawInvocation& invocation = *static_cast<DrawInvocation *>(user_data);
     const CachedTextureBinding& cached =
         invocation.textures[static_cast<size_t>(unit)];
     if (!cached.valid)
+        return false;
+    // Non-mipmapped nearest/linear filtering does not consume derivatives.
+    // Avoid four finite checks on the common nearest-texture path.
+    if (cached.requires_derivatives &&
+        (!std::isfinite(dudx) || !std::isfinite(dvdx) ||
+         !std::isfinite(dudy) || !std::isfinite(dvdy)))
         return false;
     const gfx::Texture2DView& texture = cached.view;
     const gfx::TextureSampler& sampler = cached.sampler;
@@ -1098,17 +1118,6 @@ static bool execute_fragment(
     fxgl::ShaderRuntime& runtime = invocation.fragment_runtime;
     fxgl::prepare_shader_runtime(module, runtime);
 
-    for (size_t i = 0; i < module.uniform_count; ++i)
-    {
-        const uint8_t location = invocation.program.fragment_uniform_map[i];
-        if (location >= invocation.program.uniform_count)
-        {
-            invocation.fragment_failed = true;
-            return false;
-        }
-        runtime.uniforms[i] = invocation.program.uniform_values[location];
-    }
-
     for (size_t i = 0; i < module.varying_count; ++i)
     {
         const fxgl::ShaderVariable& variable = module.varyings[i];
@@ -1119,7 +1128,9 @@ static bool execute_fragment(
             invocation.fragment_failed = true;
             return false;
         }
-        runtime.varyings[i] = {};
+        // Every component consumed by this declared type is overwritten
+        // below, including its derivatives. Do not clear the full mat4-sized
+        // ShaderValue for each fragment when this is usually only a vec2.
         runtime.varyings[i].type = variable.type;
         for (size_t component = 0; component < components; ++component)
         {
