@@ -17,7 +17,7 @@ struct SolidColor
     float rgba[4];
 };
 
-bool solid_fragment(const float *, size_t, float rgba[4], void *user_data)
+bool solid_fragment(const fxgl::FragmentInput&, float rgba[4], void *user_data)
 {
     const SolidColor& color = *static_cast<const SolidColor *>(user_data);
     for (int i = 0; i < 4; ++i)
@@ -25,12 +25,12 @@ bool solid_fragment(const float *, size_t, float rgba[4], void *user_data)
     return true;
 }
 
-bool red_from_varying(const float *varyings, size_t count,
+bool red_from_varying(const fxgl::FragmentInput& input,
                       float rgba[4], void *)
 {
-    if (count < 1)
+    if (input.varying_count < 1)
         return false;
-    rgba[0] = varyings[0];
+    rgba[0] = input.varyings[0];
     rgba[1] = 0.0f;
     rgba[2] = 0.0f;
     rgba[3] = 1.0f;
