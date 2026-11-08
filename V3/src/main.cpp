@@ -1,389 +1,400 @@
 #include "display.hpp"
-#include "bench.hpp"
+#include "glmark2/glmark2.hpp"
+
+#include <GLES2/gl2.h>
+#include <fxgl/platform.h>
 
 #include <errno.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <string.h>
+
 #include <fxlibc/printf.h>
 #include <libprof.h>
 #include <gint/gint.h>
 
-static const BenchId BENCHMARKS[] = {
-    BenchId::ClearOnly,
-    BenchId::SolidFill,
-    BenchId::TriangleThroughput,
-    BenchId::TexturedGeometry
-};
-static const size_t BENCHMARK_COUNT = sizeof(BENCHMARKS) / sizeof(BENCHMARKS[0]);
-static BenchResult benchmark_results[BENCHMARK_COUNT];
-static bool benchmark_valid[BENCHMARK_COUNT];
-static bool benchmark_logged[BENCHMARK_COUNT];
-
-enum class CsvErrorStage : uint8_t
+namespace
 {
-    None = 0,
-    WorldSwitch,
-    Open,
-    Stat,
-    HeaderWrite,
-    RowWrite,
-    Flush,
-    Stream,
-    Close,
-    Verify
+constexpr size_t TEST_COUNT = 6;
+static const char *const TEST_DESCRIPTIONS[TEST_COUNT] = {
+    "clear",
+    "build:use-vbo=false",
+    "build:use-vbo=true",
+    "texture:texture-filter=nearest",
+    "texture:texture-filter=linear",
+    "shading:shading=gouraud"
+};
+static const char *const TEST_LABELS[TEST_COUNT] = {
+    "Clear baseline",
+    "Build / client arrays",
+    "Build / VBO",
+    "Texture / nearest",
+    "Texture / linear",
+    "Shading / Gouraud"
 };
 
-static CsvErrorStage benchmark_csv_error[BENCHMARK_COUNT];
-static int benchmark_csv_errno[BENCHMARK_COUNT];
+static bool g_selected[TEST_COUNT] = {};
+static size_t g_cursor = 0;
+static char g_status[64] = "Choose individual tests or a battery";
+static uint16_t g_depth_buffer[DWIDTH * DHEIGHT];
 
 struct CsvWriteArgs
 {
-    const BenchResult* result;
-    CsvErrorStage error;
+    const fxglmark2::BenchmarkResult *result;
     int error_number;
 };
 
-// Schema v2 is deliberately written to a new file. Existing v1 logs remain
-// intact rather than receiving rows with a different column layout.
-static int append_csv_in_os_world(void* opaque)
+static int append_result_csv_os_world(void *opaque)
 {
-    CsvWriteArgs* args = static_cast<CsvWriteArgs*>(opaque);
-    args->error = CsvErrorStage::None;
+    CsvWriteArgs *args = static_cast<CsvWriteArgs *>(opaque);
     args->error_number = 0;
-
-    static const char path[] = "/benchmarks-v2.csv";
+    static const char path[] = "/glmark2-fx-cg50-v1.csv";
     static const char header[] =
-        "schema_version,benchmark_version,scene,timer_source,timer_resolution_us,"
-        "warmup_frames,measure_frames,repeat_count,triangles_per_frame,screen_width,screen_height,"
-        "clear_mean_us_per_frame,clear_median_us_per_frame,clear_min_us_per_frame,clear_max_us_per_frame,clear_spread_us_per_frame,"
-        "raster_mean_us_per_frame,raster_median_us_per_frame,raster_min_us_per_frame,raster_max_us_per_frame,raster_spread_us_per_frame,"
-        "present_mean_us_per_frame,present_median_us_per_frame,present_min_us_per_frame,present_max_us_per_frame,present_spread_us_per_frame,"
-        "frame_mean_us_per_frame,frame_median_us_per_frame,frame_min_us_per_frame,frame_max_us_per_frame,frame_spread_us_per_frame\n";
+        "schema_version,benchmark,frames,triangles_per_frame,"
+        "min_frame_us,max_frame_us,mean_frame_us,median_frame_us,fps\n";
 
-    // fxlibc's append stream starts at EOF when opened. We open a
-    // fresh stream for each benchmark record and never seek it, so this
-    // avoids relying on update-stream fseek() behavior for appending.
     struct stat before = {};
-    long long original_size = 0;
+    long long expected = 0;
     errno = 0;
     if (stat(path, &before) == 0)
     {
         if (before.st_size < 0)
         {
-            args->error = CsvErrorStage::Stat;
             args->error_number = EIO;
-            return static_cast<int>(args->error);
+            return -1;
         }
-        original_size = static_cast<long long>(before.st_size);
+        expected = static_cast<long long>(before.st_size);
     }
     else if (errno != ENOENT)
     {
-        args->error = CsvErrorStage::Stat;
         args->error_number = errno;
-        return static_cast<int>(args->error);
+        return -1;
     }
 
     errno = 0;
-    FILE* file = fopen(path, "a");
+    FILE *file = fopen(path, "a");
     if (!file)
     {
-        args->error = CsvErrorStage::Open;
         args->error_number = errno;
-        return static_cast<int>(args->error);
+        return -1;
     }
 
-    CsvErrorStage failure = CsvErrorStage::None;
-    int failure_errno = 0;
-    long long expected_size = original_size;
-
-    if (expected_size == 0)
+    bool failed = false;
+    if (expected == 0)
     {
-        errno = 0;
-        if (fprintf(file, "%s", header) < 0)
-        {
-            failure = CsvErrorStage::HeaderWrite;
-            failure_errno = errno;
-        }
+        const int count = fprintf(file, "%s", header);
+        if (count < 0)
+            failed = true;
         else
-        {
-            expected_size += static_cast<long long>(sizeof(header) - 1);
-        }
+            expected += static_cast<long long>(sizeof(header) - 1);
     }
 
-    const BenchResult& r = *args->result;
-    if (failure == CsvErrorStage::None)
+    const fxglmark2::BenchmarkResult& r = *args->result;
+    if (!failed)
     {
-        errno = 0;
-        const int written = fprintf(file,
-            "2,%s,%s,%s,%lu,%lu,%lu,%lu,%lu,%u,%u,"
-            "%.3f,%.3f,%.3f,%.3f,%.3f,"
-            "%.3f,%.3f,%.3f,%.3f,%.3f,"
-            "%.3f,%.3f,%.3f,%.3f,%.3f,"
-            "%.3f,%.3f,%.3f,%.3f,%.3f\n",
-            BENCH_VERSION,
-            r.name,
-            BENCH_TIMER_SOURCE,
-            static_cast<unsigned long>(BENCH_TIMER_RESOLUTION_US),
-            static_cast<unsigned long>(r.warmup_frames),
-            static_cast<unsigned long>(r.measure_frames),
-            static_cast<unsigned long>(r.repeat_count),
+        const int count = fprintf(file,
+            "1,%s,%lu,%lu,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+            r.description,
+            static_cast<unsigned long>(r.frames),
             static_cast<unsigned long>(r.triangles_per_frame),
-            static_cast<unsigned int>(r.screen_width),
-            static_cast<unsigned int>(r.screen_height),
-            r.clear.mean_us_per_frame,
-            r.clear.median_us_per_frame,
-            r.clear.min_us_per_frame,
-            r.clear.max_us_per_frame,
-            r.clear.spread_us_per_frame,
-            r.raster.mean_us_per_frame,
-            r.raster.median_us_per_frame,
-            r.raster.min_us_per_frame,
-            r.raster.max_us_per_frame,
-            r.raster.spread_us_per_frame,
-            r.present.mean_us_per_frame,
-            r.present.median_us_per_frame,
-            r.present.min_us_per_frame,
-            r.present.max_us_per_frame,
-            r.present.spread_us_per_frame,
-            r.frame_total.mean_us_per_frame,
-            r.frame_total.median_us_per_frame,
-            r.frame_total.min_us_per_frame,
-            r.frame_total.max_us_per_frame,
-            r.frame_total.spread_us_per_frame);
-        if (written < 0)
-        {
-            failure = CsvErrorStage::RowWrite;
-            failure_errno = errno;
-        }
+            r.min_frame_us, r.max_frame_us, r.mean_frame_us,
+            r.median_frame_us, r.fps);
+        if (count < 0)
+            failed = true;
         else
-        {
-            expected_size += written;
-        }
+            expected += count;
     }
 
-    if (failure == CsvErrorStage::None)
-    {
-        errno = 0;
-        if (fflush(file) != 0)
-        {
-            failure = CsvErrorStage::Flush;
-            failure_errno = errno;
-        }
-    }
+    if (!failed && fflush(file) != 0)
+        failed = true;
+    if (ferror(file))
+        failed = true;
+    if (fclose(file) != 0)
+        failed = true;
 
-    if (failure == CsvErrorStage::None && ferror(file))
-    {
-        failure = CsvErrorStage::Stream;
-        failure_errno = errno;
-    }
-
-    errno = 0;
-    if (fclose(file) != 0 && failure == CsvErrorStage::None)
-    {
-        failure = CsvErrorStage::Close;
-        failure_errno = errno;
-    }
-
-    // A successful stdio return code alone does not prove the append
-    // reached persistent storage. Verify the final file size after close.
-    if (failure == CsvErrorStage::None)
+    if (!failed)
     {
         struct stat after = {};
-        errno = 0;
-        if (stat(path, &after) != 0)
+        if (stat(path, &after) != 0 ||
+            static_cast<long long>(after.st_size) != expected)
         {
-            failure = CsvErrorStage::Verify;
-            failure_errno = errno;
-        }
-        else if (static_cast<long long>(after.st_size) != expected_size)
-        {
-            failure = CsvErrorStage::Verify;
-            failure_errno = EIO;
+            failed = true;
+            args->error_number = errno ? errno : EIO;
         }
     }
 
-    args->error = failure;
-    args->error_number = failure_errno;
-    return static_cast<int>(failure);
+    if (failed && args->error_number == 0)
+        args->error_number = errno ? errno : EIO;
+    return failed ? -1 : 0;
 }
 
-static const char* csv_error_name(CsvErrorStage error)
+static bool append_result_csv(const fxglmark2::BenchmarkResult& result)
 {
-    switch (error)
+    CsvWriteArgs args = {&result, 0};
+    const int status = gint_world_switch(
+        GINT_CALL(append_result_csv_os_world, &args));
+    if (status != 0 && args.error_number == 0)
+        args.error_number = status;
+    return status == 0 && args.error_number == 0;
+}
+
+static void release_all_selection()
+{
+    for (bool& selected : g_selected)
+        selected = false;
+}
+
+static void select_battery(fxglmark2::BatteryId battery)
+{
+    release_all_selection();
+    const size_t count = fxglmark2::battery_size(battery);
+    for (size_t item = 0; item < count; ++item)
     {
-        case CsvErrorStage::None:        return "CSV OK";
-        case CsvErrorStage::WorldSwitch: return "CSV SWITCH";
-        case CsvErrorStage::Open:        return "CSV OPEN";
-        case CsvErrorStage::Stat:        return "CSV STAT";
-        case CsvErrorStage::HeaderWrite: return "CSV HEADER";
-        case CsvErrorStage::RowWrite:    return "CSV WRITE";
-        case CsvErrorStage::Flush:       return "CSV FLUSH";
-        case CsvErrorStage::Stream:      return "CSV STREAM";
-        case CsvErrorStage::Close:       return "CSV CLOSE";
-        case CsvErrorStage::Verify:      return "CSV VERIFY";
-    }
-    return "CSV UNKNOWN";
-}
+        fxglmark2::BenchmarkRequest request = {};
+        char error[96] = {};
+        if (!fxglmark2::battery_request(
+                battery, item, request, error, sizeof(error)))
+            continue;
 
-static bool append_benchmark_result_csv(
-    const BenchResult& result,
-    CsvErrorStage* error,
-    int* error_number)
-{
-    CsvWriteArgs args = {
-        &result,
-        CsvErrorStage::WorldSwitch,
-        0
-    };
-
-    const int switch_result = gint_world_switch(
-        GINT_CALL(append_csv_in_os_world, &args));
-
-    if (args.error == CsvErrorStage::WorldSwitch)
-        args.error_number = switch_result;
-
-    if (error)
-        *error = args.error;
-    if (error_number)
-        *error_number = args.error_number;
-
-    return switch_result == 0 && args.error == CsvErrorStage::None;
-}
-
-static bool run_and_store(size_t index, const BenchConfig& cfg)
-{
-    BenchResult result = {};
-    benchmark_valid[index] = false;
-    benchmark_logged[index] = false;
-    benchmark_csv_error[index] = CsvErrorStage::None;
-    benchmark_csv_errno[index] = 0;
-
-    if (!run_benchmark(BENCHMARKS[index], cfg, &result))
-        return false;
-
-    benchmark_results[index] = result;
-    benchmark_valid[index] = true;
-    benchmark_logged[index] = append_benchmark_result_csv(
-        result, &benchmark_csv_error[index], &benchmark_csv_errno[index]);
-    return true;
-}
-
-static void run_suite(const BenchConfig& cfg)
-{
-    for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
-    {
-        benchmark_valid[i] = false;
-        benchmark_logged[i] = false;
-        benchmark_results[i] = {};
-        benchmark_csv_error[i] = CsvErrorStage::None;
-        benchmark_csv_errno[i] = 0;
+        for (size_t test = 0; test < TEST_COUNT; ++test)
+        {
+            fxglmark2::BenchmarkRequest candidate = {};
+            if (fxglmark2::parse_benchmark(
+                    TEST_DESCRIPTIONS[test], candidate, error, sizeof(error)) &&
+                candidate.scene == request.scene &&
+                candidate.use_vbo == request.use_vbo &&
+                candidate.texture_filter == request.texture_filter)
+                g_selected[test] = true;
+        }
     }
 
-    for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
-        run_and_store(i, cfg);
+    snprintf(g_status, sizeof(g_status), "Selected: %s",
+             fxglmark2::battery_name(battery));
 }
 
-static void draw_results(const BenchConfig& cfg)
+static size_t selected_count()
+{
+    size_t count = 0;
+    for (bool selected : g_selected)
+        if (selected) ++count;
+    return count;
+}
+
+static void draw_menu()
 {
     dclear(C_BLACK);
-    dtext(8, 8, C_WHITE, "fxmark 2.0 | mean/median us per frame");
+    dtext(8, 5, C_WHITE, "fxGLMark2 | fx-CG50 graphics benchmark");
+    dtext(8, 19, C_WHITE, "STANDARD BATTERIES");
+    dtext(8, 32, C_WHITE, "F1 Quick Smoke (2)   F2 glmark2 Supported Default (5)");
+    dtext(8, 44, C_WHITE, "F3 All Implemented (6)");
+    dtext(8, 61, C_WHITE, "SELECT TESTS  [EXE/F6 toggle]  [UP/DOWN move]");
 
-    for (size_t i = 0; i < BENCHMARK_COUNT; ++i)
+    for (size_t i = 0; i < TEST_COUNT; ++i)
     {
-        const int y = 22 + static_cast<int>(i) * 40;
-        dtext(8, y, C_WHITE, bench_name(BENCHMARKS[i]));
+        char line[64];
+        snprintf(line, sizeof(line), "%c [%c] %s",
+            i == g_cursor ? '>' : ' ',
+            g_selected[i] ? 'X' : ' ',
+            TEST_LABELS[i]);
+        dtext(8, 78 + static_cast<int>(i) * 17,
+              i == g_cursor ? C_WHITE : C_WHITE, line);
+    }
 
-        if (!benchmark_valid[i])
+    char selection[48];
+    snprintf(selection, sizeof(selection), "Selected: %lu / %lu",
+        static_cast<unsigned long>(selected_count()),
+        static_cast<unsigned long>(TEST_COUNT));
+    dtext(8, 185, C_WHITE, selection);
+    dtext(8, 198, C_WHITE, "F5 RUN SELECTED    MENU exit");
+    dtext(8, 211, C_WHITE, g_status);
+    dupdate();
+}
+
+static void show_message(const char *title, const char *line1, const char *line2)
+{
+    dclear(C_BLACK);
+    dtext(8, 12, C_WHITE, title);
+    if (line1) dtext(8, 38, C_WHITE, line1);
+    if (line2) dtext(8, 54, C_WHITE, line2);
+    dtext(8, 205, C_WHITE, "EXE or MENU to return");
+    dupdate();
+    while (!keydown(KEY_EXE) && !keydown(KEY_MENU))
+        clearevents();
+    while (keydown(KEY_EXE) || keydown(KEY_MENU))
+        clearevents();
+}
+
+static void show_results(
+    const fxglmark2::BenchmarkResult *results,
+    const bool *valid,
+    const bool *logged,
+    size_t count)
+{
+    dclear(C_BLACK);
+    dtext(8, 5, C_WHITE, "fxGLMark2 results | mean frame time and FPS");
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const int y = 23 + static_cast<int>(i) * 29;
+        if (!valid[i])
         {
-            dtext(8, y + 13, C_WHITE, "FAILED (profile or scene)");
+            dtext(8, y, C_WHITE, "FAILED: scene setup or draw");
             continue;
         }
 
-        const BenchResult& r = benchmark_results[i];
-        char clear_raster[64];
-        char present_total[64];
-        char csv_number[20];
+        char name[48];
+        char metrics[72];
+        snprintf(name, sizeof(name), "%s", results[i].description);
+        snprintf(metrics, sizeof(metrics), "%.1f us/frame  %.2f FPS  %s",
+            results[i].mean_frame_us, results[i].fps,
+            logged[i] ? "CSV OK" : "CSV ERROR");
+        dtext(8, y, C_WHITE, name);
+        dtext(8, y + 12, C_WHITE, metrics);
+    }
 
-        snprintf(clear_raster, sizeof(clear_raster),
-            "C %.1f/%.1f R %.1f/%.1f us",
-            r.clear.mean_us_per_frame,
-            r.clear.median_us_per_frame,
-            r.raster.mean_us_per_frame,
-            r.raster.median_us_per_frame);
-        snprintf(present_total, sizeof(present_total),
-            "P %.1f/%.1f F %.1f +/- %.1f us %.1f FPS",
-            r.present.mean_us_per_frame,
-            r.present.median_us_per_frame,
-            r.frame_total.mean_us_per_frame,
-            r.frame_total.spread_us_per_frame,
-            r.frame_total.mean_us_per_frame > 0.0
-                ? 1000000.0 / r.frame_total.mean_us_per_frame
-                : 0.0);
+    dtext(8, 203, C_WHITE, "Saved to /glmark2-fx-cg50-v1.csv");
+    dtext(8, 215, C_WHITE, "EXE or MENU to return");
+    dupdate();
+    while (!keydown(KEY_EXE) && !keydown(KEY_MENU))
+        clearevents();
+    while (keydown(KEY_EXE) || keydown(KEY_MENU))
+        clearevents();
+}
 
-        dtext(8, y + 12, C_WHITE, clear_raster);
-        dtext(8, y + 24, C_WHITE, present_total);
-        dtext(300, y, C_WHITE,
-            benchmark_logged[i] ? "CSV OK" : csv_error_name(benchmark_csv_error[i]));
+static void run_selected_benchmarks()
+{
+    const size_t total_selected = selected_count();
+    if (total_selected == 0)
+    {
+        snprintf(g_status, sizeof(g_status), "Select at least one test first");
+        return;
+    }
 
-        if (!benchmark_logged[i])
+    fxglmark2::BenchmarkResult results[TEST_COUNT] = {};
+    bool valid[TEST_COUNT] = {};
+    bool logged[TEST_COUNT] = {};
+    size_t completed = 0;
+
+    fxgl_surface_t surface = {};
+    surface.color = reinterpret_cast<uint16_t *>(gint_vram);
+    surface.depth = g_depth_buffer;
+    surface.stencil = nullptr;
+    surface.width = SCREEN_WIDTH;
+    surface.height = SCREEN_HEIGHT;
+    surface.stride = DWIDTH;
+
+    if (!fxglMakeCurrent(&surface))
+    {
+        show_message("GLES context error",
+            "Could not bind calculator framebuffer",
+            "No benchmarks were started");
+        return;
+    }
+
+    const fxglmark2::RunConfig config = {2, 20, 2};
+    for (size_t i = 0; i < TEST_COUNT; ++i)
+    {
+        if (!g_selected[i])
+            continue;
+
+        dclear(C_BLACK);
+        dtext(8, 8, C_WHITE, "Running selected benchmark...");
+        dtext(8, 28, C_WHITE, TEST_LABELS[i]);
+        dupdate();
+
+        fxglmark2::BenchmarkRequest request = {};
+        char error[160] = {};
+        if (fxglmark2::parse_benchmark(
+                TEST_DESCRIPTIONS[i], request, error, sizeof(error)) &&
+            fxglmark2::run_benchmark(
+                request, config, results[completed], error, sizeof(error)))
         {
-            if (benchmark_csv_error[i] == CsvErrorStage::WorldSwitch)
-                snprintf(csv_number, sizeof(csv_number), "code %d", benchmark_csv_errno[i]);
-            else
-                snprintf(csv_number, sizeof(csv_number), "errno %d", benchmark_csv_errno[i]);
-            dtext(300, y + 12, C_WHITE, csv_number);
+            valid[completed] = true;
+            logged[completed] = append_result_csv(results[completed]);
+            ++completed;
+        }
+        else
+        {
+            snprintf(results[completed].description,
+                sizeof(results[completed].description), "%s", TEST_LABELS[i]);
+            valid[completed] = false;
+            ++completed;
+            snprintf(g_status, sizeof(g_status), "Benchmark failed: %.40s", error);
         }
     }
 
-    dtext(8, 188, C_WHITE, "C clear R raster P dupdate F full-frame");
-    dtext(8, 205, C_WHITE, "5 runs x60 frames | F6 clear F5 solid EXE tri DEL UV");
-    (void)cfg;
+    fxglReleaseCurrent();
+    show_results(results, valid, logged, completed);
+    snprintf(g_status, sizeof(g_status), "Last run: %lu benchmark(s)",
+             static_cast<unsigned long>(completed));
 }
+
+static void wait_for_key_release()
+{
+    while (keydown(KEY_UP) || keydown(KEY_DOWN) ||
+           keydown(KEY_EXE) || keydown(KEY_F1) ||
+           keydown(KEY_F2) || keydown(KEY_F3) ||
+           keydown(KEY_F5) || keydown(KEY_F6))
+        clearevents();
+}
+
+} // namespace
 
 int main()
 {
     __printf_enable_fp();
     prof_init();
-    init_uv_map();
-
-    BenchConfig cfg;
-    cfg.warmup_frames = 5;
-    cfg.measure_frames = 60;
-    cfg.repeat_count = 5;
-    cfg.triangle_count = 64;
-    cfg.width = SCREEN_WIDTH;
-    cfg.height = SCREEN_HEIGHT;
 
     dclear(C_BLACK);
-    dtext(8, 8, C_WHITE, "Running fxmark 2.0...");
+    dtext(8, 8, C_WHITE, "fxGLMark2 initializing...");
     dupdate();
-    run_suite(cfg);
+
+    // Start with a short, representative smoke selection; no benchmark runs
+    // automatically. The user explicitly starts a battery or selected tests.
+    select_battery(fxglmark2::BatteryId::QuickSmoke);
 
     while (!keydown(KEY_MENU))
     {
         clearevents();
-        draw_results(cfg);
-        dupdate();
+        draw_menu();
 
-        size_t selected = BENCHMARK_COUNT;
-        if (keydown(KEY_F6))
-            selected = 0;
-        else if (keydown(KEY_F5))
-            selected = 1;
-        else if (keydown(KEY_EXE))
-            selected = 2;
-        else if (keydown(KEY_DEL))
-            selected = 3;
-
-        if (selected < BENCHMARK_COUNT)
+        if (keydown(KEY_UP))
         {
-            dclear(C_BLACK);
-            dtext(8, 8, C_WHITE, "Running repeated benchmark...");
-            dtext(8, 28, C_WHITE, bench_name(BENCHMARKS[selected]));
-            dupdate();
-            run_and_store(selected, cfg);
-            while (keydown(KEY_F6) || keydown(KEY_F5) || keydown(KEY_EXE) || keydown(KEY_DEL))
-                clearevents();
+            if (g_cursor > 0) --g_cursor;
+            wait_for_key_release();
+        }
+        else if (keydown(KEY_DOWN))
+        {
+            if (g_cursor + 1 < TEST_COUNT) ++g_cursor;
+            wait_for_key_release();
+        }
+        else if (keydown(KEY_EXE) || keydown(KEY_F6))
+        {
+            g_selected[g_cursor] = !g_selected[g_cursor];
+            snprintf(g_status, sizeof(g_status), "%s: %s",
+                TEST_LABELS[g_cursor],
+                g_selected[g_cursor] ? "selected" : "deselected");
+            wait_for_key_release();
+        }
+        else if (keydown(KEY_F1))
+        {
+            select_battery(fxglmark2::BatteryId::QuickSmoke);
+            wait_for_key_release();
+        }
+        else if (keydown(KEY_F2))
+        {
+            select_battery(fxglmark2::BatteryId::Glmark2SupportedDefault);
+            wait_for_key_release();
+        }
+        else if (keydown(KEY_F3))
+        {
+            select_battery(fxglmark2::BatteryId::AllImplemented);
+            wait_for_key_release();
+        }
+        else if (keydown(KEY_F5))
+        {
+            run_selected_benchmarks();
+            wait_for_key_release();
         }
     }
 
