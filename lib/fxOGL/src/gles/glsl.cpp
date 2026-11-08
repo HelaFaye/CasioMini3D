@@ -873,7 +873,10 @@ private:
             fail("non-void function must contain a return statement");
             return;
         }
-        if (!failed_)
+        // Main returns implicitly at the end of its bytecode range. Do not
+        // append an opcode there: some exact-shape fragment fast paths depend
+        // on the original two-instruction shader form.
+        if (!failed_ && !is_main)
         {
             ShaderInstruction implicit_return = {};
             implicit_return.op = ShaderOp::Return;
@@ -3418,7 +3421,10 @@ bool execute_glsl(
         }
     }
 
-    return main_returned && call_depth == 0 && stack_size == 0;
+    const bool reached_main_end =
+        call_depth == 0 && pc == module.instruction_count;
+    return (main_returned || reached_main_end) &&
+           call_depth == 0 && stack_size == 0;
 }
 
 } // namespace fxgl
