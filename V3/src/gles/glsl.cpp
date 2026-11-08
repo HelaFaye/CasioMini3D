@@ -1212,7 +1212,7 @@ private:
         {
             if (left == right &&
                 (left == ShaderType::Float || left == ShaderType::Int ||
-                 is_vector(left) || is_matrix(left)))
+                 is_vector(left) || is_int_vector(left) || is_matrix(left)))
                 return left;
             return ShaderType::Invalid;
         }
@@ -1233,11 +1233,13 @@ private:
                 return right;
             if (left == right &&
                 (left == ShaderType::Float || left == ShaderType::Int ||
-                 is_vector(left)))
+                 is_vector(left) || is_int_vector(left)))
                 return left;
-            if (left == ShaderType::Float && is_vector(right))
+            if (left == ShaderType::Float &&
+                (is_vector(right) || is_int_vector(right)))
                 return right;
-            if (right == ShaderType::Float && is_vector(left))
+            if (right == ShaderType::Float &&
+                (is_vector(left) || is_int_vector(left)))
                 return left;
             return ShaderType::Invalid;
         }
@@ -1247,7 +1249,7 @@ private:
             if (left == right &&
                 (left == ShaderType::Float || is_vector(left) || is_matrix(left)))
                 return left;
-            if ((is_vector(left) || is_matrix(left)) &&
+            if ((is_vector(left) || is_int_vector(left) || is_matrix(left)) &&
                 right == ShaderType::Float)
                 return left;
             if (left == ShaderType::Float && is_matrix(right))
@@ -1876,6 +1878,15 @@ static ShaderValue zero_value(ShaderType type)
     return value;
 }
 
+static float convert_component(ShaderType destination, float value)
+{
+    if (destination == ShaderType::Int || is_int_vector(destination))
+        return static_cast<float>(static_cast<int32_t>(value));
+    if (destination == ShaderType::Bool || is_bool_vector(destination))
+        return value != 0.0f ? 1.0f : 0.0f;
+    return value;
+}
+
 static bool pop_value(
     ShaderValue stack[GLSL_MAX_STACK],
     size_t& stack_size,
@@ -2166,7 +2177,7 @@ bool execute_glsl(
                     else
                     {
                         for (size_t i = 0; i < wanted; ++i)
-                            result.data[i] = scalar;
+                            result.data[i] = convert_component(instruction.type, scalar);
                     }
                 }
                 else if (destination_dimension != 0 && source_dimension != 0)
@@ -2194,11 +2205,19 @@ bool execute_glsl(
                         if (offset + count > wanted)
                             return false;
                         for (size_t i = 0; i < count; ++i)
-                            result.data[offset++] = args[arg].data[i];
+                            result.data[offset] =
+                                convert_component(instruction.type, args[arg].data[i]);
+                            ++offset;
                     }
                     if (offset != wanted)
                         return false;
                 }
+                if (instruction.type == ShaderType::Int ||
+                    is_int_vector(instruction.type) ||
+                    instruction.type == ShaderType::Bool ||
+                    is_bool_vector(instruction.type))
+                    for (size_t i = 0; i < component_count(result.type); ++i)
+                        result.data[i] = convert_component(instruction.type, result.data[i]);
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -2243,7 +2262,7 @@ bool execute_glsl(
                 {
                     if (a.type == b.type &&
                         (a.type == ShaderType::Float || a.type == ShaderType::Int ||
-                         is_vector(a.type) || is_matrix(a.type)))
+                         is_vector(a.type) || is_int_vector(a.type) || is_matrix(a.type)))
                         expected_type = a.type;
                 }
                 else if (instruction.op == ShaderOp::Multiply)
@@ -2260,13 +2279,15 @@ bool execute_glsl(
                         expected_type = a.type;
                     else if (b_dimension != 0 && a.type == ShaderType::Float)
                         expected_type = b.type;
-                    else if (a.type == ShaderType::Float && is_vector(b.type))
+                    else if (a.type == ShaderType::Float &&
+                             (is_vector(b.type) || is_int_vector(b.type)))
                         expected_type = b.type;
-                    else if (is_vector(a.type) && b.type == ShaderType::Float)
+                    else if ((is_vector(a.type) || is_int_vector(a.type)) &&
+                             b.type == ShaderType::Float)
                         expected_type = a.type;
                     else if (a.type == b.type &&
                              (a.type == ShaderType::Float || a.type == ShaderType::Int ||
-                               is_vector(a.type)))
+                               is_vector(a.type) || is_int_vector(a.type)))
                         expected_type = a.type;
                 }
                 else if (instruction.op == ShaderOp::Divide)
@@ -2275,12 +2296,14 @@ bool execute_glsl(
                         expected_type = a.type;
                     else if (a.type == ShaderType::Float && is_matrix(b.type))
                         expected_type = b.type;
-                    else if ((is_vector(a.type) || is_matrix(a.type)) &&
+                    else if ((is_vector(a.type) || is_int_vector(a.type) ||
+                              is_matrix(a.type)) &&
                              b.type == ShaderType::Float)
                         expected_type = a.type;
                     else if (a.type == b.type &&
                              (a.type == ShaderType::Float || a.type == ShaderType::Int ||
-                              is_vector(a.type) || is_matrix(a.type)))
+                              is_vector(a.type) || is_int_vector(a.type) ||
+                              is_matrix(a.type)))
                         expected_type = a.type;
                 }
 
@@ -2289,9 +2312,13 @@ bool execute_glsl(
                     return false;
 
                 apply_binary(instruction.op, a, b, instruction.type, result);
-                if (instruction.type == ShaderType::Int)
-                    result.data[0] = static_cast<float>(
-                        static_cast<int32_t>(result.data[0]));
+                if (instruction.type == ShaderType::Int ||
+                    is_int_vector(instruction.type) ||
+                    instruction.type == ShaderType::Bool ||
+                    is_bool_vector(instruction.type))
+                    for (size_t i = 0; i < component_count(result.type); ++i)
+                        result.data[i] = convert_component(instruction.type,
+                            result.data[i]);
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -2690,6 +2717,66 @@ bool execute_glsl(
                                     (x - edge0) / denominator));
                             result.data[i] = t * t * (3.0f - 2.0f * t);
                         }
+                        break;
+
+                    case BuiltinFunction::LessThan:
+                    case BuiltinFunction::LessThanEqual:
+                    case BuiltinFunction::GreaterThan:
+                    case BuiltinFunction::GreaterThanEqual:
+                    case BuiltinFunction::EqualVector:
+                    case BuiltinFunction::NotEqualVector:
+                        if (instruction.argument_count != 2 ||
+                            args[0].type != args[1].type ||
+                            !is_any_vector(args[0].type) ||
+                            vector_dimension(args[0].type) !=
+                                vector_dimension(instruction.type) ||
+                            !is_bool_vector(instruction.type))
+                            return false;
+                        for (size_t i = 0; i < vector_dimension(args[0].type); ++i)
+                        {
+                            const float left = args[0].data[i];
+                            const float right = args[1].data[i];
+                            bool comparison = false;
+                            switch (function)
+                            {
+                                case BuiltinFunction::LessThan: comparison = left < right; break;
+                                case BuiltinFunction::LessThanEqual: comparison = left <= right; break;
+                                case BuiltinFunction::GreaterThan: comparison = left > right; break;
+                                case BuiltinFunction::GreaterThanEqual: comparison = left >= right; break;
+                                case BuiltinFunction::EqualVector: comparison = left == right; break;
+                                case BuiltinFunction::NotEqualVector: comparison = left != right; break;
+                                default: return false;
+                            }
+                            result.data[i] = comparison ? 1.0f : 0.0f;
+                        }
+                        break;
+
+                    case BuiltinFunction::Any:
+                    case BuiltinFunction::All:
+                        if (instruction.argument_count != 1 ||
+                            !is_bool_vector(args[0].type) ||
+                            instruction.type != ShaderType::Bool)
+                            return false;
+                        {
+                            bool value = function == BuiltinFunction::All;
+                            for (size_t i = 0; i < vector_dimension(args[0].type); ++i)
+                            {
+                                if (function == BuiltinFunction::Any)
+                                    value = value || args[0].data[i] != 0.0f;
+                                else
+                                    value = value && args[0].data[i] != 0.0f;
+                            }
+                            result.data[0] = value ? 1.0f : 0.0f;
+                        }
+                        break;
+
+                    case BuiltinFunction::NotVector:
+                        if (instruction.argument_count != 1 ||
+                            !is_bool_vector(args[0].type) ||
+                            args[0].type != instruction.type)
+                            return false;
+                        for (size_t i = 0; i < vector_dimension(args[0].type); ++i)
+                            result.data[i] = args[0].data[i] == 0.0f ? 1.0f : 0.0f;
                         break;
 
                     case BuiltinFunction::MatrixCompMult:
