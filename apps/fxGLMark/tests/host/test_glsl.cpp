@@ -790,6 +790,79 @@ static void test_user_function_out_and_inout_parameters()
     assert(near(nested_runtime.fragment_color.data[1], 10.0f));
 }
 
+static void test_user_function_stage_output_copyout()
+{
+    static const char vertex_source[] =
+        "attribute vec4 a_position;\\n"
+        "attribute vec2 a_uv;\\n"
+        "varying vec2 v_uv;\\n"
+        "void place(out vec4 position, in vec4 source);\\n"
+        "void publish(in vec2 source, out vec2 target);\\n"
+        "void write_x(out float component);\\n"
+        "void main() {\\n"
+        "  place(gl_Position, a_position);\\n"
+        "  publish(a_uv, v_uv.yx);\\n"
+        "  write_x(gl_Position.x);\\n"
+        "}\\n"
+        "void place(out vec4 position, in vec4 source) { position = source * 2.0; }\\n"
+        "void publish(in vec2 source, out vec2 target) { target = source * 2.0; }\\n"
+        "void write_x(out float component) { component = 7.0; }\\n";
+
+    ShaderModule vertex_module = {};
+    const bool vertex_compiled =
+        fxgl::compile_glsl(ShaderStage::Vertex, vertex_source, vertex_module);
+    if (!vertex_compiled)
+        std::fprintf(stderr, "vertex output copy-out diagnostic: %s\\n",
+                     vertex_module.info_log);
+    assert(vertex_compiled);
+
+    ShaderRuntime vertex_runtime = {};
+    vertex_runtime.attributes[0] = value(ShaderType::Vec4, 1.0f, 2.0f, 3.0f, 1.0f);
+    vertex_runtime.attributes[1] = value(ShaderType::Vec2, 0.25f, 0.75f);
+    assert(fxgl::execute_glsl(vertex_module, vertex_runtime));
+    assert(near(vertex_runtime.position.data[0], 7.0f));
+    assert(near(vertex_runtime.position.data[1], 4.0f));
+    assert(near(vertex_runtime.position.data[2], 6.0f));
+    assert(near(vertex_runtime.position.data[3], 2.0f));
+    assert(near(vertex_runtime.varyings[0].data[0], 1.5f));
+    assert(near(vertex_runtime.varyings[0].data[1], 0.5f));
+
+    static const char fragment_source[] =
+        "void produce(out vec4 color);\\n"
+        "void brighten(inout vec4 color);\\n"
+        "void main() { produce(gl_FragColor); brighten(gl_FragColor); }\\n"
+        "void produce(out vec4 color) { color = vec4(0.1, 0.2, 0.3, 1.0); }\\n"
+        "void brighten(inout vec4 color) { color = color + vec4(0.1, 0.1, 0.1, 0.0); }\\n";
+
+    ShaderModule fragment_module = {};
+    const bool fragment_compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, fragment_source, fragment_module);
+    if (!fragment_compiled)
+        std::fprintf(stderr, "fragment output copy-out diagnostic: %s\\n",
+                     fragment_module.info_log);
+    assert(fragment_compiled);
+    ShaderRuntime fragment_runtime = {};
+    assert(fxgl::execute_glsl(fragment_module, fragment_runtime));
+    assert(near(fragment_runtime.fragment_color.data[0], 0.2f));
+    assert(near(fragment_runtime.fragment_color.data[1], 0.3f));
+    assert(near(fragment_runtime.fragment_color.data[2], 0.4f));
+    assert(near(fragment_runtime.fragment_color.data[3], 1.0f));
+
+    static const char fragment_readback_source[] =
+        "void shade(inout vec4 color);\\n"
+        "void main() { gl_FragColor = vec4(0.25, 0.5, 0.75, 1.0); shade(gl_FragColor); }\\n"
+        "void shade(inout vec4 color) { color = color * 2.0; }\\n";
+    ShaderModule readback_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, fragment_readback_source, readback_module));
+    ShaderRuntime readback_runtime = {};
+    assert(fxgl::execute_glsl(readback_module, readback_runtime));
+    assert(near(readback_runtime.fragment_color.data[0], 0.5f));
+    assert(near(readback_runtime.fragment_color.data[1], 1.0f));
+    assert(near(readback_runtime.fragment_color.data[2], 1.5f));
+    assert(near(readback_runtime.fragment_color.data[3], 2.0f));
+}
+
 static void test_user_function_out_inout_rejections()
 {
     const char *invalid_sources[] = {
@@ -801,7 +874,11 @@ static void test_user_function_out_inout_rejections()
         "void store(out vec2 first, out vec2 second); void main() { vec4 color = vec4(1.0); store(color.xy, color.yz); gl_FragColor = color; } void store(out vec2 first, out vec2 second) { first = vec2(0.0); second = vec2(0.0); }",
         "void store(out float value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(inout float value) { value = 2.0; }",
         "void select_value(in float value); void select_value(out float value); void main() { gl_FragColor = vec4(1.0); }",
-        "void store(out vec2 value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(1.0); }"
+        "void store(out vec2 value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(1.0); }",
+        "uniform vec4 u_color; void store(out vec4 value); void main() { store(u_color); gl_FragColor = vec4(1.0); } void store(out vec4 value) { value = vec4(0.0); }",
+        "attribute vec4 a_position; void store(out vec4 value); void main() { store(a_position); gl_Position = vec4(0.0); } void store(out vec4 value) { value = vec4(1.0); }",
+        "varying vec2 v_uv; void store(out vec2 value); void main() { store(v_uv); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(0.0); }",
+        "void store(out vec4 value); void main() { store(gl_Position); } void store(out vec4 value) { value = vec4(1.0); }"
     };
 
     for (const char *source : invalid_sources)
@@ -1079,6 +1156,7 @@ int main()
     test_user_function_overloads_use_exact_argument_types();
     test_user_function_overload_errors();
     test_user_function_out_and_inout_parameters();
+    test_user_function_stage_output_copyout();
     test_user_function_out_inout_rejections();
     test_user_function_call_depth_is_bounded();
     test_non_terminating_shader_hits_execution_budget();
