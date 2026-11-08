@@ -2936,22 +2936,38 @@ bool execute_glsl(
             }
 
             case ShaderOp::Texture2D:
-                if (!pop_value(stack, stack_size, b) ||
-                    !pop_value(stack, stack_size, a) ||
-                    a.type != ShaderType::Sampler2D ||
-                    b.type != ShaderType::Vec2 ||
-                    !texture_sample)
+            {
+                // The two operands are the top stack entries and the result
+                // replaces both of them. Reuse the sampler slot for the vec4
+                // instead of copying two operands out and a result back in.
+                if (stack_size < 2 || !texture_sample)
                     return false;
-                set_zero_value(result, ShaderType::Vec4);
-                if (!texture_sample(static_cast<int>(a.data[0]),
-                                    b.data[0], b.data[1],
-                                    b.ddx[0], b.ddx[1],
-                                    b.ddy[0], b.ddy[1],
-                                    result.data, user_data))
+                ShaderValue& sampler_value = stack[stack_size - 2];
+                const ShaderValue& coordinate = stack[stack_size - 1];
+                if (sampler_value.type != ShaderType::Sampler2D ||
+                    coordinate.type != ShaderType::Vec2)
                     return false;
-                if (!push_value(stack, stack_size, result))
+
+                const int texture_unit =
+                    static_cast<int>(sampler_value.data[0]);
+                sampler_value.type = ShaderType::Vec4;
+                if (!texture_sample(texture_unit,
+                                    coordinate.data[0], coordinate.data[1],
+                                    coordinate.ddx[0], coordinate.ddx[1],
+                                    coordinate.ddy[0], coordinate.ddy[1],
+                                    sampler_value.data, user_data))
                     return false;
+
+                // A texture lookup result has no propagated derivatives in
+                // this VM, matching the previous zero-initialized result.
+                for (size_t i = 0; i < 4; ++i)
+                {
+                    sampler_value.ddx[i] = 0.0f;
+                    sampler_value.ddy[i] = 0.0f;
+                }
+                --stack_size;
                 break;
+            }
         }
     }
 
