@@ -11,95 +11,81 @@ set(FXOGL_SRC "${FXOGL_ROOT}/src")
 set(FXOGL_INCLUDE "${FXOGL_ROOT}/include")
 set(HOST_STUBS "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
 
+# Build the exact standalone library target that fxGLMark links on-device.
+add_subdirectory(${FXOGL_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/fxOGL)
+
 add_executable(triangle_tests
     test_triangle.cpp
     ${APP_SRC}/shapes/triangle.cpp
-    ${FXOGL_SRC}/gfx/texture.cpp
 )
 target_compile_features(triangle_tests PRIVATE cxx_std_20)
 target_compile_options(triangle_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(triangle_tests PRIVATE
     ${HOST_STUBS} ${APP_SRC} ${FXOGL_INCLUDE} ${FXOGL_SRC}
 )
+target_link_libraries(triangle_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME triangle_rasterizer COMMAND triangle_tests)
 
 add_executable(benchmark_tests
     test_bench.cpp
     ${APP_SRC}/bench.cpp
     ${APP_SRC}/shapes/triangle.cpp
-    ${FXOGL_SRC}/gfx/texture.cpp
 )
 target_compile_features(benchmark_tests PRIVATE cxx_std_20)
 target_compile_options(benchmark_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(benchmark_tests PRIVATE
     ${HOST_STUBS} ${APP_SRC} ${FXOGL_INCLUDE} ${FXOGL_SRC}
 )
+target_link_libraries(benchmark_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME benchmark_registry COMMAND benchmark_tests)
 
-add_executable(texture_tests
-    test_texture.cpp
-    ${FXOGL_SRC}/gfx/texture.cpp
-)
+add_executable(texture_tests test_texture.cpp)
 target_compile_features(texture_tests PRIVATE cxx_std_20)
 target_compile_options(texture_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(texture_tests PRIVATE ${FXOGL_INCLUDE} ${FXOGL_SRC})
+target_link_libraries(texture_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME texture_sampler COMMAND texture_tests)
 
-set(FXOGL_SOURCES
-    ${FXOGL_SRC}/gles/gles_context.cpp
-    ${FXOGL_SRC}/gles/math.cpp
-    ${FXOGL_SRC}/gles/pipeline.cpp
-    ${FXOGL_SRC}/gles/program.cpp
-    ${FXOGL_SRC}/gles/glsl.cpp
-    ${FXOGL_SRC}/gfx/texture.cpp
-)
-
-add_executable(gles_state_tests test_gles_state.cpp ${FXOGL_SOURCES})
+add_executable(gles_state_tests test_gles_state.cpp)
 target_compile_features(gles_state_tests PRIVATE cxx_std_20)
 target_compile_options(gles_state_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(gles_state_tests PRIVATE
     ${HOST_STUBS} ${FXOGL_INCLUDE} ${FXOGL_SRC}
 )
+target_link_libraries(gles_state_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME gles_context_state COMMAND gles_state_tests)
 
-add_executable(gles_math_tests
-    test_gles_math.cpp
-    ${FXOGL_SRC}/gles/math.cpp
-)
+add_executable(gles_math_tests test_gles_math.cpp)
 target_compile_features(gles_math_tests PRIVATE cxx_std_20)
 target_compile_options(gles_math_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(gles_math_tests PRIVATE ${FXOGL_INCLUDE} ${FXOGL_SRC})
+target_link_libraries(gles_math_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME gles_math_pipeline COMMAND gles_math_tests)
 
-add_executable(gles_pipeline_tests
-    test_gles_pipeline.cpp
-    ${FXOGL_SRC}/gles/math.cpp
-    ${FXOGL_SRC}/gles/pipeline.cpp
-)
+add_executable(gles_pipeline_tests test_gles_pipeline.cpp)
 target_compile_features(gles_pipeline_tests PRIVATE cxx_std_20)
 target_compile_options(gles_pipeline_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(gles_pipeline_tests PRIVATE ${FXOGL_INCLUDE} ${FXOGL_SRC})
+target_link_libraries(gles_pipeline_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME gles_software_pipeline COMMAND gles_pipeline_tests)
 
-add_executable(glsl_tests
-    test_glsl.cpp
-    ${FXOGL_SRC}/gles/glsl.cpp
-)
+add_executable(glsl_tests test_glsl.cpp)
 target_compile_features(glsl_tests PRIVATE cxx_std_20)
 target_compile_options(glsl_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(glsl_tests PRIVATE ${FXOGL_INCLUDE} ${FXOGL_SRC})
+target_link_libraries(glsl_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME glsl_subset_vm COMMAND glsl_tests)
 
 add_executable(glmark2_tests
     test_glmark2.cpp
     ${APP_SRC}/glmark2/glmark2.cpp
-    ${FXOGL_SOURCES}
 )
 target_compile_features(glmark2_tests PRIVATE cxx_std_20)
 target_compile_options(glmark2_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(glmark2_tests PRIVATE
-    ${HOST_STUBS} ${FXOGL_INCLUDE} ${FXOGL_SRC}
+    ${HOST_STUBS} ${APP_SRC} ${FXOGL_INCLUDE} ${FXOGL_SRC}
 )
+target_link_libraries(glmark2_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME fxGLMark_port COMMAND glmark2_tests)
 
 # Compile the real calculator entry point against small Gint/fxlibc stubs.
