@@ -263,6 +263,97 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
         }
     }
 
+    // Match the repeated-UV range used by the glmark2 sphere (0..6),
+    // exercising both power-of-two and non-power-of-two address periods.
+    {
+        constexpr uint16_t width = 32;
+        constexpr uint16_t height = 32;
+        constexpr size_t stride = 34;
+        static uint16_t repeat_pixels[height * stride] = {};
+        for (uint16_t y = 0; y < height; ++y)
+        {
+            for (uint16_t x = 0; x < stride; ++x)
+            {
+                repeat_pixels[static_cast<size_t>(y) * stride + x] =
+                    static_cast<uint16_t>(
+                        (static_cast<uint32_t>(x) * 47u +
+                         static_cast<uint32_t>(y) * 113u) ^
+                        (static_cast<uint32_t>(x) << 9));
+            }
+        }
+
+        const Texture2DView repeat_texture = {
+            repeat_pixels, width, height, stride
+        };
+        const TextureSampler repeat_modes[] = {
+            nearest_repeat(),
+            {TextureFilter::Nearest, TextureAddressMode::MirroredRepeat,
+             TextureAddressMode::MirroredRepeat},
+            {TextureFilter::Nearest, TextureAddressMode::Clamp,
+             TextureAddressMode::Repeat}
+        };
+
+        const float fixed_other_axis[] = {
+            0.371f, 1.137f, 2.619f, 5.873f, -0.219f
+        };
+        for (const TextureSampler& repeat_sampler : repeat_modes)
+        {
+            for (int i = -6 * static_cast<int>(width);
+                 i <= 6 * static_cast<int>(width); ++i)
+            {
+                const float boundary =
+                    static_cast<float>(i) / static_cast<float>(width);
+                const float candidates[4] = {
+                    std::nextafter(boundary,
+                        -std::numeric_limits<float>::infinity()),
+                    boundary,
+                    std::nextafter(boundary,
+                        std::numeric_limits<float>::infinity()),
+                    (static_cast<float>(i) + 0.371f) /
+                        static_cast<float>(width)
+                };
+
+                for (float u : candidates)
+                {
+                    for (float v : fixed_other_axis)
+                    {
+                        const int64_t fixed_u = static_cast<int64_t>(
+                            std::floor(static_cast<double>(u) *
+                                width * 65536.0));
+                        const int64_t fixed_v = static_cast<int64_t>(
+                            std::floor(static_cast<double>(v) *
+                                height * 65536.0));
+                        const uint16_t expected = gfx::sample_texture_validated(
+                            repeat_texture, fixed_u, fixed_v,
+                            repeat_sampler, 0.0f);
+                        uint16_t actual = 0;
+                        assert(gfx::sample_texture_nearest_validated(
+                            repeat_texture, u, v, repeat_sampler, actual));
+                        assert(actual == expected);
+                    }
+
+                    for (float v : candidates)
+                    {
+                        const float u_fixed = 0.219f;
+                        const int64_t fixed_u = static_cast<int64_t>(
+                            std::floor(static_cast<double>(u_fixed) *
+                                width * 65536.0));
+                        const int64_t fixed_v = static_cast<int64_t>(
+                            std::floor(static_cast<double>(v) *
+                                height * 65536.0));
+                        const uint16_t expected = gfx::sample_texture_validated(
+                            repeat_texture, fixed_u, fixed_v,
+                            repeat_sampler, 0.0f);
+                        uint16_t actual = 0;
+                        assert(gfx::sample_texture_nearest_validated(
+                            repeat_texture, u_fixed, v, repeat_sampler, actual));
+                        assert(actual == expected);
+                    }
+                }
+            }
+        }
+    }
+
     uint16_t unchanged = 0x1234;
     assert(!gfx::sample_texture_nearest_validated(
         texture, 0.5f, 0.5f,

@@ -65,6 +65,83 @@ static uint16_t address_index(
     return static_cast<uint16_t>(wrapped);
 }
 
+/* Fast normalized-coordinate addressing for the bounded range commonly
+   produced by GLES texture coordinates (including repeated UVs). The
+   32-bit path avoids the signed 64-bit modulo used by address_index().
+   Return false for an ambiguous float-to-texel boundary so the caller can
+   preserve the exact double-precision behavior. */
+static bool fast_address_index(
+    float coordinate,
+    uint16_t size,
+    TextureAddressMode mode,
+    uint16_t& result)
+{
+    const float scaled = coordinate * static_cast<float>(size);
+    if (!std::isfinite(scaled) || scaled <= -8388608.0f ||
+        scaled >= 8388608.0f)
+        return false;
+
+    int32_t index = static_cast<int32_t>(scaled);
+    if (static_cast<float>(index) > scaled)
+        --index;
+
+    // If float multiplication rounded onto an integer boundary, verify that
+    // the exact product of the input float and extent is that same integer.
+    if (scaled == static_cast<float>(index))
+    {
+        const double exact = static_cast<double>(coordinate) * size;
+        if (exact != static_cast<double>(index))
+            return false;
+    }
+
+    if (mode == TextureAddressMode::Clamp)
+    {
+        if (index < 0)
+            result = 0;
+        else if (index >= static_cast<int32_t>(size))
+            result = static_cast<uint16_t>(size - 1);
+        else
+            result = static_cast<uint16_t>(index);
+        return true;
+    }
+
+    const bool power_of_two = (size & static_cast<uint16_t>(size - 1)) == 0;
+    if (mode == TextureAddressMode::Repeat)
+    {
+        if (power_of_two)
+        {
+            result = static_cast<uint16_t>(
+                static_cast<uint32_t>(index) &
+                static_cast<uint32_t>(size - 1));
+            return true;
+        }
+
+        int32_t wrapped = index % static_cast<int32_t>(size);
+        if (wrapped < 0)
+            wrapped += size;
+        result = static_cast<uint16_t>(wrapped);
+        return true;
+    }
+
+    const int32_t period = static_cast<int32_t>(size) * 2;
+    int32_t wrapped = 0;
+    if (power_of_two)
+        wrapped = static_cast<int32_t>(
+            static_cast<uint32_t>(index) &
+            static_cast<uint32_t>(period - 1));
+    else
+    {
+        wrapped = index % period;
+        if (wrapped < 0)
+            wrapped += period;
+    }
+
+    if (wrapped >= static_cast<int32_t>(size))
+        wrapped = period - wrapped - 1;
+    result = static_cast<uint16_t>(wrapped);
+    return true;
+}
+
 static uint16_t texel(
     const Texture2DView& texture,
     int64_t x,
@@ -325,51 +402,21 @@ bool sample_texture_nearest_validated(
         !std::isfinite(u) || !std::isfinite(v))
         return false;
 
-    // The dominant GLES case uses normalized coordinates inside [0, 1).
-    // Float multiplication and a 16-bit conversion are enough unless the
-    // rounded product lands exactly on an integer texel boundary. At such a
-    // boundary, recompute only that axis in double precision: this preserves
-    // the exact floor decision for values immediately above/below the edge.
-    if (u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f)
+    // Most GLES UVs are bounded even when wrapping repeatedly (for example,
+    // glmark2 scales its sphere UVs into [0, 6)). Resolve those coordinates
+    // with 32-bit arithmetic and power-of-two masks where possible. Exact
+    // integer-boundary ambiguities fall through to the precise 64-bit path.
+    if (u > -64.0f && u < 64.0f && v > -64.0f && v < 64.0f)
     {
-        const float scaled_u = u * static_cast<float>(texture.width);
-        const float scaled_v = v * static_cast<float>(texture.height);
-
         uint16_t x = 0;
         uint16_t y = 0;
-        if (scaled_u >= 0.0f &&
-            scaled_u < static_cast<float>(texture.width))
+        if (fast_address_index(u, texture.width, sampler.address_u, x) &&
+            fast_address_index(v, texture.height, sampler.address_v, y))
         {
-            x = static_cast<uint16_t>(scaled_u);
-            if (scaled_u == static_cast<float>(x))
-                x = static_cast<uint16_t>(
-                    static_cast<double>(u) * texture.width);
+            pixel = texture.pixels[
+                static_cast<size_t>(y) * texture.stride + x];
+            return true;
         }
-        else
-        {
-            // A value extremely close to one can round to the extent in
-            // float. The exact product remains below the extent.
-            x = static_cast<uint16_t>(
-                static_cast<double>(u) * texture.width);
-        }
-
-        if (scaled_v >= 0.0f &&
-            scaled_v < static_cast<float>(texture.height))
-        {
-            y = static_cast<uint16_t>(scaled_v);
-            if (scaled_v == static_cast<float>(y))
-                y = static_cast<uint16_t>(
-                    static_cast<double>(v) * texture.height);
-        }
-        else
-        {
-            y = static_cast<uint16_t>(
-                static_cast<double>(v) * texture.height);
-        }
-
-        pixel = texture.pixels[
-            static_cast<size_t>(y) * texture.stride + x];
-        return true;
     }
 
     // Preserve full-range behavior for negative and out-of-domain values,
