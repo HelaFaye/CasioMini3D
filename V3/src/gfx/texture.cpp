@@ -233,16 +233,36 @@ uint16_t sample_texture(
         sampler.min_filter == TextureMinFilter::NearestMipmapLinear ||
         sampler.min_filter == TextureMinFilter::LinearMipmapLinear;
 
-    if (!uses_mipmaps || texture.mip_level_count == 0)
+    if (!uses_mipmaps)
         return sample_level(level_view(texture, 0), u_16_16, v_16_16,
             linear_texel ? TextureFilter::Bilinear : TextureFilter::Nearest,
             sampler.address_u, sampler.address_v);
 
-    const float maximum_lod = static_cast<float>(texture.mip_level_count);
+    size_t required_levels = 0;
+    uint16_t required_width = texture.width;
+    uint16_t required_height = texture.height;
+    while (required_width > 1 || required_height > 1)
+    {
+        required_width = required_width > 1
+            ? static_cast<uint16_t>(required_width / 2) : 1;
+        required_height = required_height > 1
+            ? static_cast<uint16_t>(required_height / 2) : 1;
+        ++required_levels;
+    }
+    if (texture.mip_level_count != required_levels)
+        return 0; /* GLES texture is incomplete for its mipmapped min filter. */
+
+    const float maximum_lod = static_cast<float>(required_levels);
     const float clamped_lod = std::max(0.0f, std::min(lod, maximum_lod));
     const size_t lower_level = static_cast<size_t>(std::floor(clamped_lod));
+    const bool mip_nearest =
+        sampler.min_filter == TextureMinFilter::NearestMipmapNearest ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapNearest;
     const size_t selected_level = std::min(
-        lower_level, static_cast<size_t>(texture.mip_level_count));
+        mip_nearest
+            ? static_cast<size_t>(std::floor(clamped_lod + 0.5f))
+            : lower_level,
+        required_levels);
     const TextureFilter filter = linear_texel
         ? TextureFilter::Bilinear : TextureFilter::Nearest;
 
