@@ -21,25 +21,47 @@ This is an incremental compatibility implementation, not full OpenGL ES 2.0
 support and not a Khronos-conformant implementation. See
 [`docs/fxOGL-roadmap.md`](../../docs/fxOGL-roadmap.md).
 
-## Integration
+## Integration from a source checkout
 
-The library is built as a separate CMake target. In an fxSDK project:
+In an fxSDK project, fxOGL can be included directly:
 
 ```cmake
 add_subdirectory(path/to/fxOGL lib-fxOGL)
 target_link_libraries(your_addin PRIVATE fxOGL::fxOGL)
 ```
 
-Public API headers are under `include/`. Some current application and
-benchmark code still includes implementation headers from `src/`; those are
-internal interfaces and are not yet a stable public API.
+## Install and consume as a CMake package
+
+fxOGL exports the `fxOGL::fxOGL` target and installs its public headers and
+package metadata. A host build can stage an installation with:
+
+```sh
+cmake -S lib/fxOGL -B build/fxOGL -DCMAKE_INSTALL_PREFIX="$PWD/stage"
+cmake --build build/fxOGL
+cmake --install build/fxOGL
+```
+
+A separate CMake project can then consume it:
+
+```cmake
+find_package(fxOGL 0.1 CONFIG REQUIRED)
+target_link_libraries(your_application PRIVATE fxOGL::fxOGL)
+```
+
+Set `CMAKE_PREFIX_PATH` to the staging prefix when configuring that project.
+The package exposes only headers under `include/`; internal headers under
+`src/` are not part of the installed interface and may change without notice.
+
+## Platform boundary
 
 The library core is kept separate from the Gint application/presentation layer.
-The calling application supplies its render surface and any platform binding.
+The calling application supplies caller-owned render surfaces through
+`<fxgl/platform.h>` and performs its own platform presentation. fxOGL itself
+does not call Gint display functions.
 
 ## Validation
 
-The library is covered by host regression tests in
-`apps/fxGLMark/tests/host` and is built for the fx-CG50 through the
-`apps/fxGLMark` fxSDK project. Host tests do not replace SH cross-builds or
-physical calculator testing.
+Host regression tests in `apps/fxGLMark/tests/host` build the standalone
+library target and verify that an installed package can be consumed by an
+independent CMake project. Host tests do not replace an fxSDK/SH cross-build
+or physical calculator testing.
