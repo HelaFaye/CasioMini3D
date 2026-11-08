@@ -186,7 +186,7 @@ static void draw_menu()
     dtext(8, 5, C_WHITE, "fxGLMark2 | fx-CG50 graphics benchmark");
     dtext(8, 19, C_WHITE, "STANDARD BATTERIES");
     dtext(8, 32, C_WHITE, "F1 Quick Smoke (2)   F2 glmark2 Supported Default (5)");
-    dtext(8, 44, C_WHITE, "F3 All Implemented (6)");
+    dtext(8, 44, C_WHITE, "F3 All Implemented (6)   F4 Pending");
     dtext(8, 61, C_WHITE, "SELECT TESTS  [EXE/F6 toggle]  [UP/DOWN move]");
 
     for (size_t i = 0; i < TEST_COUNT; ++i)
@@ -329,6 +329,29 @@ static void run_selected_benchmarks()
              static_cast<unsigned long>(completed));
 }
 
+static void show_pending_scenes()
+{
+    dclear(C_BLACK);
+    dtext(8, 8, C_WHITE, "PENDING glmark2 SCENE FAMILIES");
+    dtext(8, 30, C_WHITE, "buffer       - dynamic/static update and map/subdata");
+    dtext(8, 46, C_WHITE, "bump         - normal and height-map shading");
+    dtext(8, 62, C_WHITE, "effect2d     - convolution and post-processing");
+    dtext(8, 78, C_WHITE, "pulsar       - animated textured quad workloads");
+    dtext(8, 94, C_WHITE, "desktop      - multi-window blur and shadows");
+    dtext(8, 110, C_WHITE, "ideas        - animated shader effects");
+    dtext(8, 126, C_WHITE, "jellyfish    - animated multi-object geometry");
+    dtext(8, 142, C_WHITE, "terrain      - height-field rendering");
+    dtext(8, 158, C_WHITE, "shadow       - shadow-map rendering");
+    dtext(8, 174, C_WHITE, "refract      - environment/refraction");
+    dtext(8, 190, C_WHITE, "conditionals / function / loop - shader stress");
+    dtext(8, 214, C_WHITE, "Not selectable yet | EXE or MENU to return");
+    dupdate();
+    while (!keydown(KEY_EXE) && !keydown(KEY_MENU))
+        clearevents();
+    while (keydown(KEY_EXE) || keydown(KEY_MENU))
+        clearevents();
+}
+
 static void wait_for_key_release()
 {
     while (keydown(KEY_UP) || keydown(KEY_DOWN) ||
@@ -389,6 +412,11 @@ int main()
         else if (keydown(KEY_F3))
         {
             select_battery(fxglmark2::BatteryId::AllImplemented);
+            wait_for_key_release();
+        }
+        else if (keydown(KEY_F4))
+        {
+            show_pending_scenes();
             wait_for_key_release();
         }
         else if (keydown(KEY_F5))
