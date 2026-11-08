@@ -389,28 +389,46 @@ class Parser
 public:
     Parser(ShaderStage stage, const char *source, ShaderModule& module)
         : stage_(stage), lexer_(source), module_(module), current_(),
-          failed_(false), recursion_depth_(0), loop_stack_{}, jump_patches_{},
-          loop_depth_(0), jump_patch_count_(0)
+          failed_(false), recursion_depth_(0), active_function_(NO_ACTIVE_FUNCTION),
+          loop_stack_{}, jump_patches_{}, loop_depth_(0), jump_patch_count_(0)
     {
         advance();
     }
 
     bool parse()
     {
-        while (!failed_ && current_.kind != TokenKind::End &&
-               !is_identifier("void"))
+        module_.has_main = false;
+        module_.function_count = 0;
+        module_.local_count = 0;
+
+        while (!failed_ && current_.kind != TokenKind::End)
         {
             if (is_identifier("precision"))
                 parse_precision();
-            else
+            else if (is_identifier("attribute") ||
+                     is_identifier("uniform") ||
+                     is_identifier("varying"))
+            {
+                if (module_.has_main)
+                {
+                    fail("main must be the final function definition");
+                    break;
+                }
                 parse_global_declaration();
+            }
+            else
+            {
+                if (module_.has_main)
+                {
+                    fail("main must be the final function definition");
+                    break;
+                }
+                parse_function_definition();
+            }
         }
 
-        if (!failed_)
-            parse_main();
-
-        if (!failed_ && current_.kind != TokenKind::End)
-            fail("unexpected tokens after main function");
+        if (!failed_ && !module_.has_main)
+            fail("shader must define void main()");
         return !failed_;
     }
 
@@ -650,6 +668,16 @@ private:
             std::strcmp(name, "gl_FragColor") == 0)
             return {Storage::FragmentColor, ShaderType::Vec4, 0};
 
+        if (active_function_ < module_.function_count)
+        {
+            const ShaderFunction& function =
+                module_.functions[active_function_];
+            const ShaderVariable *local = find_variable(
+                function.locals, function.local_count, name);
+            if (local)
+                return {Storage::Local, local->type, local->index};
+        }
+
         const ShaderVariable *variable = find_variable(
             module_.attributes, module_.attribute_count, name);
         if (variable)
@@ -664,11 +692,6 @@ private:
             module_.varyings, module_.varying_count, name);
         if (variable)
             return {Storage::Varying, variable->type, variable->index};
-
-        variable = find_variable(
-            module_.locals, module_.local_count, name);
-        if (variable)
-            return {Storage::Local, variable->type, variable->index};
 
         return {Storage::Local, ShaderType::Invalid, 0};
     }
@@ -706,19 +729,218 @@ private:
         return emit(instruction);
     }
 
-    void parse_main()
+    int find_function(const char *name) const
     {
-        expect_identifier("void");
-        expect_identifier("main");
-        expect_punctuation('(');
-        expect_punctuation(')');
-        expect_punctuation('{');
+        for (size_t i = 0; i < module_.function_count; ++i)
+            if (std::strcmp(module_.functions[i].name, name) == 0)
+                return static_cast<int>(i);
+        return -1;
+    }
 
+    bool add_function_local(
+        ShaderFunction& function,
+        const char *name,
+        ShaderType type)
+    {
+        if (function.local_count >= GLSL_MAX_LOCALS)
+        {
+            fail("function local limit exceeded");
+            return false;
+        }
+        for (size_t i = 0; i < function.local_count; ++i)
+        {
+            if (std::strcmp(function.locals[i].name, name) == 0)
+            {
+                fail("duplicate function local or parameter");
+                return false;
+            }
+        }
+        ShaderVariable& local = function.locals[function.local_count];
+        std::snprintf(local.name, sizeof(local.name), "%s", name);
+        local.type = type;
+        local.index = static_cast<uint8_t>(function.local_count);
+        ++function.local_count;
+        return true;
+    }
+
+    void parse_function_definition()
+    {
+        ShaderType return_type = ShaderType::Invalid;
+        if (is_identifier("void"))
+            advance();
+        else
+            return_type = parse_type();
+        if (failed_)
+            return;
+
+        if (current_.kind != TokenKind::Identifier)
+        {
+            fail("expected function name");
+            return;
+        }
+        char name[GLSL_NAME_BYTES] = {};
+        std::snprintf(name, sizeof(name), "%s", current_.text);
+        advance();
+        expect_punctuation('(');
+
+        ShaderVariable parameters[GLSL_MAX_PARAMETERS] = {};
+        size_t parameter_count = 0;
+        if (!accept_punctuation(')'))
+        {
+            for (;;)
+            {
+                if (parameter_count >= GLSL_MAX_PARAMETERS)
+                {
+                    fail("function parameter limit exceeded");
+                    return;
+                }
+                const ShaderType parameter_type = parse_type();
+                if (failed_)
+                    return;
+                if (current_.kind != TokenKind::Identifier)
+                {
+                    fail("expected parameter name");
+                    return;
+                }
+                ShaderVariable& parameter = parameters[parameter_count];
+                std::snprintf(parameter.name, sizeof(parameter.name), "%s",
+                              current_.text);
+                parameter.type = parameter_type;
+                parameter.index = static_cast<uint8_t>(parameter_count);
+                advance();
+                if (accept_punctuation('['))
+                {
+                    fail("array parameters are not supported");
+                    return;
+                }
+                ++parameter_count;
+                if (accept_punctuation(')'))
+                    break;
+                if (!expect_punctuation(','))
+                    return;
+            }
+        }
+
+        const bool is_main = std::strcmp(name, "main") == 0;
+        if (is_main &&
+            (return_type != ShaderType::Invalid || parameter_count != 0))
+        {
+            fail("main must have signature void main()");
+            return;
+        }
+        if (find_function(name) >= 0)
+        {
+            fail("function redefinitions and overloads are unsupported");
+            return;
+        }
+        if (module_.function_count >= GLSL_MAX_FUNCTIONS)
+        {
+            fail("function count limit exceeded");
+            return;
+        }
+        if (!is_punctuation('{'))
+        {
+            fail("function prototypes are not supported; define functions before use");
+            return;
+        }
+
+        const size_t function_index = module_.function_count++;
+        ShaderFunction& function = module_.functions[function_index];
+        std::snprintf(function.name, sizeof(function.name), "%s", name);
+        function.return_type = return_type;
+        function.parameter_count = parameter_count;
+        function.entry_pc = module_.instruction_count;
+        function.defined = true;
+
+        for (size_t i = 0; i < parameter_count; ++i)
+        {
+            function.parameters[i] = parameters[i];
+            if (!add_function_local(
+                    function, parameters[i].name, parameters[i].type))
+                return;
+        }
+
+        active_function_ = function_index;
+        advance(); /* opening brace */
         while (!failed_ && !is_punctuation('}') &&
                current_.kind != TokenKind::End)
             parse_statement();
-
         expect_punctuation('}');
+
+        if (!failed_ && return_type != ShaderType::Invalid &&
+            !function.has_return)
+        {
+            fail("non-void function must contain a return statement");
+            return;
+        }
+        if (!failed_)
+        {
+            ShaderInstruction implicit_return = {};
+            implicit_return.op = ShaderOp::Return;
+            implicit_return.type = return_type;
+            emit(implicit_return);
+        }
+
+        if (!failed_ && is_main)
+        {
+            module_.has_main = true;
+            module_.main_function = static_cast<uint8_t>(function_index);
+            module_.local_count = function.local_count;
+            for (size_t i = 0; i < function.local_count; ++i)
+                module_.locals[i] = function.locals[i];
+        }
+        active_function_ = NO_ACTIVE_FUNCTION;
+    }
+
+    bool peek_punctuation(char value) const
+    {
+        Lexer lookahead = lexer_;
+        const Token token = lookahead.next();
+        return token.kind == TokenKind::Punctuation && token.text[0] == value;
+    }
+
+    void parse_return_statement()
+    {
+        advance(); /* return */
+        if (active_function_ >= module_.function_count)
+        {
+            fail("return is only valid inside a function");
+            return;
+        }
+
+        ShaderFunction& function = module_.functions[active_function_];
+        const ShaderType expected = function.return_type;
+        const bool has_value = !is_punctuation(';');
+        if (expected == ShaderType::Invalid)
+        {
+            if (has_value)
+            {
+                fail("void function cannot return a value");
+                return;
+            }
+        }
+        else
+        {
+            if (!has_value)
+            {
+                fail("non-void function must return a value");
+                return;
+            }
+            const ShaderType actual = parse_expression(1);
+            if (actual != expected)
+            {
+                fail("return expression type does not match function return type");
+                return;
+            }
+        }
+
+        expect_punctuation(';');
+        if (!failed_)
+        {
+            function.has_return = true;
+            emit_simple(ShaderOp::Return, expected, 0,
+                        has_value ? 1 : 0);
+        }
     }
 
     bool is_type_token() const
@@ -1077,6 +1299,11 @@ private:
 
     void parse_statement()
     {
+        if (is_identifier("return"))
+        {
+            parse_return_statement();
+            return;
+        }
         if (is_identifier("if"))
         {
             parse_if_statement();
@@ -1115,6 +1342,18 @@ private:
             return;
         }
 
+        if (current_.kind == TokenKind::Identifier &&
+            peek_punctuation('('))
+        {
+            ShaderType result_type = ShaderType::Invalid;
+            parse_primary(result_type);
+            if (!failed_ && result_type != ShaderType::Invalid)
+                fail("non-void function call results must be used");
+            if (!failed_)
+                expect_punctuation(';');
+            return;
+        }
+
         parse_assignment_statement(true);
     }
 
@@ -1124,6 +1363,11 @@ private:
         if (current_.kind != TokenKind::Identifier)
         {
             fail("expected local variable name");
+            return;
+        }
+        if (active_function_ >= module_.function_count)
+        {
+            fail("local declarations are only valid inside functions");
             return;
         }
 
@@ -1136,17 +1380,12 @@ private:
             fail("duplicate local variable");
             return;
         }
-        if (module_.local_count >= GLSL_MAX_LOCALS)
-        {
-            fail("local variable limit exceeded");
-            return;
-        }
 
-        ShaderVariable& variable = module_.locals[module_.local_count];
-        std::snprintf(variable.name, sizeof(variable.name), "%s", name);
-        variable.type = type;
-        variable.index = static_cast<uint8_t>(module_.local_count);
-        ++module_.local_count;
+        ShaderFunction& function = module_.functions[active_function_];
+        if (!add_function_local(function, name, type))
+            return;
+        const uint8_t local_index =
+            static_cast<uint8_t>(function.local_count - 1);
 
         if (accept_punctuation('='))
         {
@@ -1156,7 +1395,7 @@ private:
                 fail("local initializer type mismatch");
                 return;
             }
-            emit_simple(ShaderOp::StoreLocal, type, variable.index);
+            emit_simple(ShaderOp::StoreLocal, type, local_index);
         }
         expect_punctuation(';');
     }
@@ -1832,7 +2071,31 @@ private:
             return arguments[0];
         }
 
-        fail("unsupported built-in function");
+        const int function_index = find_function(name);
+        if (function_index >= 0)
+        {
+            const ShaderFunction& function =
+                module_.functions[static_cast<size_t>(function_index)];
+            if (argument_count != function.parameter_count)
+            {
+                fail("user function argument count mismatch");
+                return ShaderType::Invalid;
+            }
+            for (size_t i = 0; i < argument_count; ++i)
+            {
+                if (arguments[i] != function.parameters[i].type)
+                {
+                    fail("user function argument type mismatch");
+                    return ShaderType::Invalid;
+                }
+            }
+            emit_simple(ShaderOp::Call, function.return_type,
+                        static_cast<uint8_t>(function_index),
+                        static_cast<uint8_t>(argument_count));
+            return function.return_type;
+        }
+
+        fail("unsupported built-in or undeclared user function");
         return ShaderType::Invalid;
     }
 
@@ -1965,6 +2228,8 @@ private:
     Token current_;
     bool failed_;
     size_t recursion_depth_;
+    size_t active_function_;
+    static constexpr size_t NO_ACTIVE_FUNCTION = static_cast<size_t>(-1);
     LoopFrame loop_stack_[MAX_LOOP_NESTING];
     LoopJumpPatch jump_patches_[GLSL_MAX_INSTRUCTIONS];
     size_t loop_depth_;
