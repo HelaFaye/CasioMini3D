@@ -244,7 +244,7 @@ static void show_results(
 
         char name[48];
         char metrics[72];
-        snprintf(name, sizeof(name), "%s", results[i].description);
+        snprintf(name, sizeof(name), "%.47s", results[i].description);
         snprintf(metrics, sizeof(metrics), "%.1f us/frame  %.2f FPS  %s",
             results[i].mean_frame_us, results[i].fps,
             logged[i] ? "CSV OK" : "CSV ERROR");
