@@ -675,23 +675,29 @@ private:
         }
     }
 
-    void parse_statement()
+    bool emit_assignment_store(const ResolvedVariable& target)
     {
-        if (is_identifier("if"))
+        switch (target.storage)
         {
-            parse_if_statement();
-            return;
+            case Storage::Varying:
+                return emit_simple(ShaderOp::StoreVarying, target.type, target.index);
+            case Storage::Local:
+                return emit_simple(ShaderOp::StoreLocal, target.type, target.index);
+            case Storage::Position:
+                return emit_simple(ShaderOp::StorePosition, target.type);
+            case Storage::FragmentColor:
+                return emit_simple(ShaderOp::StoreFragmentColor, target.type);
+            default:
+                fail("unsupported assignment storage");
+                return false;
         }
+    }
 
-        if (is_type_token())
-        {
-            parse_local_declaration();
-            return;
-        }
-
+    void parse_assignment_statement(bool consume_semicolon)
+    {
         if (current_.kind != TokenKind::Identifier)
         {
-            fail("expected a local declaration or assignment");
+            fail("expected an assignment target");
             return;
         }
 
@@ -706,12 +712,9 @@ private:
         }
         if (target.storage == Storage::Attribute ||
             target.storage == Storage::Uniform ||
-            (target.storage == Storage::FragmentColor &&
-             stage_ == ShaderStage::Vertex) ||
-            (target.storage == Storage::Position &&
-             stage_ == ShaderStage::Fragment) ||
-            (target.storage == Storage::Varying &&
-             stage_ == ShaderStage::Fragment))
+            (target.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex) ||
+            (target.storage == Storage::Position && stage_ == ShaderStage::Fragment) ||
+            (target.storage == Storage::Varying && stage_ == ShaderStage::Fragment))
         {
             fail("assignment target is read-only or unavailable in this shader stage");
             return;
@@ -724,26 +727,187 @@ private:
             fail("assignment type does not match target type");
             return;
         }
-        expect_punctuation(';');
+        if (consume_semicolon)
+            expect_punctuation(';');
+        emit_assignment_store(target);
+    }
 
-        switch (target.storage)
+    void parse_for_increment()
+    {
+        if (is_punctuation(')'))
+            return;
+        if (current_.kind != TokenKind::Identifier)
         {
-            case Storage::Varying:
-                emit_simple(ShaderOp::StoreVarying, target.type, target.index);
-                break;
-            case Storage::Local:
-                emit_simple(ShaderOp::StoreLocal, target.type, target.index);
-                break;
-            case Storage::Position:
-                emit_simple(ShaderOp::StorePosition, target.type);
-                break;
-            case Storage::FragmentColor:
-                emit_simple(ShaderOp::StoreFragmentColor, target.type);
-                break;
-            default:
-                fail("unsupported assignment storage");
-                break;
+            fail("for-loop increment must update a local variable");
+            return;
         }
+
+        char name[GLSL_NAME_BYTES];
+        std::snprintf(name, sizeof(name), "%s", current_.text);
+        advance();
+        const ResolvedVariable target = lookup(name);
+        if (target.storage != Storage::Local)
+        {
+            fail("for-loop increment target must be a local variable");
+            return;
+        }
+
+        if (current_.kind == TokenKind::Punctuation &&
+            (std::strcmp(current_.text, "++") == 0 ||
+             std::strcmp(current_.text, "--") == 0))
+        {
+            const bool increment = std::strcmp(current_.text, "++") == 0;
+            advance();
+            if (target.type != ShaderType::Int && target.type != ShaderType::Float)
+            {
+                fail("increment/decrement requires an int or float local");
+                return;
+            }
+
+            emit_simple(ShaderOp::LoadLocal, target.type, target.index);
+            ShaderInstruction one = {};
+            one.op = target.type == ShaderType::Int
+                ? ShaderOp::PushInt : ShaderOp::PushFloat;
+            one.type = target.type;
+            one.literal = 1.0f;
+            emit(one);
+            emit_simple(increment ? ShaderOp::Add : ShaderOp::Subtract, target.type);
+            emit_assignment_store(target);
+            return;
+        }
+
+        expect_punctuation('=');
+        const ShaderType expression_type = parse_expression(1);
+        if (expression_type != target.type)
+        {
+            fail("for-loop increment type mismatch");
+            return;
+        }
+        emit_assignment_store(target);
+    }
+
+    void parse_while_statement()
+    {
+        advance(); /* while */
+        const size_t condition_start = module_.instruction_count;
+        expect_punctuation('(');
+        const ShaderType condition_type = parse_expression(1);
+        expect_punctuation(')');
+        if (condition_type != ShaderType::Bool)
+        {
+            fail("while condition must be bool");
+            return;
+        }
+
+        const size_t branch_index = module_.instruction_count;
+        emit_simple(ShaderOp::BranchIfFalse, ShaderType::Bool);
+        parse_nested_statement();
+        if (failed_)
+            return;
+
+        const size_t jump_index = module_.instruction_count;
+        emit_simple(ShaderOp::Jump, ShaderType::Invalid);
+        patch_branch_target(jump_index, condition_start);
+        patch_branch_target(branch_index, module_.instruction_count);
+    }
+
+    void parse_for_statement()
+    {
+        advance(); /* for */
+        expect_punctuation('(');
+
+        if (is_type_token())
+            parse_local_declaration();
+        else if (!is_punctuation(';'))
+            parse_assignment_statement(true);
+        else
+            advance();
+
+        const size_t condition_start = module_.instruction_count;
+        ShaderType condition_type = ShaderType::Bool;
+        if (is_punctuation(';'))
+        {
+            ShaderInstruction always_true = {};
+            always_true.op = ShaderOp::PushInt;
+            always_true.type = ShaderType::Bool;
+            always_true.literal = 1.0f;
+            emit(always_true);
+            advance();
+        }
+        else
+        {
+            condition_type = parse_expression(1);
+            expect_punctuation(';');
+        }
+        if (condition_type != ShaderType::Bool)
+        {
+            fail("for-loop condition must be bool");
+            return;
+        }
+
+        const size_t branch_index = module_.instruction_count;
+        emit_simple(ShaderOp::BranchIfFalse, ShaderType::Bool);
+
+        // Parse increment bytecode now, then relocate it after the loop body.
+        ShaderInstruction increment_code[GLSL_MAX_INSTRUCTIONS] = {};
+        const size_t increment_start = module_.instruction_count;
+        if (!is_punctuation(')'))
+            parse_for_increment();
+        if (failed_)
+            return;
+
+        const size_t increment_count = module_.instruction_count - increment_start;
+        if (increment_count > GLSL_MAX_INSTRUCTIONS - increment_start)
+        {
+            fail("for-loop increment instruction budget exceeded");
+            return;
+        }
+        if (increment_count)
+            std::memcpy(increment_code, &module_.instructions[increment_start],
+                        increment_count * sizeof(ShaderInstruction));
+        module_.instruction_count = increment_start;
+
+        expect_punctuation(')');
+        if (failed_)
+            return;
+
+        parse_nested_statement();
+        if (failed_)
+            return;
+
+        for (size_t i = 0; i < increment_count; ++i)
+            emit(increment_code[i]);
+        const size_t jump_index = module_.instruction_count;
+        emit_simple(ShaderOp::Jump, ShaderType::Invalid);
+        patch_branch_target(jump_index, condition_start);
+        patch_branch_target(branch_index, module_.instruction_count);
+    }
+
+    void parse_statement()
+    {
+        if (is_identifier("if"))
+        {
+            parse_if_statement();
+            return;
+        }
+        if (is_identifier("while"))
+        {
+            parse_while_statement();
+            return;
+        }
+        if (is_identifier("for"))
+        {
+            parse_for_statement();
+            return;
+        }
+
+        if (is_type_token())
+        {
+            parse_local_declaration();
+            return;
+        }
+
+        parse_assignment_statement(true);
     }
 
     void parse_local_declaration()
