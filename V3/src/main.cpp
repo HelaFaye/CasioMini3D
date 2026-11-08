@@ -42,7 +42,7 @@ static char g_status[64] = "Choose individual tests or a battery";
 static uint16_t g_depth_buffer[DWIDTH * DHEIGHT];
 
 constexpr uint32_t MICROBENCH_REPEATS = 3;
-constexpr size_t MICROBENCH_COUNT = 4;
+constexpr size_t MICROBENCH_COUNT = 5;
 constexpr uint32_t MICROBENCH_TEXTURE_SAMPLES = 16384;
 constexpr uint32_t MICROBENCH_RASTER_TRIANGLES = 8;
 constexpr uint32_t MICROBENCH_SHADER_EXECUTIONS = 1024;
@@ -352,6 +352,38 @@ static bool benchmark_texture_sampling(uint32_t iterations)
     return true;
 }
 
+static bool benchmark_texture_nearest_gles(uint32_t iterations)
+{
+    const gfx::Texture2DView texture = {
+        g_microbench_texture_pixels, 32, 32, 32
+    };
+    const gfx::TextureSampler sampler = {
+        gfx::TextureFilter::Nearest,
+        gfx::TextureAddressMode::Clamp,
+        gfx::TextureAddressMode::Clamp
+    };
+
+    uint16_t checksum = 0;
+    for (uint32_t i = 0; i < iterations; ++i)
+    {
+        // Generate stable normalized coordinates strictly inside [0, 1).
+        // This exercises the same nearest-normalized sampler entry point
+        // called by the GLES fragment callback, without fixed-point setup.
+        const uint32_t u_bits = (i * 977u + 12345u) & 0x00ffffffu;
+        const uint32_t v_bits = (i * 3253u + 7919u) & 0x00ffffffu;
+        const float u = static_cast<float>(u_bits) * (1.0f / 16777216.0f);
+        const float v = static_cast<float>(v_bits) * (1.0f / 16777216.0f);
+
+        uint16_t pixel = 0;
+        if (!gfx::sample_texture_nearest_validated(
+                texture, u, v, sampler, pixel))
+            return false;
+        checksum = static_cast<uint16_t>(checksum ^ pixel);
+    }
+    g_microbench_texture_sink = checksum;
+    return true;
+}
+
 static bool benchmark_triangle_rasterization(uint32_t iterations)
 {
     if (!g_microbench_raster_ready || !g_microbench_surface.color)
@@ -445,7 +477,8 @@ static void show_renderer_microbench_results(
     dtext(8, 5, C_WHITE, "Renderer component microbenchmarks");
     for (size_t i = 0; i < MICROBENCH_COUNT; ++i)
     {
-        const int y = 24 + static_cast<int>(i) * 39;
+        // Five stages fit with compact 3-line rows on the 224px display.
+        const int y = 20 + static_cast<int>(i) * 33;
         if (!valid[i])
         {
             dtext(8, y, C_WHITE, "FAILED: component benchmark");
@@ -477,12 +510,14 @@ static void show_renderer_microbench_results(
 static void run_renderer_microbenchmarks()
 {
     static const char *const names[MICROBENCH_COUNT] = {
-        "texture-sample",
+        "texture-sample-fixed",
+        "texture-nearest-gles",
         "triangle-raster",
         "shader-vm",
         "framebuffer-present"
     };
     static const uint32_t iterations[MICROBENCH_COUNT] = {
+        MICROBENCH_TEXTURE_SAMPLES,
         MICROBENCH_TEXTURE_SAMPLES,
         MICROBENCH_RASTER_TRIANGLES,
         MICROBENCH_SHADER_EXECUTIONS,
@@ -490,6 +525,7 @@ static void run_renderer_microbenchmarks()
     };
     static const MicrobenchWork work[MICROBENCH_COUNT] = {
         benchmark_texture_sampling,
+        benchmark_texture_nearest_gles,
         benchmark_triangle_rasterization,
         benchmark_shader_execution,
         benchmark_framebuffer_presentation
@@ -519,7 +555,7 @@ static void run_renderer_microbenchmarks()
         dtext(8, 27, C_WHITE, names[i]);
         dupdate();
 
-        if (i == 1)
+        if (i == 2)
         {
             g_microbench_surface.color =
                 reinterpret_cast<uint16_t *>(gint_vram);
