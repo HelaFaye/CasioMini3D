@@ -232,11 +232,6 @@ enum class BuiltinFunction : uint8_t
     Refract, SmoothStep, MatrixCompMult
 };
 
-static bool is_gen_type(ShaderType type)
-{
-    return type == ShaderType::Float || is_vector(type);
-}
-
 static size_t component_count(ShaderType type)
 {
     switch (type)
@@ -279,6 +274,11 @@ static bool is_vector(ShaderType type)
 {
     return type == ShaderType::Vec2 || type == ShaderType::Vec3 ||
            type == ShaderType::Vec4;
+}
+
+static bool is_gen_type(ShaderType type)
+{
+    return type == ShaderType::Float || is_vector(type);
 }
 
 static size_t matrix_dimension(ShaderType type)
