@@ -76,6 +76,15 @@ void test_surface_binding_and_default_state()
     glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
     assert(clear_depth > 0.374f && clear_depth < 0.376f);
 
+    GLfloat point_size_range[2] = {};
+    glGetFloatv(GL_ALIASED_POINT_SIZE_RANGE, point_size_range);
+    assert(point_size_range[0] == 1.0f);
+    assert(point_size_range[1] == 16.0f);
+    GLint integer_point_size_range[2] = {};
+    glGetIntegerv(GL_ALIASED_POINT_SIZE_RANGE, integer_point_size_range);
+    assert(integer_point_size_range[0] == 1);
+    assert(integer_point_size_range[1] == 16);
+
     assert(glGetString(GL_VENDOR) != nullptr);
     assert(glGetString(GL_RENDERER) != nullptr);
     assert(glGetString(GL_VERSION) != nullptr);

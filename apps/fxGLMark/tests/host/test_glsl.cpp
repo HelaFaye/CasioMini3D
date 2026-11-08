@@ -861,6 +861,24 @@ static void test_user_function_stage_output_copyout()
     assert(near(readback_runtime.fragment_color.data[1], 1.0f));
     assert(near(readback_runtime.fragment_color.data[2], 1.5f));
     assert(near(readback_runtime.fragment_color.data[3], 2.0f));
+
+    static const char point_size_source[] =
+        "void set_size(out float size);\n"
+        "void expand(inout float size);\n"
+        "void main() { set_size(gl_PointSize); expand(gl_PointSize); }\n"
+        "void set_size(out float size) { size = 2.5; }\n"
+        "void expand(inout float size) { size = size + 0.5; }\n";
+    ShaderModule point_size_module = {};
+    const bool point_size_compiled = fxgl::compile_glsl(
+        ShaderStage::Vertex, point_size_source, point_size_module);
+    if (!point_size_compiled)
+        std::fprintf(stderr, "gl_PointSize diagnostic: %s\n",
+                     point_size_module.info_log);
+    assert(point_size_compiled);
+    ShaderRuntime point_size_runtime = {};
+    assert(fxgl::execute_glsl(point_size_module, point_size_runtime));
+    assert(point_size_runtime.point_size.type == ShaderType::Float);
+    assert(near(point_size_runtime.point_size.data[0], 3.0f));
 }
 
 static void test_user_function_out_inout_rejections()
@@ -1046,6 +1064,7 @@ static void test_compiler_rejects_unsupported_or_invalid_source()
         "void main() { gl_FragColor = unknown_name; }",
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
         "void main() { gl_Position = vec4(1.0); }",
+        "void main() { gl_PointSize = 3.0; gl_FragColor = vec4(1.0); }",
         "float missing(float value); void main() { gl_FragColor = vec4(1.0); }",
         "float helper(float value); float helper(float input) { return input; } float helper(float other) { return other; } void main() { gl_FragColor = vec4(1.0); }",
         "void main() { gl_FragColor = vec4(later(1.0)); } float later(float value) { return value; }",
