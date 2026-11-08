@@ -1965,19 +1965,46 @@ static void apply_binary(
 
     const size_t left_components = component_count(left.type);
     const size_t right_components = component_count(right.type);
+    const bool scalar_left = left_components == 1;
+    const bool scalar_right = right_components == 1;
     for (size_t i = 0; i < count; ++i)
     {
-        const float a = left.data[left_components == 1 ? 0 : i];
-        const float b = right.data[right_components == 1 ? 0 : i];
+        const size_t li = scalar_left ? 0 : i;
+        const size_t ri = scalar_right ? 0 : i;
+        const float a = left.data[li];
+        const float b = right.data[ri];
+        const float left_dx = li < 4 ? left.ddx[li] : 0.0f;
+        const float left_dy = li < 4 ? left.ddy[li] : 0.0f;
+        const float right_dx = ri < 4 ? right.ddx[ri] : 0.0f;
+        const float right_dy = ri < 4 ? right.ddy[ri] : 0.0f;
         switch (op)
         {
-            case ShaderOp::Add: result.data[i] = a + b; break;
-            case ShaderOp::Subtract: result.data[i] = a - b; break;
-            case ShaderOp::Multiply: result.data[i] = a * b; break;
+            case ShaderOp::Add:
+                result.data[i] = a + b;
+                result.ddx[i] = left_dx + right_dx;
+                result.ddy[i] = left_dy + right_dy;
+                break;
+            case ShaderOp::Subtract:
+                result.data[i] = a - b;
+                result.ddx[i] = left_dx - right_dx;
+                result.ddy[i] = left_dy - right_dy;
+                break;
+            case ShaderOp::Multiply:
+                result.data[i] = a * b;
+                result.ddx[i] = left_dx * b + a * right_dx;
+                result.ddy[i] = left_dy * b + a * right_dy;
+                break;
             case ShaderOp::Divide:
                 result.data[i] = b == 0.0f ? 0.0f : a / b;
+                if (b != 0.0f)
+                {
+                    const float inverse_square = 1.0f / (b * b);
+                    result.ddx[i] = (left_dx * b - a * right_dx) * inverse_square;
+                    result.ddy[i] = (left_dy * b - a * right_dy) * inverse_square;
+                }
                 break;
-            default: break;
+            default:
+                break;
         }
     }
 }
@@ -2179,7 +2206,14 @@ bool execute_glsl(
                     else
                     {
                         for (size_t i = 0; i < wanted; ++i)
+                        {
                             result.data[i] = convert_component(instruction.type, scalar);
+                            if (i < 4)
+                            {
+                                result.ddx[i] = args[0].ddx[0];
+                                result.ddy[i] = args[0].ddy[0];
+                            }
+                        }
                     }
                 }
                 else if (destination_dimension != 0 && source_dimension != 0)
@@ -2210,6 +2244,11 @@ bool execute_glsl(
                         {
                             result.data[offset] =
                                 convert_component(instruction.type, args[arg].data[i]);
+                            if (offset < 4 && i < 4)
+                            {
+                                result.ddx[offset] = args[arg].ddx[i];
+                                result.ddy[offset] = args[arg].ddy[i];
+                            }
                             ++offset;
                         }
                     }
@@ -2237,7 +2276,15 @@ bool execute_glsl(
                     return false;
                 result = zero_value(instruction.type);
                 for (size_t i = 0; i < instruction.argument_count; ++i)
-                    result.data[i] = a.data[instruction.swizzle[i]];
+                {
+                    const size_t source = instruction.swizzle[i];
+                    result.data[i] = a.data[source];
+                    if (source < 4 && i < 4)
+                    {
+                        result.ddx[i] = a.ddx[source];
+                        result.ddy[i] = a.ddy[source];
+                    }
+                }
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -2248,7 +2295,14 @@ bool execute_glsl(
                     return false;
                 result = a;
                 for (size_t i = 0; i < component_count(a.type); ++i)
+                {
                     result.data[i] = -result.data[i];
+                    if (i < 4)
+                    {
+                        result.ddx[i] = -result.ddx[i];
+                        result.ddy[i] = -result.ddy[i];
+                    }
+                }
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
