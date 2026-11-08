@@ -517,6 +517,11 @@ static bool rasterize_one(
     const bool has_varyings = varying_count != 0;
     const bool has_derivatives = state.varying_derivatives && has_varyings;
     const bool depth_active = state.depth_enabled && surface.depth;
+    const bool stencil_active = state.stencil_enabled && surface.stencil;
+    const bool opaque_color_fast_path =
+        surface.color && !depth_active && !stencil_active &&
+        !state.blend_enabled && state.color_write[0] &&
+        state.color_write[1] && state.color_write[2];
     const bool needs_interpolation = has_varyings || depth_active;
 
     /*
@@ -599,6 +604,9 @@ static bool rasterize_one(
     for (int64_t y = y0; y <= y1; ++y)
     {
         const float py = static_cast<float>(y) + 0.5f;
+        uint16_t *color_row = surface.color
+            ? surface.color + static_cast<size_t>(y) * surface.stride
+            : nullptr;
 
         float edge0 = edge(vertices[1], vertices[2], first_x, py);
         float edge1 = edge(vertices[2], vertices[0], first_x, py);
@@ -688,13 +696,41 @@ static bool rasterize_one(
                     }
                 }
 
-                if (interpolation_valid &&
-                    process_fragment(surface, state,
-                        static_cast<int>(x), static_cast<int>(y),
-                        varyings, varyings_dx, varyings_dy,
-                        varying_count, ndc_depth, front,
-                        fragment_shader, user_data, stats, true))
-                    wrote_any = true;
+                if (interpolation_valid)
+                {
+                    if (opaque_color_fast_path)
+                    {
+                        // Most opaque GLES draws have no depth/stencil test,
+                        // blending or partial RGB write mask. Keep that hot
+                        // path in the scanline loop: no per-pixel helper call,
+                        // row-offset multiply, unused depth conversion or
+                        // repeated state branching.
+                        ++stats.tested_fragments;
+                        float source[4] = {};
+                        const FragmentInput fragment_input = {
+                            varyings, varyings_dx, varyings_dy, varying_count
+                        };
+                        if (fragment_shader(fragment_input, source, user_data))
+                        {
+                            ++stats.shaded_fragments;
+                            source[0] = clamp01(source[0]);
+                            source[1] = clamp01(source[1]);
+                            source[2] = clamp01(source[2]);
+                            color_row[x] = pack_rgb565_clamped(source);
+                            ++stats.depth_passed_fragments;
+                            ++stats.written_fragments;
+                            wrote_any = true;
+                        }
+                    }
+                    else if (process_fragment(surface, state,
+                            static_cast<int>(x), static_cast<int>(y),
+                            varyings, varyings_dx, varyings_dy,
+                            varying_count, ndc_depth, front,
+                            fragment_shader, user_data, stats, true))
+                    {
+                        wrote_any = true;
+                    }
+                }
             }
 
             edge0 += edge0_dx;
