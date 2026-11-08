@@ -3,7 +3,7 @@
 #include "../types.hpp"
 #include "../display.hpp"
 #include "../fixed.hpp"
-#include "../gfx/texture.hpp"
+#include "gfx/texture.hpp"
 #include <algorithm>
 #include <tuple>
 
