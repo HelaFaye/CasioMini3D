@@ -111,6 +111,81 @@ static void test_validated_sampler_matches_checked_sampler()
     }
 }
 
+static void test_normalized_nearest_fast_path_matches_fixed_point()
+{
+    const uint16_t pixels[12] = {
+        0xf800, 0x07e0, 0x001f, 0xaaaa,
+        0xffe0, 0xf81f, 0x07ff, 0xbbbb,
+        0x8410, 0x4208, 0xffff, 0xcccc
+    };
+    const Texture2DView texture = {pixels, 3, 3, 4};
+
+    TextureSampler samplers[] = {
+        nearest_clamp(),
+        nearest_repeat(),
+        {TextureFilter::Nearest, TextureAddressMode::MirroredRepeat,
+         TextureAddressMode::Repeat}
+    };
+    const float boundaries[] = {
+        -1000.5f, -4.25f, -1.0f, -0.5001f, -0.001f, -0.0f,
+        0.0f, 0.0001f, 0.25f, 0.33333334f, 0.5f, 0.9999f,
+        1.0f, 1.0001f, 1.25f, 2.75f, 1000.5f
+    };
+
+    assert(gfx::texture_valid(texture));
+    for (const TextureSampler& sampler : samplers)
+    {
+        assert(gfx::sampler_valid(sampler));
+        for (float u : boundaries)
+        {
+            for (float v : boundaries)
+            {
+                const double texel_u =
+                    static_cast<double>(u) * texture.width;
+                const double texel_v =
+                    static_cast<double>(v) * texture.height;
+                const int64_t fixed_u = static_cast<int64_t>(
+                    std::floor(texel_u * 65536.0));
+                const int64_t fixed_v = static_cast<int64_t>(
+                    std::floor(texel_v * 65536.0));
+                const uint16_t expected = gfx::sample_texture_validated(
+                    texture, fixed_u, fixed_v, sampler, 0.0f);
+
+                uint16_t actual = 0;
+                assert(gfx::sample_texture_nearest_validated(
+                    texture, u, v, sampler, actual));
+                assert(actual == expected);
+            }
+        }
+
+        // Cover a larger set of fractional and negative coordinates.
+        for (int i = -300; i <= 300; ++i)
+        {
+            const float u = static_cast<float>(i) / 37.0f;
+            const float v = static_cast<float>(i) / 53.0f;
+            const int64_t fixed_u = static_cast<int64_t>(std::floor(
+                static_cast<double>(u) * texture.width * 65536.0));
+            const int64_t fixed_v = static_cast<int64_t>(std::floor(
+                static_cast<double>(v) * texture.height * 65536.0));
+            const uint16_t expected = gfx::sample_texture_validated(
+                texture, fixed_u, fixed_v, sampler, 0.0f);
+            uint16_t actual = 0;
+            assert(gfx::sample_texture_nearest_validated(
+                texture, u, v, sampler, actual));
+            assert(actual == expected);
+        }
+    }
+
+    uint16_t unchanged = 0x1234;
+    assert(!gfx::sample_texture_nearest_validated(
+        texture, 0.5f, 0.5f,
+        {TextureFilter::Bilinear, TextureAddressMode::Clamp,
+         TextureAddressMode::Clamp},
+        unchanged));
+    assert(!gfx::sample_texture_nearest_validated(
+        texture, 1.0e20f, 0.5f, nearest_clamp(), unchanged));
+}
+
 static void test_view_and_sampler_validation()
 {
     const uint16_t pixels[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
@@ -300,6 +375,7 @@ int main()
 {
     test_sampler_derivative_requirements();
     test_validated_sampler_matches_checked_sampler();
+    test_normalized_nearest_fast_path_matches_fixed_point();
     test_view_and_sampler_validation();
     test_nearest_texel_centres_and_stride();
     test_clamp_and_repeat_addressing();

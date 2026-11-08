@@ -313,6 +313,44 @@ uint16_t sample_texture_validated(
     return sample_texture_impl(texture, u_16_16, v_16_16, sampler, lod);
 }
 
+bool sample_texture_nearest_validated(
+    const Texture2DView& texture,
+    float u,
+    float v,
+    const TextureSampler& sampler,
+    uint16_t& pixel)
+{
+    if (sampler.filter != TextureFilter::Nearest ||
+        sampler.min_filter != TextureMinFilter::Nearest ||
+        !std::isfinite(u) || !std::isfinite(v))
+        return false;
+
+    // The original GLES conversion bounded the 16.16 texel coordinate to
+    // signed 64-bit before sampling. The same bound keeps this direct floor
+    // conversion defined while avoiding the fixed-point round trip.
+    constexpr double coordinate_limit = 140737488355328.0; // 2^47
+    const double texel_u = static_cast<double>(u) * texture.width;
+    const double texel_v = static_cast<double>(v) * texture.height;
+    if (texel_u < -coordinate_limit || texel_u >= coordinate_limit ||
+        texel_v < -coordinate_limit || texel_v >= coordinate_limit)
+        return false;
+
+    // Integer conversion truncates toward zero; correct negative fractions
+    // to mathematical floor, matching split_coordinate() in the old path.
+    int64_t x = static_cast<int64_t>(texel_u);
+    int64_t y = static_cast<int64_t>(texel_v);
+    if (static_cast<double>(x) > texel_u) --x;
+    if (static_cast<double>(y) > texel_v) --y;
+
+    const uint16_t addressed_x =
+        address_index(x, texture.width, sampler.address_u);
+    const uint16_t addressed_y =
+        address_index(y, texture.height, sampler.address_v);
+    pixel = texture.pixels[
+        static_cast<size_t>(addressed_y) * texture.stride + addressed_x];
+    return true;
+}
+
 uint16_t sample_texture(
     const Texture2DView& texture,
     int64_t u_16_16,

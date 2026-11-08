@@ -1031,6 +1031,20 @@ static bool sample_bound_texture(
     const gfx::Texture2DView& texture = cached.view;
     const gfx::TextureSampler& sampler = cached.sampler;
 
+    if (sampler.filter == gfx::TextureFilter::Nearest &&
+        sampler.min_filter == gfx::TextureMinFilter::Nearest)
+    {
+        uint16_t pixel = 0;
+        if (!gfx::sample_texture_nearest_validated(
+                texture, u, v, sampler, pixel))
+            return false;
+        rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
+        rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
+        rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
+        rgba[3] = 1.0f;
+        return true;
+    }
+
     float lod = 0.0f;
     if (cached.requires_derivatives)
     {

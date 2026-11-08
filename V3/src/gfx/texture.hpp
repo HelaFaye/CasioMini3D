@@ -71,6 +71,16 @@ uint16_t sample_texture_validated(
     const TextureSampler& sampler,
     float lod = 0.0f);
 
+/* Direct normalized-coordinate path for validated nearest/nearest sampling.
+   Returns false for non-finite or out-of-range coordinates. The texture view
+   and sampler must already be valid and stable for the call. */
+bool sample_texture_nearest_validated(
+    const Texture2DView& texture,
+    float u,
+    float v,
+    const TextureSampler& sampler,
+    uint16_t& pixel);
+
 /* Sample an RGB565 texture using signed 16.16 texel-space coordinates.
    Nearest uses floor(u), floor(v). Bilinear interpolates the four surrounding
    texels. Clamp and Repeat addressing are applied independently per axis.
