@@ -413,6 +413,73 @@ void test_perspective_correct_varying_interpolation()
     // while affine interpolation would yield 9/16.
     assert(red >= 12 && red <= 14);
 }
+
+struct PerspectiveCapture
+{
+    size_t calls;
+    float value[2];
+    float ddx[2];
+    float ddy[2];
+};
+
+bool capture_perspective_sample(const fxgl::FragmentInput& input,
+                                float rgba[4], void *user_data)
+{
+    PerspectiveCapture& capture = *static_cast<PerspectiveCapture *>(user_data);
+    ++capture.calls;
+    if (capture.calls == 3 && input.varying_count >= 2)
+    {
+        for (size_t i = 0; i < 2; ++i)
+        {
+            capture.value[i] = input.varyings[i];
+            capture.ddx[i] = input.varying_ddx[i];
+            capture.ddy[i] = input.varying_ddy[i];
+        }
+    }
+    rgba[0] = rgba[1] = rgba[2] = rgba[3] = 1.0f;
+    return true;
+}
+
+void test_perspective_planes_preserve_varyings_and_finite_difference_gradients()
+{
+    uint16_t color[16];
+    uint16_t depth[16];
+    uint8_t stencil[16];
+    reset_surface(color, depth, stencil);
+
+    const RenderSurface surface = {color, depth, stencil, 4, 4, 4};
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    state.varying_derivatives = true;
+
+    ClipVertex triangle[3] = {
+        vertex(-1.0f, -1.0f, 0.0f, 1.0f),
+        vertex(2.0f, -2.0f, 0.0f, 2.0f),
+        vertex(0.0f, 2.0f, 0.0f, 2.0f)
+    };
+    triangle[0].varying[0] = 0.0f;
+    triangle[0].varying[1] = 0.0f;
+    triangle[1].varying[0] = 1.0f;
+    triangle[1].varying[1] = 0.0f;
+    triangle[2].varying[0] = 0.0f;
+    triangle[2].varying[1] = 1.0f;
+
+    PerspectiveCapture capture = {};
+    assert(fxgl::draw_triangle(surface, state, triangle, 2,
+        capture_perspective_sample, &capture));
+    assert(capture.calls >= 3);
+
+    // The third covered sample on the first scanline is pixel (2, 0).
+    // Its screen-space barycentrics are (5/16, 9/16, 2/16). The neighboring
+    // pixel values below use a double-precision reference rational plane.
+    assert(std::fabs(capture.value[0] - (3.0f / 7.0f)) < 0.0005f);
+    assert(std::fabs(capture.value[1] - (2.0f / 21.0f)) < 0.0005f);
+    assert(std::fabs(capture.ddx[0] - (40.0f / 119.0f)) < 0.0005f);
+    assert(std::fabs(capture.ddx[1] - (8.0f / 357.0f)) < 0.0005f);
+    assert(std::fabs(capture.ddy[0] - (-26.0f / 175.0f)) < 0.0005f);
+    assert(std::fabs(capture.ddy[1] - (76.0f / 525.0f)) < 0.0005f);
+}
+
 } // namespace
 
 int main()
@@ -427,6 +494,7 @@ int main()
     test_line_clipping_and_scissor_fragment_bounds();
     test_perspective_correct_varying_interpolation();
     test_perspective_correct_screen_space_varying_gradients();
+    test_perspective_planes_preserve_varyings_and_finite_difference_gradients();
 
     std::puts("GLES software pipeline tests: PASS");
     return 0;
