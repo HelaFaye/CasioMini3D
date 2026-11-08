@@ -2602,7 +2602,8 @@ void glTexImage2D(
         set_error(GL_INVALID_ENUM);
         return;
     }
-    if (level != 0 || width < 0 || height < 0 || border != 0 ||
+    if (level < 0 || level >= static_cast<GLint>(FXGL_MAX_TEXTURE_LEVELS) ||
+        width < 0 || height < 0 || border != 0 ||
         width > FXGL_MAX_TEXTURE_SIZE || height > FXGL_MAX_TEXTURE_SIZE)
     {
         set_error(GL_INVALID_VALUE);
@@ -2617,10 +2618,33 @@ void glTexImage2D(
     TextureObject *object = bound_texture(target);
     if (!object) return;
 
-    const size_t texels = static_cast<size_t>(width) *
-                          static_cast<size_t>(height);
-    const size_t new_bytes = texels * sizeof(uint16_t);
-    const size_t retained = g_context.texture_bytes - object->bytes;
+    if (level > 0)
+    {
+        if (!object->pixels || object->width == 0 || object->height == 0)
+        {
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+        GLsizei expected_width = object->width;
+        GLsizei expected_height = object->height;
+        for (GLint i = 0; i < level; ++i)
+        {
+            expected_width = std::max<GLsizei>(1, expected_width / 2);
+            expected_height = std::max<GLsizei>(1, expected_height / 2);
+        }
+        if (width != expected_width || height != expected_height)
+        {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+    }
+
+    const size_t new_bytes = texture_level_bytes(
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+    TextureMipObject *mip = level > 0
+        ? &object->mip_levels[level - 1] : nullptr;
+    const size_t old_bytes = level > 0 ? mip->bytes : object->bytes;
+    const size_t retained = g_context.texture_bytes - old_bytes;
     if (new_bytes > FXGL_MAX_TEXTURE_BYTES - retained)
     {
         set_error(GL_OUT_OF_MEMORY);
@@ -2645,11 +2669,8 @@ void glTexImage2D(
                 (row_bytes + alignment - 1) & ~(alignment - 1);
             const uint8_t *source = static_cast<const uint8_t *>(pixels);
             for (GLsizei row = 0; row < height; ++row)
-            {
                 std::memcpy(new_pixels + static_cast<size_t>(row) * width,
-                    source + static_cast<size_t>(row) * source_stride,
-                    row_bytes);
-            }
+                    source + static_cast<size_t>(row) * source_stride, row_bytes);
         }
         else
         {
@@ -2657,12 +2678,27 @@ void glTexImage2D(
         }
     }
 
-    std::free(object->pixels);
-    object->pixels = new_pixels;
-    object->width = static_cast<uint16_t>(width);
-    object->height = static_cast<uint16_t>(height);
-    object->bytes = new_bytes;
-    g_context.texture_bytes = retained + new_bytes;
+    if (level == 0)
+    {
+        // Replacing the base image invalidates the entire lower mip chain.
+        std::free(object->pixels);
+        release_texture_mips(*object);
+        object->pixels = new_pixels;
+        object->width = static_cast<uint16_t>(width);
+        object->height = static_cast<uint16_t>(height);
+        object->bytes = new_bytes;
+        g_context.texture_bytes = retained + new_bytes;
+    }
+    else
+    {
+        std::free(mip->pixels);
+        mip->pixels = new_pixels;
+        mip->width = static_cast<uint16_t>(width);
+        mip->height = static_cast<uint16_t>(height);
+        mip->bytes = new_bytes;
+        object->bytes = object->bytes - old_bytes + new_bytes;
+        g_context.texture_bytes = retained + new_bytes;
+    }
 }
 
 void glTexSubImage2D(
@@ -2683,7 +2719,8 @@ void glTexSubImage2D(
         set_error(GL_INVALID_ENUM);
         return;
     }
-    if (level != 0 || xoffset < 0 || yoffset < 0 || width < 0 || height < 0)
+    if (level < 0 || level >= static_cast<GLint>(FXGL_MAX_TEXTURE_LEVELS) ||
+        xoffset < 0 || yoffset < 0 || width < 0 || height < 0)
     {
         set_error(GL_INVALID_VALUE);
         return;
@@ -2692,9 +2729,20 @@ void glTexSubImage2D(
     TextureObject *object = bound_texture(target);
     if (!object) return;
 
+    uint16_t *destination_pixels = object->pixels;
+    GLsizei level_width = object->width;
+    GLsizei level_height = object->height;
+    if (level > 0)
+    {
+        const TextureMipObject& mip = object->mip_levels[level - 1];
+        destination_pixels = mip.pixels;
+        level_width = mip.width;
+        level_height = mip.height;
+    }
+
     const int64_t right = static_cast<int64_t>(xoffset) + width;
     const int64_t bottom = static_cast<int64_t>(yoffset) + height;
-    if (!object->pixels || right > object->width || bottom > object->height)
+    if (!destination_pixels || right > level_width || bottom > level_height)
     {
         set_error(GL_INVALID_VALUE);
         return;
@@ -2712,13 +2760,110 @@ void glTexSubImage2D(
     const uint8_t *source = static_cast<const uint8_t *>(pixels);
     for (GLsizei row = 0; row < height; ++row)
     {
-        uint16_t *destination = object->pixels +
-            static_cast<size_t>(yoffset + row) * object->width + xoffset;
+        uint16_t *destination = destination_pixels +
+            static_cast<size_t>(yoffset + row) * level_width + xoffset;
         std::memcpy(destination,
-            source + static_cast<size_t>(row) * source_stride,
-            row_bytes);
+            source + static_cast<size_t>(row) * source_stride, row_bytes);
     }
 }
+
+void glGenerateMipmap(GLenum target)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+
+    TextureObject *object = bound_texture(target);
+    if (!object) return;
+    if (!object->pixels || object->width == 0 || object->height == 0)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    TextureMipObject generated[FXGL_MAX_TEXTURE_LEVELS - 1] = {};
+    const size_t retained = g_context.texture_bytes - object->bytes;
+    size_t generated_bytes = 0;
+    const uint16_t *source_pixels = object->pixels;
+    uint16_t source_width = object->width;
+    uint16_t source_height = object->height;
+
+    for (size_t level = 1; level < FXGL_MAX_TEXTURE_LEVELS; ++level)
+    {
+        if (source_width == 1 && source_height == 1)
+            break;
+        const uint16_t width = source_width > 1
+            ? static_cast<uint16_t>(source_width / 2) : 1;
+        const uint16_t height = source_height > 1
+            ? static_cast<uint16_t>(source_height / 2) : 1;
+        const size_t bytes = texture_level_bytes(width, height);
+        if (bytes > FXGL_MAX_TEXTURE_BYTES - retained - generated_bytes)
+        {
+            for (TextureMipObject& mip : generated)
+                std::free(mip.pixels);
+            set_error(GL_OUT_OF_MEMORY);
+            return;
+        }
+
+        uint16_t *destination = static_cast<uint16_t *>(std::malloc(bytes));
+        if (!destination)
+        {
+            for (TextureMipObject& mip : generated)
+                std::free(mip.pixels);
+            set_error(GL_OUT_OF_MEMORY);
+            return;
+        }
+
+        for (uint16_t y = 0; y < height; ++y)
+        {
+            for (uint16_t x = 0; x < width; ++x)
+            {
+                unsigned red = 0;
+                unsigned green = 0;
+                unsigned blue = 0;
+                for (unsigned dy = 0; dy < 2; ++dy)
+                {
+                    for (unsigned dx = 0; dx < 2; ++dx)
+                    {
+                        const uint16_t sx = std::min<uint16_t>(
+                            static_cast<uint16_t>(x * 2 + dx),
+                            static_cast<uint16_t>(source_width - 1));
+                        const uint16_t sy = std::min<uint16_t>(
+                            static_cast<uint16_t>(y * 2 + dy),
+                            static_cast<uint16_t>(source_height - 1));
+                        const uint16_t pixel =
+                            source_pixels[static_cast<size_t>(sy) * source_width + sx];
+                        red += (pixel >> 11) & 0x1f;
+                        green += (pixel >> 5) & 0x3f;
+                        blue += pixel & 0x1f;
+                    }
+                }
+                destination[static_cast<size_t>(y) * width + x] =
+                    static_cast<uint16_t>(
+                        (((red + 2) / 4) << 11) |
+                        (((green + 2) / 4) << 5) |
+                        ((blue + 2) / 4));
+            }
+        }
+
+        generated[level - 1] = {destination, width, height, bytes};
+        generated_bytes += bytes;
+        source_pixels = destination;
+        source_width = width;
+        source_height = height;
+    }
+
+    release_texture_mips(*object);
+    for (size_t i = 0; i < FXGL_MAX_TEXTURE_LEVELS - 1; ++i)
+        object->mip_levels[i] = generated[i];
+    object->bytes = texture_level_bytes(object->width, object->height) +
+                    generated_bytes;
+    g_context.texture_bytes = retained + object->bytes;
+}
+
 
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 {
