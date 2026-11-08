@@ -19,7 +19,10 @@ The library currently contains:
   definitions, exact-type overload resolution, typed returns, and bounded
   `in`/`out`/`inout` copy semantics. Input parameters are mutable local
   copies; outputs copy back to writable locals, vertex varyings, `gl_Position`,
-  and `gl_FragColor`, including non-overlapping vector swizzles.
+  `gl_PointSize`, and `gl_FragColor`, including non-overlapping vector
+  swizzles.
+- Square point rasterization driven by vertex-shader `gl_PointSize`, clamped
+  to the reported `GL_ALIASED_POINT_SIZE_RANGE` of 1–16 pixels.
 
 This is an incremental compatibility implementation, not full OpenGL ES 2.0
 support and not a Khronos-conformant implementation. See
