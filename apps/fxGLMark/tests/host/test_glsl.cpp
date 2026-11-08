@@ -879,6 +879,17 @@ static void test_user_function_stage_output_copyout()
     assert(fxgl::execute_glsl(point_size_module, point_size_runtime));
     assert(point_size_runtime.point_size.type == ShaderType::Float);
     assert(near(point_size_runtime.point_size.data[0], 3.0f));
+
+    static const char direct_point_size_source[] =
+        "void main() { gl_PointSize = 4.0; gl_PointSize = gl_PointSize + 1.0; }";
+    ShaderModule direct_point_size_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Vertex, direct_point_size_source, direct_point_size_module));
+    ShaderRuntime direct_point_size_runtime = {};
+    assert(fxgl::execute_glsl(
+        direct_point_size_module, direct_point_size_runtime));
+    assert(direct_point_size_runtime.point_size.type == ShaderType::Float);
+    assert(near(direct_point_size_runtime.point_size.data[0], 5.0f));
 }
 
 static void test_user_function_out_inout_rejections()
