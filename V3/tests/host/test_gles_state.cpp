@@ -1165,9 +1165,34 @@ void test_state_validation_and_error_latching()
 }
 } // namespace
 
+static void test_surface_refresh_preserves_gles_state()
+{
+    uint16_t first[16] = {};
+    uint16_t second[16] = {};
+    const fxgl_surface_t initial = {first, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&initial) == GL_TRUE);
+
+    fxgl_surface_t updated = {second, nullptr, nullptr, 4, 4, 4};
+    assert(fxglUpdateSurface(&updated) == GL_TRUE);
+
+    // Updating the pointer must not reset state or resource namespaces.
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    for (size_t i = 0; i < 16; ++i)
+    {
+        assert(first[i] == 0);
+        assert(second[i] == 0xf800);
+    }
+
+    fxgl_surface_t invalid = {first, nullptr, nullptr, 8, 2, 8};
+    assert(fxglUpdateSurface(&invalid) == GL_FALSE);
+    fxglReleaseCurrent();
+}
+
 int main()
 {
     test_surface_binding_and_default_state();
+    test_surface_refresh_preserves_gles_state();
     test_rgb565_clear_and_stride_padding();
     test_scissor_color_mask_and_depth_stencil_clear();
     test_outside_scissor_is_safe_noop();
