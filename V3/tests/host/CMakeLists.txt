@@ -88,3 +88,22 @@ add_executable(glsl_tests
 target_compile_features(glsl_tests PRIVATE cxx_std_20)
 target_compile_options(glsl_tests PRIVATE -Wall -Wextra -Werror)
 add_test(NAME glsl_subset_vm COMMAND glsl_tests)
+
+add_executable(glmark2_tests
+    test_glmark2.cpp
+    ../../src/glmark2/glmark2.cpp
+    ../../src/gles/gles_context.cpp
+    ../../src/gles/math.cpp
+    ../../src/gles/pipeline.cpp
+    ../../src/gles/program.cpp
+    ../../src/gles/glsl.cpp
+    ../../src/gfx/texture.cpp
+)
+
+target_compile_features(glmark2_tests PRIVATE cxx_std_20)
+target_compile_options(glmark2_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(glmark2_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+)
+add_test(NAME fxglmark2_port COMMAND glmark2_tests)
