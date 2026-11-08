@@ -877,6 +877,7 @@ struct CachedTextureBinding
     gfx::Texture2DView view;
     gfx::TextureSampler sampler;
     bool valid;
+    bool nearest_repeat_power_of_two;
     bool requires_derivatives;
 };
 
@@ -964,6 +965,15 @@ static void initialize_draw_invocation(
         CachedTextureBinding& cached = invocation.textures[unit];
         cached.valid = fxgl::get_texture_binding(
             unit, cached.view, cached.sampler);
+        cached.nearest_repeat_power_of_two = cached.valid &&
+            cached.sampler.filter == gfx::TextureFilter::Nearest &&
+            cached.sampler.min_filter == gfx::TextureMinFilter::Nearest &&
+            cached.sampler.address_u == gfx::TextureAddressMode::Repeat &&
+            cached.sampler.address_v == gfx::TextureAddressMode::Repeat &&
+            (cached.view.width &
+             static_cast<uint16_t>(cached.view.width - 1)) == 0 &&
+            (cached.view.height &
+             static_cast<uint16_t>(cached.view.height - 1)) == 0;
         cached.requires_derivatives = !cached.valid ||
             gfx::sampler_requires_implicit_derivatives(cached.sampler);
     }
@@ -1013,8 +1023,7 @@ static bool sample_bound_texture(
     float rgba[4],
     void *user_data)
 {
-    if (unit < 0 || unit >= static_cast<int>(FXGL_MAX_TEXTURE_UNITS) ||
-        !std::isfinite(u) || !std::isfinite(v))
+    if (unit < 0 || unit >= static_cast<int>(FXGL_MAX_TEXTURE_UNITS))
         return false;
 
     DrawInvocation& invocation = *static_cast<DrawInvocation *>(user_data);
@@ -1022,14 +1031,34 @@ static bool sample_bound_texture(
         invocation.textures[static_cast<size_t>(unit)];
     if (!cached.valid)
         return false;
+    const gfx::Texture2DView& texture = cached.view;
+    const gfx::TextureSampler& sampler = cached.sampler;
+
+    // Texture and sampler properties are invariant throughout this draw.
+    // The common 32x32 Repeat/Repeat case uses its preselected sampler before
+    // entering the generic per-fragment validation and address-mode branches.
+    if (cached.nearest_repeat_power_of_two)
+    {
+        uint16_t pixel = 0;
+        if (gfx::sample_texture_nearest_repeat_pow2_validated(
+                texture, u, v, pixel))
+        {
+            rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
+            rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
+            rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
+            rgba[3] = 1.0f;
+            return true;
+        }
+    }
+
+    if (!std::isfinite(u) || !std::isfinite(v))
+        return false;
     // Non-mipmapped nearest/linear filtering does not consume derivatives.
     // Avoid four finite checks on the common nearest-texture path.
     if (cached.requires_derivatives &&
         (!std::isfinite(dudx) || !std::isfinite(dvdx) ||
          !std::isfinite(dudy) || !std::isfinite(dvdy)))
         return false;
-    const gfx::Texture2DView& texture = cached.view;
-    const gfx::TextureSampler& sampler = cached.sampler;
 
     if (sampler.filter == gfx::TextureFilter::Nearest &&
         sampler.min_filter == gfx::TextureMinFilter::Nearest)

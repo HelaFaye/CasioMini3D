@@ -389,6 +389,41 @@ uint16_t sample_texture_validated(
     return sample_texture_impl(texture, u_16_16, v_16_16, sampler, lod);
 }
 
+bool sample_texture_nearest_repeat_pow2_validated(
+    const Texture2DView& texture,
+    float u,
+    float v,
+    uint16_t& pixel)
+{
+    // The range check also rejects NaN and infinities before integer conversion.
+    if (!(u >= -64.0f && u < 64.0f &&
+          v >= -64.0f && v < 64.0f))
+        return false;
+
+    const float scaled_u = u * static_cast<float>(texture.width);
+    const float scaled_v = v * static_cast<float>(texture.height);
+    int32_t x = static_cast<int32_t>(scaled_u);
+    int32_t y = static_cast<int32_t>(scaled_v);
+
+    // The glmark2 sphere supplies nonnegative UVs. In that hot case, truncation
+    // already equals floor and both negative-coordinate corrections disappear.
+    if (u < 0.0f || v < 0.0f)
+    {
+        if (static_cast<float>(x) > scaled_u) --x;
+        if (static_cast<float>(y) > scaled_v) --y;
+    }
+
+    const uint16_t addressed_x = static_cast<uint16_t>(
+        static_cast<uint32_t>(x) &
+        static_cast<uint32_t>(texture.width - 1));
+    const uint16_t addressed_y = static_cast<uint16_t>(
+        static_cast<uint32_t>(y) &
+        static_cast<uint32_t>(texture.height - 1));
+    pixel = texture.pixels[
+        static_cast<size_t>(addressed_y) * texture.stride + addressed_x];
+    return true;
+}
+
 bool sample_texture_nearest_validated(
     const Texture2DView& texture,
     float u,
@@ -412,25 +447,9 @@ bool sample_texture_nearest_validated(
         (texture.width & static_cast<uint16_t>(texture.width - 1)) == 0 &&
         (texture.height & static_cast<uint16_t>(texture.height - 1)) == 0;
     if (repeat_power_of_two &&
-        u > -64.0f && u < 64.0f && v > -64.0f && v < 64.0f)
-    {
-        const float scaled_u = u * static_cast<float>(texture.width);
-        const float scaled_v = v * static_cast<float>(texture.height);
-        int32_t x = static_cast<int32_t>(scaled_u);
-        int32_t y = static_cast<int32_t>(scaled_v);
-        if (static_cast<float>(x) > scaled_u) --x;
-        if (static_cast<float>(y) > scaled_v) --y;
-
-        const uint16_t addressed_x = static_cast<uint16_t>(
-            static_cast<uint32_t>(x) &
-            static_cast<uint32_t>(texture.width - 1));
-        const uint16_t addressed_y = static_cast<uint16_t>(
-            static_cast<uint32_t>(y) &
-            static_cast<uint32_t>(texture.height - 1));
-        pixel = texture.pixels[
-            static_cast<size_t>(addressed_y) * texture.stride + addressed_x];
+        sample_texture_nearest_repeat_pow2_validated(
+            texture, u, v, pixel))
         return true;
-    }
 
     // Most GLES UVs are bounded even when wrapping repeatedly (for example,
     // glmark2 scales its sphere UVs into [0, 6)). Resolve those coordinates

@@ -71,6 +71,15 @@ uint16_t sample_texture_validated(
     const TextureSampler& sampler,
     float lod = 0.0f);
 
+/* Direct two-axis Repeat sampler for validated nearest textures whose
+   nonzero width and height are powers of two. Returns false outside [-64, 64)
+   so the caller can use the general full-range sampler. */
+bool sample_texture_nearest_repeat_pow2_validated(
+    const Texture2DView& texture,
+    float u,
+    float v,
+    uint16_t& pixel);
+
 /* Direct normalized-coordinate path for validated nearest/nearest sampling.
    Returns false for non-finite or out-of-range coordinates. The texture view
    and sampler must already be valid and stable for the call. */

@@ -393,11 +393,48 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
                 std::floor(static_cast<double>(v) * fast_height * 65536.0));
             const uint16_t expected = gfx::sample_texture_validated(
                 fast_texture, fixed_u, fixed_v, repeat, 0.0f);
+            uint16_t direct = 0;
+            assert(gfx::sample_texture_nearest_repeat_pow2_validated(
+                fast_texture, u, v, direct));
+            assert(direct == expected);
+
             uint16_t actual = 0;
             assert(gfx::sample_texture_nearest_validated(
                 fast_texture, u, v, repeat, actual));
             assert(actual == expected);
         }
+
+        // Exact range endpoints, mixed-sign axes and the largest in-range
+        // positive float all exercise the specialized conversion boundaries.
+        const float edge_coordinates[][2] = {
+            {-64.0f, -64.0f},
+            {-64.0f, 0.0f},
+            {0.0f, -64.0f},
+            {0.0f, 0.0f},
+            {std::nextafter(64.0f, 0.0f),
+             std::nextafter(64.0f, 0.0f)}
+        };
+        for (const auto& coordinate : edge_coordinates)
+        {
+            const int64_t edge_u = static_cast<int64_t>(std::floor(
+                static_cast<double>(coordinate[0]) *
+                fast_texture.width * 65536.0));
+            const int64_t edge_v = static_cast<int64_t>(std::floor(
+                static_cast<double>(coordinate[1]) *
+                fast_texture.height * 65536.0));
+            const uint16_t edge_expected = gfx::sample_texture_validated(
+                fast_texture, edge_u, edge_v, repeat, 0.0f);
+            uint16_t edge_actual = 0;
+            assert(gfx::sample_texture_nearest_repeat_pow2_validated(
+                fast_texture, coordinate[0], coordinate[1], edge_actual));
+            assert(edge_actual == edge_expected);
+        }
+        uint16_t rejected = 0;
+        assert(!gfx::sample_texture_nearest_repeat_pow2_validated(
+            fast_texture, 64.0f, 0.0f, rejected));
+        assert(!gfx::sample_texture_nearest_repeat_pow2_validated(
+            fast_texture, std::numeric_limits<float>::quiet_NaN(),
+            0.0f, rejected));
     }
 
     uint16_t unchanged = 0x1234;
