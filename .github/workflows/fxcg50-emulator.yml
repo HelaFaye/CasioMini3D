@@ -1,0 +1,60 @@
+name: FX-CG50 emulated point-size smoke test
+
+on:
+  push:
+    branches:
+      - feature/glsl-point-size
+  workflow_dispatch:
+
+jobs:
+  fxcg50-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out CasioMini3D
+        uses: actions/checkout@v4
+
+      - name: Check out fxSDK toolchain recipe
+        uses: actions/checkout@v4
+        with:
+          repository: hexbinoct/casio-cg50
+          ref: main
+          path: .cache/fxsdk-source
+
+      - name: Build fxSDK and SH-4A toolchain image
+        run: docker build --tag fxsdk-ci .cache/fxsdk-source/tools/fxsdk-docker
+
+      - name: Build point-size smoke add-in
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work/apps/fxGLMark/tests/emulator \
+            fxsdk-ci fxsdk build-cg
+          G3A="$(find apps/fxGLMark/tests/emulator -type f -name 'fxogl-point-size-smoke.g3a' -print -quit)"
+          test -n "$G3A"
+          printf 'FXSDK_G3A=%s\n' "$G3A" >> "$GITHUB_ENV"
+
+      - name: Check out Casio CG50 emulator
+        uses: actions/checkout@v4
+        with:
+          repository: Heath123/casio-emu
+          ref: master
+          path: .cache/casio-emu
+
+      - name: Build headless Casio emulator
+        run: |
+          cmake -S apps/fxGLMark/tests/emulator/casio-emu-headless \
+            -B build/casio-emu-headless \
+            -DCASIO_EMU_SOURCE="$GITHUB_WORKSPACE/.cache/casio-emu"
+          cmake --build build/casio-emu-headless --parallel 2
+
+      - name: Run fxOGL point-size smoke add-in in Casio emulator
+        run: build/casio-emu-headless/casio-emu-headless "$FXSDK_G3A"
+
+      - name: Upload emulated calculator screen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcg50-point-size-emulated-screen
+          path: emulated-screen.ppm
+          if-no-files-found: ignore
