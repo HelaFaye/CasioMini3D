@@ -2811,6 +2811,8 @@ bool execute_glsl(
                 result = zero_value(ShaderType::Vec4);
                 if (!texture_sample(static_cast<int>(a.data[0]),
                                     b.data[0], b.data[1],
+                                    b.ddx[0], b.ddx[1],
+                                    b.ddy[0], b.ddy[1],
                                     result.data, user_data))
                     return false;
                 if (!push_value(stack, stack_size, result))
