@@ -1892,7 +1892,7 @@ void glDrawElements(
         for (GLsizei i = 0; i < count - 2; i += 3)
         {
             if (!draw_vertex_triangle(
-                    program, get_index(i), get_index(i + 1), get_index(i + 2)))
+                    invocation, get_index(i), get_index(i + 1), get_index(i + 2)))
                 return;
         }
     }
@@ -1916,7 +1916,7 @@ void glDrawElements(
     {
         for (GLsizei i = 1; i < count - 1; ++i)
             if (!draw_vertex_triangle(
-                    program, get_index(0), get_index(i), get_index(i + 1)))
+                    invocation, get_index(0), get_index(i), get_index(i + 1)))
                 return;
     }
 }
