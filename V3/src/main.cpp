@@ -338,15 +338,17 @@ static bool benchmark_texture_sampling(uint32_t iterations)
         gfx::TextureAddressMode::Clamp
     };
 
+    uint16_t checksum = 0;
     for (uint32_t i = 0; i < iterations; ++i)
     {
         const int64_t u = static_cast<int64_t>(
             ((i * 977u) & 0x001fffffu));
         const int64_t v = static_cast<int64_t>(
             ((i * 3253u + 7919u) & 0x001fffffu));
-        g_microbench_texture_sink = gfx::sample_texture_validated(
-            texture, u, v, sampler);
+        checksum = static_cast<uint16_t>(checksum ^
+            gfx::sample_texture_validated(texture, u, v, sampler));
     }
+    g_microbench_texture_sink = checksum;
     return true;
 }
 
@@ -370,13 +372,14 @@ static bool benchmark_shader_execution(uint32_t iterations)
     if (!g_microbench_shader_ready)
         return false;
 
+    float checksum = 0.0f;
     for (uint32_t i = 0; i < iterations; ++i)
     {
         if (!fxgl::execute_glsl(g_microbench_shader, g_microbench_runtime))
             return false;
-        g_microbench_shader_sink =
-            g_microbench_runtime.fragment_color.data[0];
+        checksum += g_microbench_runtime.fragment_color.data[0];
     }
+    g_microbench_shader_sink = checksum;
     return true;
 }
 
