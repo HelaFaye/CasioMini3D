@@ -28,19 +28,17 @@ jobs:
 
           dockerfile = Path(".cache/fxsdk-source/tools/fxsdk-docker/Dockerfile")
           source = dockerfile.read_text()
-          before = (
-              "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc\\n"
-              "RUN giteapc install -y Lephenixnoir/gint"
-          )
-          after = (
-              "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc\\n"
-              "RUN giteapc install -y Lephenixnoir/sh-elf-gcc\\n"
-              "RUN giteapc install -y Lephenixnoir/gint"
-          )
-          if source.count(before) != 1:
+          libc_step = "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc"
+          gint_step = "RUN giteapc install -y Lephenixnoir/gint"
+          if source.count(libc_step) != 1 or source.count(gint_step) != 1:
               raise SystemExit("Unexpected fxSDK Dockerfile layout; refusing to patch it")
-          dockerfile.write_text(source.replace(before, after))
-          print("Inserted the required post-fxlibc GCC pass for libstdc++-v3")
+          if source.index(libc_step) > source.index(gint_step):
+              raise SystemExit("fxlibc must be installed before gint")
+          gcc_cpp_step = "RUN giteapc install -y Lephenixnoir/sh-elf-gcc\n"
+          if gcc_cpp_step.strip() not in source:
+              source = source.replace(gint_step, gcc_cpp_step + gint_step)
+          dockerfile.write_text(source)
+          print("Inserted the post-fxlibc GCC pass for libstdc++-v3")
           PY
 
       - name: Build fxSDK and SH-4A toolchain image
@@ -48,21 +46,14 @@ jobs:
 
       - name: Verify SH-4A C++ standard-library headers
         run: |
-          printf '%s\\n' \\
-            '#include <algorithm>' \\
-            '#include <vector>' \\
-            'int main() { std::vector<int> v{2, 1}; std::sort(v.begin(), v.end()); return v[0]; }' \\
-            | docker run --rm -i fxsdk-ci sh-elf-g++ -std=gnu++20 -x c++ -fsyntax-only -
+          printf '%s\n' '#include <algorithm>' '#include <vector>' 'int main() { std::vector<int> v{2, 1}; std::sort(v.begin(), v.end()); return v[0]; }' | docker run --rm -i fxsdk-ci sh-elf-g++ -std=gnu++20 -x c++ -fsyntax-only -
 
       - name: Build point-size smoke add-in
         run: |
-          docker run --rm \\
-            --volume "$GITHUB_WORKSPACE:/work" \\
-            --workdir /work/apps/fxGLMark/tests/emulator \\
-            fxsdk-ci fxsdk build-cg
+          docker run --rm --volume "$GITHUB_WORKSPACE:/work" --workdir /work/apps/fxGLMark/tests/emulator fxsdk-ci fxsdk build-cg
           G3A="$(find apps/fxGLMark/tests/emulator -type f -name 'fxogl-point-size-smoke.g3a' -print -quit)"
           test -n "$G3A"
-          printf 'FXSDK_G3A=%s\\n' "$G3A" >> "$GITHUB_ENV"
+          printf 'FXSDK_G3A=%s\n' "$G3A" >> "$GITHUB_ENV"
 
       - name: Check out Casio CG50 emulator
         uses: actions/checkout@v4
@@ -73,9 +64,7 @@ jobs:
 
       - name: Build headless Casio emulator
         run: |
-          cmake -S apps/fxGLMark/tests/emulator/casio-emu-headless \\
-            -B build/casio-emu-headless \\
-            -DCASIO_EMU_SOURCE="$GITHUB_WORKSPACE/.cache/casio-emu"
+          cmake -S apps/fxGLMark/tests/emulator/casio-emu-headless -B build/casio-emu-headless -DCASIO_EMU_SOURCE="$GITHUB_WORKSPACE/.cache/casio-emu"
           cmake --build build/casio-emu-headless --parallel 2
 
       - name: Run fxOGL point-size smoke add-in in Casio emulator
