@@ -2515,7 +2515,7 @@ bool execute_glsl(
         ShaderValue locals[GLSL_MAX_LOCALS];
     };
 
-    CallFrame call_frames[GLSL_MAX_CALL_DEPTH] = {};
+    CallFrame call_frames[GLSL_MAX_CALL_DEPTH];
     size_t call_depth = 0;
     bool main_returned = false;
 
