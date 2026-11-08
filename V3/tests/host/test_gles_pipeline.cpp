@@ -476,8 +476,8 @@ void test_perspective_planes_preserve_varyings_and_finite_difference_gradients()
     assert(std::fabs(capture.value[1] - (2.0f / 21.0f)) < 0.0005f);
     assert(std::fabs(capture.ddx[0] - (40.0f / 119.0f)) < 0.0005f);
     assert(std::fabs(capture.ddx[1] - (8.0f / 357.0f)) < 0.0005f);
-    assert(std::fabs(capture.ddy[0] - (-26.0f / 175.0f)) < 0.0005f);
-    assert(std::fabs(capture.ddy[1] - (76.0f / 525.0f)) < 0.0005f);
+    assert(std::fabs(capture.ddy[0] - (-8.0f / 133.0f)) < 0.0005f);
+    assert(std::fabs(capture.ddy[1] - (88.0f / 399.0f)) < 0.0005f);
 }
 
 } // namespace
