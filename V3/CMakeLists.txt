@@ -23,6 +23,7 @@ set(SOURCES
     src/gles/pipeline.cpp
     src/gles/glsl.cpp
     src/gles/program.cpp
+    src/glmark2/glmark2.cpp
     src/shapes/parallelogram.cpp
     src/shapes/rectangle.cpp
     src/shapes/triangle.cpp
