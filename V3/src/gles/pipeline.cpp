@@ -267,6 +267,16 @@ static uint16_t pack_rgb565(const float rgba[4])
     return static_cast<uint16_t>((r << 11) | (g << 5) | b);
 }
 
+/* The fragment path has already clamped RGB. Avoid repeating three finite
+   checks and min/max operations when writing an opaque RGB565 pixel. */
+static uint16_t pack_rgb565_clamped(const float rgba[4])
+{
+    const uint16_t r = static_cast<uint16_t>(rgba[0] * 31.0f + 0.5f);
+    const uint16_t g = static_cast<uint16_t>(rgba[1] * 63.0f + 0.5f);
+    const uint16_t b = static_cast<uint16_t>(rgba[2] * 31.0f + 0.5f);
+    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
 static void blend_pixel(
     uint16_t& destination_pixel,
     const float source[4],
@@ -326,9 +336,13 @@ static bool process_fragment(
     bool front,
     FragmentShader fragment_shader,
     void *user_data,
-    RasterStats& stats)
+    RasterStats& stats,
+    bool scissor_preclipped = false)
 {
-    if (!passes_scissor(x, y, state))
+    // Triangle bounds are intersected with the scissor rectangle before the
+    // raster loop. Keep the check for points/lines, whose paths are not
+    // scan-converted through that bounded triangle loop.
+    if (!scissor_preclipped && !passes_scissor(x, y, state))
         return false;
 
     ++stats.tested_fragments;
@@ -340,14 +354,25 @@ static bool process_fragment(
         return false;
     ++stats.shaded_fragments;
 
-    for (float& component : source)
-        component = clamp01(component);
+    // RGB is always stored in the RGB565 surface. Alpha is only consumed by
+    // blending, so skip its finite/clamp work on the common opaque path.
+    source[0] = clamp01(source[0]);
+    source[1] = clamp01(source[1]);
+    source[2] = clamp01(source[2]);
+    if (state.blend_enabled)
+        source[3] = clamp01(source[3]);
 
-    const float mapped_depth = clamp01(
-        state.depth_near + (ndc_depth * 0.5f + 0.5f) *
-        (state.depth_far - state.depth_near));
-    const uint16_t incoming_depth = static_cast<uint16_t>(
-        mapped_depth * 65535.0f + 0.5f);
+    const bool depth_active = state.depth_enabled && surface.depth;
+    uint16_t incoming_depth = 0;
+    if (depth_active)
+    {
+        const float mapped_depth = clamp01(
+            state.depth_near + (ndc_depth * 0.5f + 0.5f) *
+            (state.depth_far - state.depth_near));
+        incoming_depth = static_cast<uint16_t>(
+            mapped_depth * 65535.0f + 0.5f);
+    }
+
     const size_t offset = static_cast<size_t>(y) * surface.stride +
                           static_cast<size_t>(x);
 
@@ -371,7 +396,7 @@ static bool process_fragment(
         }
     }
 
-    const bool depth_pass = !state.depth_enabled || !surface.depth ||
+    const bool depth_pass = !depth_active ||
         compare_values(state.depth_function, incoming_depth, surface.depth[offset]);
     if (!depth_pass)
     {
@@ -385,7 +410,7 @@ static bool process_fragment(
     if (state.stencil_enabled && surface.stencil)
         write_stencil(surface.stencil[offset], stencil_face,
                       stencil_face.depth_pass);
-    if (state.depth_enabled && surface.depth && state.depth_write)
+    if (depth_active && state.depth_write)
         surface.depth[offset] = incoming_depth;
 
     if (surface.color)
@@ -397,7 +422,7 @@ static bool process_fragment(
         else if (state.color_write[0] && state.color_write[1] &&
                  state.color_write[2])
         {
-            surface.color[offset] = pack_rgb565(source);
+            surface.color[offset] = pack_rgb565_clamped(source);
         }
         else
         {
@@ -489,55 +514,79 @@ static bool rasterize_one(
     const bool top_left_1 = top_left_edge(vertices[2], vertices[0]);
     const bool top_left_2 = top_left_edge(vertices[0], vertices[1]);
 
+    const bool has_varyings = varying_count != 0;
+    const bool has_derivatives = state.varying_derivatives && has_varyings;
+    const bool depth_active = state.depth_enabled && surface.depth;
+    const bool needs_interpolation = has_varyings || depth_active;
+
     /*
-     * Each edge function is an affine plane. Its X and Y gradients are
-     * constant, so calculate the three X steps once and walk them across a
-     * scanline instead of evaluating three edge equations for every pixel.
-     *
-     * Barycentric coordinates are the edge values divided by the triangle
-     * area. Their gradients let us build affine planes for 1/w, z/w and each
-     * varying/w. Perspective correction is then one reciprocal per fragment,
-     * shared by every varying. When implicit derivatives are requested, the
-     * neighboring-pixel values are evaluated from those same planes; this
-     * preserves the previous finite-difference semantics used for texture LOD.
+     * Edge equations are affine planes. Step them across the scanline rather
+     * than evaluating three multiplies per pixel. Build perspective planes
+     * only for attributes/depth actually consumed by the draw: the common
+     * no-varying/no-depth path needs edge coverage alone.
      */
     const float edge0_dx = -(vertices[2].y - vertices[1].y);
     const float edge1_dx = -(vertices[0].y - vertices[2].y);
     const float edge2_dx = -(vertices[1].y - vertices[0].y);
-    const float lambda0_dx = edge0_dx / area;
-    const float lambda1_dx = edge1_dx / area;
-    const float lambda2_dx = edge2_dx / area;
 
-    const float lambda0_dy = (vertices[2].x - vertices[1].x) / area;
-    const float lambda1_dy = (vertices[0].x - vertices[2].x) / area;
-    const float lambda2_dy = (vertices[1].x - vertices[0].x) / area;
-
-    const float reciprocal_w_dx =
-        lambda0_dx * vertices[0].inverse_w +
-        lambda1_dx * vertices[1].inverse_w +
-        lambda2_dx * vertices[2].inverse_w;
-    const float reciprocal_w_dy =
-        lambda0_dy * vertices[0].inverse_w +
-        lambda1_dy * vertices[1].inverse_w +
-        lambda2_dy * vertices[2].inverse_w;
-
-    const float depth_dx =
-        lambda0_dx * vertices[0].z_over_w +
-        lambda1_dx * vertices[1].z_over_w +
-        lambda2_dx * vertices[2].z_over_w;
-
+    float lambda0_dx = 0.0f;
+    float lambda1_dx = 0.0f;
+    float lambda2_dx = 0.0f;
+    float reciprocal_w_dx = 0.0f;
+    float reciprocal_w_dy = 0.0f;
+    float depth_dx = 0.0f;
     float numerator_dx[MAX_VARYINGS] = {};
     float numerator_dy[MAX_VARYINGS] = {};
-    for (size_t i = 0; i < varying_count; ++i)
+
+    if (needs_interpolation)
     {
-        numerator_dx[i] =
-            lambda0_dx * vertices[0].varying_over_w[i] +
-            lambda1_dx * vertices[1].varying_over_w[i] +
-            lambda2_dx * vertices[2].varying_over_w[i];
-        numerator_dy[i] =
-            lambda0_dy * vertices[0].varying_over_w[i] +
-            lambda1_dy * vertices[1].varying_over_w[i] +
-            lambda2_dy * vertices[2].varying_over_w[i];
+        lambda0_dx = edge0_dx / area;
+        lambda1_dx = edge1_dx / area;
+        lambda2_dx = edge2_dx / area;
+
+        if (depth_active)
+        {
+            depth_dx =
+                lambda0_dx * vertices[0].z_over_w +
+                lambda1_dx * vertices[1].z_over_w +
+                lambda2_dx * vertices[2].z_over_w;
+        }
+
+        if (has_varyings)
+        {
+            reciprocal_w_dx =
+                lambda0_dx * vertices[0].inverse_w +
+                lambda1_dx * vertices[1].inverse_w +
+                lambda2_dx * vertices[2].inverse_w;
+
+            for (size_t i = 0; i < varying_count; ++i)
+            {
+                numerator_dx[i] =
+                    lambda0_dx * vertices[0].varying_over_w[i] +
+                    lambda1_dx * vertices[1].varying_over_w[i] +
+                    lambda2_dx * vertices[2].varying_over_w[i];
+            }
+        }
+
+        if (has_derivatives)
+        {
+            const float lambda0_dy = (vertices[2].x - vertices[1].x) / area;
+            const float lambda1_dy = (vertices[0].x - vertices[2].x) / area;
+            const float lambda2_dy = (vertices[1].x - vertices[0].x) / area;
+
+            reciprocal_w_dy =
+                lambda0_dy * vertices[0].inverse_w +
+                lambda1_dy * vertices[1].inverse_w +
+                lambda2_dy * vertices[2].inverse_w;
+
+            for (size_t i = 0; i < varying_count; ++i)
+            {
+                numerator_dy[i] =
+                    lambda0_dy * vertices[0].varying_over_w[i] +
+                    lambda1_dy * vertices[1].varying_over_w[i] +
+                    lambda2_dy * vertices[2].varying_over_w[i];
+            }
+        }
     }
 
     bool wrote_any = false;
@@ -551,30 +600,40 @@ static bool rasterize_one(
     {
         const float py = static_cast<float>(y) + 0.5f;
 
-        // Re-evaluate edge values only once at each scanline origin. The
-        // inner loop advances them with additions, preserving top-left fill
-        // tests without per-pixel edge-function multiplications.
         float edge0 = edge(vertices[1], vertices[2], first_x, py);
         float edge1 = edge(vertices[2], vertices[0], first_x, py);
         float edge2 = edge(vertices[0], vertices[1], first_x, py);
 
-        float lambda0 = edge0 / area;
-        float lambda1 = edge1 / area;
-        float lambda2 = edge2 / area;
-        float reciprocal_w =
-            lambda0 * vertices[0].inverse_w +
-            lambda1 * vertices[1].inverse_w +
-            lambda2 * vertices[2].inverse_w;
-        float ndc_depth =
-            lambda0 * vertices[0].z_over_w +
-            lambda1 * vertices[1].z_over_w +
-            lambda2 * vertices[2].z_over_w;
+        float reciprocal_w = 0.0f;
+        float ndc_depth = 0.0f;
+        if (needs_interpolation)
+        {
+            const float lambda0 = edge0 / area;
+            const float lambda1 = edge1 / area;
+            const float lambda2 = edge2 / area;
 
-        for (size_t i = 0; i < varying_count; ++i)
-            numerator[i] =
-                lambda0 * vertices[0].varying_over_w[i] +
-                lambda1 * vertices[1].varying_over_w[i] +
-                lambda2 * vertices[2].varying_over_w[i];
+            if (depth_active)
+            {
+                ndc_depth =
+                    lambda0 * vertices[0].z_over_w +
+                    lambda1 * vertices[1].z_over_w +
+                    lambda2 * vertices[2].z_over_w;
+            }
+
+            if (has_varyings)
+            {
+                reciprocal_w =
+                    lambda0 * vertices[0].inverse_w +
+                    lambda1 * vertices[1].inverse_w +
+                    lambda2 * vertices[2].inverse_w;
+
+                for (size_t i = 0; i < varying_count; ++i)
+                    numerator[i] =
+                        lambda0 * vertices[0].varying_over_w[i] +
+                        lambda1 * vertices[1].varying_over_w[i] +
+                        lambda2 * vertices[2].varying_over_w[i];
+            }
+        }
 
         for (int64_t x = x0; x <= x1; ++x)
         {
@@ -582,62 +641,73 @@ static bool rasterize_one(
                 covered(edge1, top_left_1) &&
                 covered(edge2, top_left_2))
             {
-                if (std::isfinite(reciprocal_w) && reciprocal_w > 0.0f)
+                bool interpolation_valid = true;
+                if (has_varyings)
                 {
-                    const float inverse_reciprocal_w = 1.0f / reciprocal_w;
-                    float inverse_x = 0.0f;
-                    float inverse_y = 0.0f;
-                    bool valid_x = false;
-                    bool valid_y = false;
-
-                    if (state.varying_derivatives && varying_count != 0)
+                    interpolation_valid =
+                        std::isfinite(reciprocal_w) && reciprocal_w > 0.0f;
+                    if (interpolation_valid)
                     {
-                        const float reciprocal_w_x =
-                            reciprocal_w + reciprocal_w_dx;
-                        const float reciprocal_w_y =
-                            reciprocal_w + reciprocal_w_dy;
-                        valid_x = std::isfinite(reciprocal_w_x) &&
-                                  reciprocal_w_x > 0.0f;
-                        valid_y = std::isfinite(reciprocal_w_y) &&
-                                  reciprocal_w_y > 0.0f;
-                        if (valid_x)
-                            inverse_x = 1.0f / reciprocal_w_x;
-                        if (valid_y)
-                            inverse_y = 1.0f / reciprocal_w_y;
-                    }
+                        const float inverse_reciprocal_w = 1.0f / reciprocal_w;
+                        float inverse_x = 0.0f;
+                        float inverse_y = 0.0f;
+                        bool valid_x = false;
+                        bool valid_y = false;
 
-                    for (size_t i = 0; i < varying_count; ++i)
-                    {
-                        varyings[i] = numerator[i] * inverse_reciprocal_w;
-                        if (state.varying_derivatives)
+                        if (has_derivatives)
                         {
-                            varyings_dx[i] = valid_x
-                                ? (numerator[i] + numerator_dx[i]) * inverse_x -
-                                  varyings[i]
-                                : 0.0f;
-                            varyings_dy[i] = valid_y
-                                ? (numerator[i] + numerator_dy[i]) * inverse_y -
-                                  varyings[i]
-                                : 0.0f;
+                            const float reciprocal_w_x =
+                                reciprocal_w + reciprocal_w_dx;
+                            const float reciprocal_w_y =
+                                reciprocal_w + reciprocal_w_dy;
+                            valid_x = std::isfinite(reciprocal_w_x) &&
+                                      reciprocal_w_x > 0.0f;
+                            valid_y = std::isfinite(reciprocal_w_y) &&
+                                      reciprocal_w_y > 0.0f;
+                            if (valid_x)
+                                inverse_x = 1.0f / reciprocal_w_x;
+                            if (valid_y)
+                                inverse_y = 1.0f / reciprocal_w_y;
+                        }
+
+                        for (size_t i = 0; i < varying_count; ++i)
+                        {
+                            varyings[i] = numerator[i] * inverse_reciprocal_w;
+                            if (has_derivatives)
+                            {
+                                varyings_dx[i] = valid_x
+                                    ? (numerator[i] + numerator_dx[i]) * inverse_x -
+                                      varyings[i]
+                                    : 0.0f;
+                                varyings_dy[i] = valid_y
+                                    ? (numerator[i] + numerator_dy[i]) * inverse_y -
+                                      varyings[i]
+                                    : 0.0f;
+                            }
                         }
                     }
-
-                    if (process_fragment(surface, state,
-                            static_cast<int>(x), static_cast<int>(y),
-                            varyings, varyings_dx, varyings_dy,
-                            varying_count, ndc_depth, front,
-                            fragment_shader, user_data, stats))
-                        wrote_any = true;
                 }
+
+                if (interpolation_valid &&
+                    process_fragment(surface, state,
+                        static_cast<int>(x), static_cast<int>(y),
+                        varyings, varyings_dx, varyings_dy,
+                        varying_count, ndc_depth, front,
+                        fragment_shader, user_data, stats, true))
+                    wrote_any = true;
             }
 
             edge0 += edge0_dx;
             edge1 += edge1_dx;
             edge2 += edge2_dx;
-            reciprocal_w += reciprocal_w_dx;
-            ndc_depth += depth_dx;
-            for (size_t i = 0; i < varying_count; ++i)
-                numerator[i] += numerator_dx[i];
+            if (depth_active)
+                ndc_depth += depth_dx;
+            if (has_varyings)
+            {
+                reciprocal_w += reciprocal_w_dx;
+                for (size_t i = 0; i < varying_count; ++i)
+                    numerator[i] += numerator_dx[i];
+            }
         }
     }
 
