@@ -441,32 +441,6 @@ static bool setup_texture(SceneInstance& instance, char *error, size_t capacity)
     return true;
 }
 
-static bool render_prepared_scene(SceneInstance& instance, uint32_t frame_number)
-{
-    if (!instance.prepared)
-        return false;
-
-    glViewport(0, 0, 396, 224);
-    glClearColor(0.035f, 0.045f, 0.075f, 1.0f);
-    glClearDepthf(1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    if (instance.request.scene == SceneId::Clear)
-        return glGetError() == GL_NO_ERROR;
-
-    glUseProgram(instance.program);
-    update_matrices(instance, frame_number);
-
-    if (instance.texture)
-    {
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, instance.texture);
-    }
-
-    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(instance.vertex_count));
-    return glGetError() == GL_NO_ERROR;
-}
-
 static void sort_samples(double *samples, size_t count)
 {
     for (size_t i = 1; i < count; ++i)
