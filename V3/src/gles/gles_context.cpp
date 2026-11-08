@@ -886,6 +886,8 @@ struct DrawInvocation
 {
     fxgl::LinkedProgramView program;
     int passthrough_varying_offset;
+    int texture_passthrough_varying_offset;
+    int texture_passthrough_unit;
     bool fragment_failed;
     bool varying_derivatives;
     CachedTextureBinding textures[FXGL_MAX_TEXTURE_UNITS];
@@ -917,6 +919,66 @@ static int find_passthrough_varying_offset(
     return static_cast<int>(offset);
 }
 
+static bool find_texture_passthrough(
+    const fxgl::LinkedProgramView& program,
+    int& varying_offset,
+    int& texture_unit)
+{
+    varying_offset = -1;
+    texture_unit = -1;
+    if (!program.fragment_shader)
+        return false;
+
+    const fxgl::ShaderModule& module = *program.fragment_shader;
+    if (module.stage != fxgl::ShaderStage::Fragment ||
+        module.instruction_count != 4)
+        return false;
+
+    // Recognize only the exact, side-effect-free form used by the glmark
+    // texture scene. Any coordinate transform or color operation continues
+    // through the general GLSL VM.
+    const fxgl::ShaderInstruction& load_sampler = module.instructions[0];
+    const fxgl::ShaderInstruction& load_coordinate = module.instructions[1];
+    const fxgl::ShaderInstruction& sample = module.instructions[2];
+    const fxgl::ShaderInstruction& store_color = module.instructions[3];
+    if (load_sampler.op != fxgl::ShaderOp::LoadUniform ||
+        load_sampler.type != fxgl::ShaderType::Sampler2D ||
+        load_sampler.index >= module.uniform_count ||
+        module.uniforms[load_sampler.index].type != fxgl::ShaderType::Sampler2D ||
+        load_coordinate.op != fxgl::ShaderOp::LoadVarying ||
+        load_coordinate.type != fxgl::ShaderType::Vec2 ||
+        load_coordinate.index >= module.varying_count ||
+        module.varyings[load_coordinate.index].type != fxgl::ShaderType::Vec2 ||
+        sample.op != fxgl::ShaderOp::Texture2D ||
+        sample.type != fxgl::ShaderType::Vec4 ||
+        store_color.op != fxgl::ShaderOp::StoreFragmentColor ||
+        store_color.type != fxgl::ShaderType::Vec4)
+        return false;
+
+    const uint8_t uniform_location =
+        program.fragment_uniform_map[load_sampler.index];
+    if (uniform_location >= program.uniform_count ||
+        program.uniform_values[uniform_location].type !=
+            fxgl::ShaderType::Sampler2D)
+        return false;
+
+    const float unit_value =
+        program.uniform_values[uniform_location].data[0];
+    if (!std::isfinite(unit_value) || unit_value < 0.0f ||
+        unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
+        std::floor(unit_value) != unit_value)
+        return false;
+
+    const size_t offset =
+        program.fragment_varying_offsets[load_coordinate.index];
+    if (offset + 2 > program.varying_scalar_count)
+        return false;
+
+    varying_offset = static_cast<int>(offset);
+    texture_unit = static_cast<int>(unit_value);
+    return true;
+}
+
 static void initialize_draw_invocation(
     DrawInvocation& invocation,
     const fxgl::LinkedProgramView& program)
@@ -925,6 +987,12 @@ static void initialize_draw_invocation(
     invocation.program = program;
     invocation.passthrough_varying_offset =
         find_passthrough_varying_offset(program);
+    invocation.texture_passthrough_varying_offset = -1;
+    invocation.texture_passthrough_unit = -1;
+    find_texture_passthrough(
+        program,
+        invocation.texture_passthrough_varying_offset,
+        invocation.texture_passthrough_unit);
 
     if (!program.fragment_shader)
         return;
@@ -1132,6 +1200,38 @@ static bool execute_fragment(
     const size_t varying_count = input.varying_count;
     DrawInvocation& invocation = *static_cast<DrawInvocation *>(user_data);
     const fxgl::ShaderModule& module = *invocation.program.fragment_shader;
+
+    // The glmark texture scene uses this exact pass-through form. Bypass
+    // per-fragment VM setup and interpretation while retaining the regular
+    // sampler implementation, including address modes and filtering.
+    if (invocation.texture_passthrough_varying_offset >= 0)
+    {
+        const size_t offset = static_cast<size_t>(
+            invocation.texture_passthrough_varying_offset);
+        if (!varyings || offset + 2 > varying_count)
+        {
+            invocation.fragment_failed = true;
+            return false;
+        }
+
+        const float dudx = input.varying_ddx
+            ? input.varying_ddx[offset] : 0.0f;
+        const float dvdx = input.varying_ddx
+            ? input.varying_ddx[offset + 1] : 0.0f;
+        const float dudy = input.varying_ddy
+            ? input.varying_ddy[offset] : 0.0f;
+        const float dvdy = input.varying_ddy
+            ? input.varying_ddy[offset + 1] : 0.0f;
+        if (!sample_bound_texture(
+                invocation.texture_passthrough_unit,
+                varyings[offset], varyings[offset + 1],
+                dudx, dvdx, dudy, dvdy, rgba, &invocation))
+        {
+            invocation.fragment_failed = true;
+            return false;
+        }
+        return true;
+    }
 
     // The common Gouraud/unlit fragment form is just
     // "gl_FragColor = varying_vec4;". Bypass per-fragment VM setup and
