@@ -21,12 +21,32 @@ enum class TextureAddressMode : uint8_t
     MirroredRepeat = 2
 };
 
+enum class TextureMinFilter : uint8_t
+{
+    Nearest = 0,
+    Linear = 1,
+    NearestMipmapNearest = 2,
+    LinearMipmapNearest = 3,
+    NearestMipmapLinear = 4,
+    LinearMipmapLinear = 5
+};
+
+struct TextureMipLevel
+{
+    const uint16_t *pixels;
+    uint16_t width;
+    uint16_t height;
+    uint16_t stride;
+};
+
 struct Texture2DView
 {
     const uint16_t* pixels;
     uint16_t width;
     uint16_t height;
     uint16_t stride; /* Pixels between the start of adjacent rows. */
+    const TextureMipLevel *mip_levels = nullptr; /* Levels 1..N-1. */
+    uint8_t mip_level_count = 0;
 };
 
 struct TextureSampler
@@ -34,6 +54,7 @@ struct TextureSampler
     TextureFilter filter;
     TextureAddressMode address_u;
     TextureAddressMode address_v;
+    TextureMinFilter min_filter = TextureMinFilter::Nearest;
 };
 
 /* Validate a non-owning RGB565 texture view and sampler configuration. */
@@ -48,6 +69,7 @@ uint16_t sample_texture(
     const Texture2DView& texture,
     int64_t u_16_16,
     int64_t v_16_16,
-    const TextureSampler& sampler);
+    const TextureSampler& sampler,
+    float lod = 0.0f);
 
 } // namespace gfx
