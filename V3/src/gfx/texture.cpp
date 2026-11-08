@@ -342,6 +342,18 @@ bool sample_texture_nearest_validated(
     if (static_cast<double>(x) > texel_u) --x;
     if (static_cast<double>(y) > texel_v) --y;
 
+    // Most GLES texture samples land inside the normalized image domain.
+    // In that case every supported address mode resolves to the same texel,
+    // so bypass clamp/repeat/mirror handling and its 64-bit remainder work.
+    if (x >= 0 && x < texture.width &&
+        y >= 0 && y < texture.height)
+    {
+        pixel = texture.pixels[
+            static_cast<size_t>(y) * texture.stride +
+            static_cast<size_t>(x)];
+        return true;
+    }
+
     const uint16_t addressed_x =
         address_index(x, texture.width, sampler.address_u);
     const uint16_t addressed_y =
