@@ -36,16 +36,16 @@ This is a partial OpenGL ES 2.0-style software renderer, not a conformant GLES i
 
 | Area | Present implementation | Major gaps |
 |---|---|---|
-| Context and surface | Single current context; caller-owned RGB565 color buffer and optional depth/stencil planes; GL-style error/state API | Multiple contexts, GLES framebuffer/renderbuffer objects, texture-backed render targets, completeness checks, broad format support |
+| Context and surface | Single current context; caller-owned RGB565 default surface; framebuffer/renderbuffer objects; RGB565 texture/renderbuffer color attachment, depth16 and stencil8 renderbuffers, completeness/dimension checks, glReadPixels | Multiple contexts, broader color/depth formats, multisample and the remaining specification edge cases |
 | Buffers and attributes | Bounded buffer objects, upload/sub-update, eight attribute slots, client-memory and VBO attribute fetch, constant attributes | Full GLES object/query semantics and complete type/edge-case coverage |
 | Draw calls | glDrawArrays and glDrawElements; points, line pairs/strips/loops, triangles/strips/fans are routed to software primitive paths; basic point/line clipping and scissor regression tests pass | Broader primitive edge-rule, clipping, interpolation and full specification conformance remain |
 | Vertex/primitive pipeline | Attribute decoding, vertex shader execution, six-plane homogeneous clipping, perspective divide, viewport transform, triangle coverage, perspective-correct varying interpolation | Full GLES clipping/precision behavior, polygon offset, provoking-vertex details and exhaustive raster rules |
-| Fragment pipeline | Fragment shader execution/discard, scissor, depth, stencil, blend equations/factors, color masks, RGB565 writes | Multisample behavior, alpha-capable targets, full blend/logic semantics and exact conformance |
+| Fragment pipeline | Fragment shader execution/discard, scissor, depth, stencil, blend equations/factors, color masks, RGB565 writes; framebuffer target resolution includes colorless depth/stencil targets | Multisample behavior, alpha-capable targets, full blend/logic semantics and exact conformance |
 | GLSL ES front end/VM | Bounded source, lexer/parser/typed bytecode VM; float, int, bool, vec2/3/4, mat4, sampler2D; attributes/uniforms/varyings; constructors, swizzles, arithmetic, selected vector functions, texture2D; compile diagnostics | No control flow or loops, user functions, arrays/structs, mat2/mat3, full built-in library, precision model, complete type conversion/overload rules, preprocessor |
-| Shader/program objects | Create/source/compile, attach/detach, link, use, delete-pending lifetime, attribute/uniform locations, selected setters and introspection | Full active-variable semantics, uniform arrays and all matrix/vector setters, relinking semantics, validation and object-query edge cases |
+| Shader/program objects | Create/source/compile, attach/detach, link, use, delete-pending lifetime, attribute/uniform locations, selected vector/matrix/sampler setters, active-variable and source/log queries | Full active-variable semantics, uniform arrays and all matrix/vector setters, relinking semantics, validation and object-query edge cases |
 | Textures | Two units; bounded RGB565 image/sub-image upload; unpack alignment; nearest/linear sampling; clamp/repeat/mirrored-repeat | RGBA/alpha/luminance formats, mipmaps, mipmap filters, texture completeness, full pixel-store behavior and more than two units |
 | Render state and queries | Common viewport/scissor/cull/depth/blend/stencil state and selected queries | Broad GLES state/query coverage, extension strings, complete limits and exact invalid-operation/enum rules |
-| Calculator integration | Renderer core is separated from Gint and uses caller-provided surfaces | Current feature-branch implementation has not yet been validated by an fxSDK/SH cross-build or on the fx-CG50 |
+| Calculator integration | Renderer core is separated from Gint; V3 binds caller-owned VRAM/depth surfaces and presents through dupdate() in the app runner | The new app has not yet been fxSDK/SH cross-built or run on the fx-CG50 |
 
 The triangle path is connected end-to-end: GL-style calls → linked vertex shader → vertex fetch → clip-space primitive → rasterizer → fragment shader → depth/stencil/blend → RGB565 surface. Basic point and line tests now cover point placement, homogeneous clipping and scissor-limited line coverage. These tests are useful regression checks, not a substitute for the GLES rasterization conformance suite.
 
@@ -53,7 +53,7 @@ The shader compiler is intentionally a strict subset. It rejects unsupported syn
 
 Current implementation budgets are eight vertex attributes, two texture units, eight varying scalar components, bounded shader/resource pools, a 128×128 texture dimension limit, and a 64 KiB aggregate RGB565 texture budget. These are provisional software limits, not hardware capability claims.
 
-The host suite has seven CTest targets: legacy triangle rasterizer, benchmark registry, texture sampler, GLES context/state, matrix/clipping, software triangle pipeline, and GLSL VM. The latest host workflow passed on commit 6ce57c39dcb23209171d7cffcf88e6fec90ba61f (GitHub Actions run 42427197519). Host test success alone does not establish calculator compatibility or Khronos conformance. No Khronos GLES conformance suite has been run.
+The host suite now has eight CTest targets: legacy triangle rasterizer, benchmark registry, texture sampler, GLES context/state, matrix/clipping, software triangle pipeline, GLSL VM, and fxGLMark2 scene/runner integration. An additional warnings-as-errors object target compiles the real app entry point against Gint/fxlibc stubs. Host CI success validates parser/battery behavior, the first shader-driven scene variants, and menu compilation, but does not establish calculator compatibility or Khronos conformance. No Khronos GLES conformance suite has been run.
 
 
 ## 3. Feature roadmap
@@ -135,26 +135,55 @@ Do not implement an independent legacy rasterizer.
 
 ## 4. glmark2-inspired workload mapping
 
-Reproduce workload categories and controlled comparisons, not glmark2 code or scores.
+The active app is fxGLMark2, a native fx-CG50 benchmark selector using the CasioMini3D GLES-style software renderer. It implements a strict first subset of upstream scene families; it is not the upstream Linux/EGL program and the scores are not directly comparable with desktop/mobile glmark2.
 
-| glmark2 family | fxmark software workload |
-|---|---|
-| build | Client arrays vs buffers; indexed vs non-indexed draws; interleaved vs separate attributes |
-| texture | Nearest, bilinear, mipmapped and address-mode comparisons |
-| shading | Flat, Gouraud, Blinn-Phong, Phong and cel-style shader workloads |
-| bump | Normal-map and height-map perturbation workloads |
-| effect2d | 3x3 and larger convolution kernels, blur and edge detection |
-| pulsar | Animated textured/untextured quads with optional lighting |
-| desktop | 2D sprite/window compositing, shadows and separable blur |
-| buffer | Static/stream/dynamic data and partial buffer updates |
-| terrain | Generated height field, normal generation, texture layers and post-processing |
-| shadow | Depth-map/shadow comparison workload if render-to-texture budget permits |
-| refract | Environment/refraction approximation with bounded texture sampling |
-| conditionals | Shader branch/control-flow cost at controlled branch depth |
-| function | Shader function-call and arithmetic complexity |
-| loop | Bounded shader loop and uniform-controlled loop comparisons |
+### 4.1 Selectable workloads today
 
-Every workload needs a written definition: geometry, vertex/index counts, texture dimensions and format, shader variant, render state, measured phase, warm-up, repetitions and known limitations.
+| Menu label | Upstream-style description | Current workload path |
+|---|---|---|
+| Clear baseline | `clear` | Clear active RGB565/depth surface and present |
+| Build / client arrays | `build:use-vbo=false` | Procedural 144-triangle UV sphere from client-memory arrays |
+| Build / VBO | `build:use-vbo=true` | Same sphere using a vertex buffer object |
+| Texture / nearest | `texture:texture-filter=nearest` | RGB565 texture, repeat addressing, nearest sampling |
+| Texture / linear | `texture:texture-filter=linear` | Same mesh/texture with bilinear sampling |
+| Shading / Gouraud | `shading:shading=gouraud` | Vertex normal transform, one diffuse light, interpolated color varying |
+
+The generated sphere is a compact deterministic workload specific to this port. It does not use glmark2's upstream model assets. Texture is also generated locally; no upstream texture assets are included.
+
+### 4.2 Test batteries and menu
+
+- **Quick Smoke (2):** VBO build and nearest texture.
+- **glmark2 Supported Default (5):** client arrays, VBO, nearest texture, linear texture and Gouraud shading. This is the currently ported subset of the upstream default workload categories, not the complete upstream default suite.
+- **All Implemented (6):** all five supported default-subset tests plus the clear baseline.
+
+The app opens the selection menu rather than running tests automatically. Up/Down moves the cursor, EXE/F6 toggles a test, F1/F2/F3 selects the named batteries, F4 lists pending scene families, F5 runs the selection, and MENU exits. The first menu selection is Quick Smoke but requires explicit F5 to start.
+
+The initial run profile is deliberately bounded at 2 warm-up frames, 20 measured frames and 2 repetitions per scene. It measures the full frame path including dupdate() call time. Result rows are appended to `/glmark2-fx-cg50-v1.csv`; the older fxmark hardware data file `/benchmarks-v2.csv` is not modified.
+
+### 4.3 Recognized but unported scene families
+
+| glmark2 family | Intended fx-CG50 workload | Status |
+|---|---|---|
+| build | Client arrays vs buffers; later indexed draws/interleaved attributes/model selection | Client/VBO subset implemented |
+| texture | Nearest, bilinear, mipmapped and address-mode comparisons | Nearest/linear on RGB565 implemented; mipmaps pending |
+| shading | Gouraud, Blinn-Phong, Phong and cel-style workloads | One-light Gouraud implemented; remaining variants pending |
+| buffer | Static/stream/dynamic data and partial updates | Pending |
+| bump | Normal-map and height-map perturbation | Pending |
+| effect2d | Convolution kernels, blur and edge detection | Pending |
+| pulsar | Animated textured/untextured quad workloads with lighting | Pending |
+| desktop | 2D sprite/window compositing, shadows and separable blur | Pending |
+| ideas | Animated shader effects | Pending |
+| jellyfish | Animated multi-object geometry | Pending |
+| terrain | Generated height field, normals and layered textures | Pending |
+| shadow | Depth-map/shadow comparison using render-to-texture | Pending |
+| refract | Environment/refraction approximation | Pending |
+| conditionals | Vertex/fragment shader branch stress | Pending |
+| function | Shader function-call and arithmetic complexity | Pending |
+| loop | Bounded shader loop comparisons | Pending |
+
+The library parser recognizes these scene names but returns an explicit not-implemented diagnostic. It never silently substitutes a different workload. The app's F4 page exposes this backlog to users.
+
+Every future workload needs a written definition: geometry, vertex/index counts, texture dimensions and format, shader variant, render state, measured phase, warm-up, repetitions and known limitations.
 
 ## 5. Test strategy
 
