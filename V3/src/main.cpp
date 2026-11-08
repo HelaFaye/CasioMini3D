@@ -509,8 +509,10 @@ static void show_renderer_microbench_results(
     dtext(8, 5, C_WHITE, "Renderer component microbenchmarks");
     for (size_t i = 0; i < MICROBENCH_COUNT; ++i)
     {
-        // Six stages fit with compact 3-line rows on the 224px display.
-        const int y = 16 + static_cast<int>(i) * 28;
+        // Use two lines per stage. The previous three-line rows overlapped
+        // because the final metric line was only four pixels from the next
+        // stage label on the 224px display.
+        const int y = 19 + static_cast<int>(i) * 28;
         if (!valid[i])
         {
             dtext(8, y, C_WHITE, "FAILED: component benchmark");
@@ -518,17 +520,23 @@ static void show_renderer_microbench_results(
         }
 
         char timing[72];
-        char throughput[56];
-        snprintf(timing, sizeof(timing), "min/max/mean %.2f/%.2f/%.2f us",
+        char throughput[24];
+        snprintf(timing, sizeof(timing),
+            "min/max/mean %.2f/%.2f/%.2f us",
             results[i].min_us_per_iteration,
             results[i].max_us_per_iteration,
             results[i].mean_us_per_iteration);
-        snprintf(throughput, sizeof(throughput), "%.1f operations/sec  %s",
-            results[i].operations_per_second,
-            logged[i] ? "CSV OK" : "CSV ERROR");
+        if (results[i].operations_per_second >= 1000.0)
+            snprintf(throughput, sizeof(throughput), "%.1fk/s",
+                results[i].operations_per_second / 1000.0);
+        else
+            snprintf(throughput, sizeof(throughput), "%.1f/s",
+                results[i].operations_per_second);
+
         dtext(8, y, C_WHITE, results[i].stage);
+        dtext(248, y, C_WHITE, throughput);
+        dtext(340, y, C_WHITE, logged[i] ? "CSV OK" : "CSV ERR");
         dtext(8, y + 12, C_WHITE, timing);
-        dtext(8, y + 24, C_WHITE, throughput);
     }
     dtext(8, 190, C_WHITE, "Saved to /glmark2-renderer-microbench-v1.csv");
     dtext(8, 207, C_WHITE, "EXE or MENU to return");
