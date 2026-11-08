@@ -76,9 +76,16 @@ struct RasterStats
     size_t written_fragments;
 };
 
+struct FragmentInput
+{
+    const float *varyings;
+    const float *varying_ddx;
+    const float *varying_ddy;
+    size_t varying_count;
+};
+
 using FragmentShader = bool (*)(
-    const float *varyings,
-    size_t varying_count,
+    const FragmentInput& input,
     float rgba[4],
     void *user_data);
 
