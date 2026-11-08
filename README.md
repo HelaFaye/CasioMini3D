@@ -19,7 +19,7 @@ The add-in starts in a benchmark selector; it no longer launches a benchmark aut
 | F1 | Select Quick Smoke (2 tests) |
 | F2 | Select glmark2 Supported Default (5 tests) |
 | F3 | Select All Implemented (6 tests) |
-| F4 | View unported glmark2 scene families |
+| F4 | Run renderer component microbenchmarks |
 | F5 | Run the selected tests |
 | MENU | Exit |
 
@@ -44,11 +44,26 @@ The first geometry workload uses a generated 144-triangle sphere, not glmark2's 
 - **glmark2 Supported Default:** client-array build, VBO build, nearest texture, linear texture, Gouraud shading.
 - **All Implemented:** all five of the supported default-subset tests plus clear baseline.
 
-The five-test glmark2 preset is an explicitly named subset, not the full upstream default battery. Additional scene families are listed by F4 and are disabled until implemented.
+The five-test glmark2 preset is an explicitly named subset, not the full upstream default battery. The remaining scene families are recognized by the parser but are disabled until implemented; see the scene catalog in [docs/fxglmark2-port.md](docs/fxglmark2-port.md).
 
 The current run configuration is 2 warm-up frames, 20 measured frames and 2 repetitions per test. Results report min/max/mean/median frame time and derived FPS. These are full-frame software-rendering measurements, including the Gint dupdate() call.
 
 Results append to `/glmark2-fx-cg50-v1.csv` in the calculator's filesystem. This logger is separate from the earlier `/benchmarks-v2.csv` fxmark hardware microbenchmark dataset, which is preserved and not overwritten.
+
+### Renderer component microbenchmarks
+
+Press **F4** from the main menu to measure four renderer components independently:
+
+| Stage | Timed operation |
+|---|---|
+| `texture-sample` | 16,384 nearest-filter RGB565 texture samples |
+| `triangle-raster` | 8 production GLES triangle draws into the calculator framebuffer |
+| `shader-vm` | 1,024 executions of a compiled GLSL ES fragment shader |
+| `framebuffer-present` | 8 calls to Gint `dupdate()` |
+
+Each stage performs an untimed warm-up, followed by three measured repetitions. The result screen and CSV report minimum, maximum and mean microseconds per operation, plus derived operations per second. Shader compilation/setup is outside the shader timing; the raster stage uses a minimal fixed-color fragment callback so it focuses on triangle rasterization. The presentation measurement is the duration of the `dupdate()` call, not physical LCD scanout completion.
+
+Microbenchmark rows append to the separate `/glmark2-renderer-microbench-v1.csv` file. These component timings are not directly comparable to the per-frame glmark2 results or to the earlier `/benchmarks-v2.csv` dataset.
 
 ## Graphics library status
 
@@ -104,7 +119,7 @@ The current host CI passing does not establish that the new add-in has been cros
 
 1. An fxSDK/SH cross-build for the fx-CG50.
 2. G3A inspection and installation on the calculator.
-3. Menu/key handling, all six workloads, and CSV creation/append/reopen testing.
+3. Menu/key handling, all six workloads, F4 component microbenchmarks, and both CSV files' creation/append/reopen testing.
 4. Memory high-water and run-time checks for each battery.
 5. Visual comparison against host reference output.
 6. Timing runs with calculator model, OS, clock state, build revision and configuration recorded.

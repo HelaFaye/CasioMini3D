@@ -24,7 +24,7 @@ The application starts in the benchmark selector. It does not automatically run 
 | F1 | Select Quick Smoke battery |
 | F2 | Select glmark2 Supported Default battery |
 | F3 | Select All Implemented battery |
-| F4 | Show recognized but unported scene families |
+| F4 | Run renderer component microbenchmarks |
 | F5 | Run the selected benchmarks |
 | MENU | Exit the add-in |
 
@@ -60,7 +60,7 @@ The library catalog recognizes these upstream scene families:
 - Implemented: `clear`, `build`, `texture`, `shading`.
 - Pending: `buffer`, `bump`, `effect2d`, `pulsar`, `desktop`, `ideas`, `jellyfish`, `terrain`, `shadow`, `refract`, `conditionals`, `function`, and `loop`.
 
-The pending page lists those families in the app. The parser returns a not-implemented diagnostic for them; there are no no-op or substitute results.
+The parser returns a not-implemented diagnostic for pending families; there are no no-op or substitute results. The catalog remains documented here rather than occupying a menu page.
 
 ## Measurement configuration
 
@@ -75,6 +75,25 @@ The first on-device runner uses a bounded configuration for each workload:
 The short first-pass configuration is intentional: software rasterization on the calculator must be profiled before using long default runs. These timings include the full frame path and the dupdate() call, not just triangle rasterization or physical LCD scanout.
 
 Results are appended in the Gint OS world to `/glmark2-fx-cg50-v1.csv`.
+
+## Renderer component microbenchmarks
+
+F4 runs a second, component-level suite against the same production renderer code. It reports:
+
+| Stage | Iterations per measured repeat | Timed work |
+|---|---:|---|
+| `texture-sample` | 16,384 | Validated nearest-filter RGB565 texture samples from a generated 32×32 texture |
+| `triangle-raster` | 8 | Production GLES triangle draws into the active 396×224 framebuffer using a fixed-color fragment callback |
+| `shader-vm` | 1,024 | Executions of a previously compiled GLSL ES fragment shader |
+| `framebuffer-present` | 8 | Gint `dupdate()` calls |
+
+Each stage runs one untimed warm-up operation before three measured repetitions. The result screen and CSV contain min/max/mean microseconds per operation and derived operations per second. Shader compilation and benchmark setup are excluded from the shader execution timing. The raster test does not execute the GLSL VM or texture sampler, so it isolates triangle rasterization more directly than a complete scene.
+
+The component results append separately to `/glmark2-renderer-microbench-v1.csv` with schema:
+
+`schema_version,stage,iterations,min_us_per_iteration,max_us_per_iteration,mean_us_per_iteration,operations_per_second`
+
+The `framebuffer-present` figure measures the time spent inside `dupdate()`; it does not measure completion of the LCD scanout. These microbenchmarks are component diagnostics, not glmark2 scene scores, and should not be compared numerically with the per-frame CSV or earlier `/benchmarks-v2.csv` results. The target build and physical calculator timings are still required to establish SH-4A performance.
 
 Schema v1 columns are:
 
