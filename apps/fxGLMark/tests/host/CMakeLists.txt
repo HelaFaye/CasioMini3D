@@ -95,3 +95,15 @@ target_compile_options(fxglmark_main_compile PRIVATE -Wall -Wextra -Werror)
 target_include_directories(fxglmark_main_compile PRIVATE
     ${HOST_STUBS} ${APP_SRC} ${FXOGL_INCLUDE} ${FXOGL_SRC}
 )
+
+# Exercise the install/export interface from a separate CMake project. This
+# catches missing installed headers, package metadata and exported link names.
+add_test(
+    NAME fxogl_installed_package_consumer
+    COMMAND ${CMAKE_COMMAND}
+        -DFXOGL_INSTALL_BUILD_DIR=${CMAKE_BINARY_DIR}
+        -DFXOGL_PACKAGE_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/package-prefix
+        -DFXOGL_PACKAGE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/package_consumer
+        -DFXOGL_PACKAGE_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}/package-consumer-build
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_installed_package.cmake
+)
