@@ -10,6 +10,9 @@ constexpr size_t GLSL_MAX_ATTRIBUTES = 8;
 constexpr size_t GLSL_MAX_UNIFORMS = 16;
 constexpr size_t GLSL_MAX_VARYINGS = 8;
 constexpr size_t GLSL_MAX_LOCALS = 8;
+constexpr size_t GLSL_MAX_FUNCTIONS = 8;
+constexpr size_t GLSL_MAX_PARAMETERS = 4;
+constexpr size_t GLSL_MAX_CALL_DEPTH = 4;
 constexpr size_t GLSL_MAX_INSTRUCTIONS = 128;
 constexpr size_t GLSL_MAX_EXECUTION_STEPS = 1024;
 constexpr size_t GLSL_MAX_STACK = 32;
@@ -57,6 +60,19 @@ struct ShaderVariable
     uint8_t index;
 };
 
+struct ShaderFunction
+{
+    char name[GLSL_NAME_BYTES];
+    ShaderType return_type; /* Invalid denotes void. */
+    ShaderVariable parameters[GLSL_MAX_PARAMETERS];
+    ShaderVariable locals[GLSL_MAX_LOCALS];
+    size_t parameter_count;
+    size_t local_count;
+    size_t entry_pc;
+    bool defined;
+    bool has_return;
+};
+
 enum class ShaderOp : uint8_t
 {
     PushFloat,
@@ -95,6 +111,8 @@ enum class ShaderOp : uint8_t
     LogicalNot,
     BranchIfFalse,
     Jump,
+    Call,
+    Return,
     Texture2D
 };
 
@@ -114,11 +132,15 @@ struct ShaderModule
     ShaderVariable attributes[GLSL_MAX_ATTRIBUTES];
     ShaderVariable uniforms[GLSL_MAX_UNIFORMS];
     ShaderVariable varyings[GLSL_MAX_VARYINGS];
-    ShaderVariable locals[GLSL_MAX_LOCALS];
+    ShaderVariable locals[GLSL_MAX_LOCALS]; /* Main-function locals. */
+    ShaderFunction functions[GLSL_MAX_FUNCTIONS];
     size_t attribute_count;
     size_t uniform_count;
     size_t varying_count;
     size_t local_count;
+    size_t function_count;
+    uint8_t main_function;
+    bool has_main;
     ShaderInstruction instructions[GLSL_MAX_INSTRUCTIONS];
     size_t instruction_count;
     bool compiled;
@@ -148,11 +170,13 @@ using TextureSampleFunction = bool (*)(
     float rgba[4],
     void *user_data);
 
-/* Compile the explicitly documented GLSL ES 1.00 subset. The parser supports
-   if/else, for/while loops, and loop-local break/continue jumps. Arrays,
-   structs, user-defined functions, do-while, switch, preprocessor directives
-   and precision qualifiers other than ordinary precision statements are
-   unsupported and produce a diagnostic in module.info_log. */
+/* Compile the explicitly documented GLSL ES 1.00 subset. The bounded parser
+   supports single-definition user functions declared before their callers,
+   up to four typed value parameters, typed returns, and bounded nested calls.
+   It also supports if/else, for/while loops, and loop-local break/continue.
+   Function prototypes, overloads, arrays, structs, out/inout parameters,
+   do-while, switch, preprocessor directives and precision qualifiers other
+   than ordinary precision statements remain unsupported. */
 bool compile_glsl(
     ShaderStage stage,
     const char *source,
