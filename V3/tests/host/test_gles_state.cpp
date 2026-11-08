@@ -16,7 +16,7 @@ struct TestFragmentColor
     float rgba[4];
 };
 
-bool test_fragment_shader(const float *, size_t, float rgba[4], void *user_data)
+bool test_fragment_shader(const fxgl::FragmentInput&, float rgba[4], void *user_data)
 {
     const TestFragmentColor& color =
         *static_cast<const TestFragmentColor *>(user_data);
