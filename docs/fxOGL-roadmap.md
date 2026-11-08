@@ -72,11 +72,14 @@ Recent measured optimizations include:
   the normal sampler callback.
 
 The latest user-supplied physical fx-CG50 run exercised the integrated
-GLSL user-function Gouraud and textured vertex shaders. The 24-frame VBO
-build scene averaged 3.194088 seconds; the paired nearest-filter texture
-scene averaged 3.155771 seconds (144 triangles per frame). These device
-measurements are configuration-specific and not directly comparable to
-desktop/mobile glmark2.
+GLSL user-function prototype/forward-definition Gouraud and textured vertex
+shaders through fxGLMark Quick Smoke. The 24-frame VBO build scene averaged
+3.198292 seconds; the paired nearest-filter texture scene averaged 3.167104
+seconds (144 triangles per frame). Relative to the immediately preceding
+hardware run, the scene means differed by +0.13% and +0.36%, respectively;
+this is treated as run-to-run variation, not a performance claim. These
+device measurements are configuration-specific and not directly comparable
+to desktop/mobile glmark2.
 
 ## Priorities
 
