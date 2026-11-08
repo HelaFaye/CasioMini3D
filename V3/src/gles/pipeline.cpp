@@ -567,7 +567,7 @@ static bool rasterize_one(
                 w1 * vertices[1].z_over_w +
                 w2 * vertices[2].z_over_w;
 
-            if (varying_count != 0)
+            if (state.varying_derivatives && varying_count != 0)
             {
                 if (interpolate_varyings_at(vertices, area, px + 1.0f, py,
                                              varying_count, adjacent))
