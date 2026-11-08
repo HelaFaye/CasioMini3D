@@ -1353,7 +1353,6 @@ void test_integer_and_boolean_vector_uniform_api()
     glUseProgram(program);
 
     const GLint integer_values[2] = {4, -2};
-    const GLint boolean_values[3] = {0, 9, -1};
     glUniform2iv(ivec_location, 1, integer_values);
     glUniform3i(bvec_location, 0, 9, -1);
 
