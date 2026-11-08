@@ -2205,9 +2205,11 @@ bool execute_glsl(
                         if (offset + count > wanted)
                             return false;
                         for (size_t i = 0; i < count; ++i)
+                        {
                             result.data[offset] =
                                 convert_component(instruction.type, args[arg].data[i]);
                             ++offset;
+                        }
                     }
                     if (offset != wanted)
                         return false;
@@ -2216,8 +2218,10 @@ bool execute_glsl(
                     is_int_vector(instruction.type) ||
                     instruction.type == ShaderType::Bool ||
                     is_bool_vector(instruction.type))
+                {
                     for (size_t i = 0; i < component_count(result.type); ++i)
                         result.data[i] = convert_component(instruction.type, result.data[i]);
+                }
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
