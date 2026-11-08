@@ -196,6 +196,8 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_FLOAT_VEC2 0x8B50
 #define GL_FLOAT_VEC3 0x8B51
 #define GL_FLOAT_VEC4 0x8B52
+#define GL_FLOAT_MAT2 0x8B5A
+#define GL_FLOAT_MAT3 0x8B5B
 #define GL_FLOAT_MAT4 0x8B5C
 #define GL_SAMPLER_2D 0x8B5E
 
@@ -291,6 +293,10 @@ void glUniform2f(GLint location, GLfloat v0, GLfloat v1);
 void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 void glUniform1i(GLint location, GLint v0);
+void glUniformMatrix2fv(GLint location, GLsizei count,
+    GLboolean transpose, const GLfloat *value);
+void glUniformMatrix3fv(GLint location, GLsizei count,
+    GLboolean transpose, const GLfloat *value);
 void glUniformMatrix4fv(GLint location, GLsizei count,
     GLboolean transpose, const GLfloat *value);
 
