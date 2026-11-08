@@ -18,6 +18,25 @@ void dupdate(void)
 
 namespace
 {
+struct PresentCallbackState
+{
+    uint32_t calls;
+    uint32_t cancel_at;
+};
+
+static bool test_progress_callback(
+    uint32_t frame_index,
+    uint32_t total_frames,
+    void *user_data)
+{
+    PresentCallbackState *state =
+        static_cast<PresentCallbackState *>(user_data);
+    assert(total_frames == 7);
+    ++state->calls;
+    dupdate();
+    return frame_index < state->cancel_at;
+}
+
 static uint16_t color[396 * 224];
 static uint16_t depth[396 * 224];
 
@@ -178,6 +197,15 @@ static void test_benchmark_runner_and_timing()
 
     config.repeat_count = 0;
     assert(!run_benchmark(request, config, result, error, sizeof(error)));
+
+    // The caller can stop a long battery and receives an explicit diagnostic.
+    config = {1, 3, 2};
+    PresentCallbackState callback_state = {0, 0};
+    assert(!run_benchmark(request, config, result, error, sizeof(error),
+        test_progress_callback, &callback_state));
+    assert(callback_state.calls == 1);
+    assert(std::strcmp(error, "benchmark cancelled by user") == 0);
+
     fxglReleaseCurrent();
 }
 } // namespace
