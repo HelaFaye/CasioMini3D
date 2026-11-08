@@ -362,7 +362,19 @@ void test_perspective_correct_screen_space_varying_gradients()
     triangle[2].varying[0] = 0.0f;
     triangle[2].varying[1] = 1.0f;
 
+    // Default renderer state does not pay for derivatives when a fragment
+    // program has no implicit texture sampling requirement.
     GradientCapture capture = {};
+    assert(fxgl::draw_triangle(surface, state, triangle, 2,
+        capture_gradients, &capture));
+    assert(capture.calls > 0);
+    assert(capture.dudx == 0.0f && capture.dvdx == 0.0f);
+    assert(capture.dudy == 0.0f && capture.dvdy == 0.0f);
+
+    // Derivatives remain available to shader paths which explicitly request
+    // them (e.g. mipmapped/LOD texture sampling).
+    state.varying_derivatives = true;
+    capture = {};
     assert(fxgl::draw_triangle(surface, state, triangle, 2,
         capture_gradients, &capture));
     assert(capture.calls > 0);
