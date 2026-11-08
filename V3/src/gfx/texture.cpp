@@ -325,9 +325,29 @@ bool sample_texture_nearest_validated(
         !std::isfinite(u) || !std::isfinite(v))
         return false;
 
-    // The original GLES conversion bounded the 16.16 texel coordinate to
-    // signed 64-bit before sampling. The same bound keeps this direct floor
-    // conversion defined while avoiding the fixed-point round trip.
+    // Ordinary in-range fractional coordinates are common in GLES draws.
+    // Their float products already identify the correct texel unless rounding
+    // lands exactly on an integer boundary. Treat that ambiguous case as a
+    // miss and let the precise double/fixed-point-compatible path below handle
+    // it. This keeps double and 64-bit conversion off the common path.
+    const float fast_u = u * static_cast<float>(texture.width);
+    const float fast_v = v * static_cast<float>(texture.height);
+    if (fast_u >= 0.0f && fast_u < static_cast<float>(texture.width) &&
+        fast_v >= 0.0f && fast_v < static_cast<float>(texture.height))
+    {
+        const uint16_t fast_x = static_cast<uint16_t>(fast_u);
+        const uint16_t fast_y = static_cast<uint16_t>(fast_v);
+        if (fast_u != static_cast<float>(fast_x) &&
+            fast_v != static_cast<float>(fast_y))
+        {
+            pixel = texture.pixels[
+                static_cast<size_t>(fast_y) * texture.stride + fast_x];
+            return true;
+        }
+    }
+
+    // Preserve the full-range behavior and exact boundary decisions of the
+    // original GLES conversion for negative, out-of-range or ambiguous values.
     constexpr double coordinate_limit = 140737488355328.0; // 2^47
     const double texel_u = static_cast<double>(u) * texture.width;
     const double texel_v = static_cast<double>(v) * texture.height;
@@ -342,9 +362,7 @@ bool sample_texture_nearest_validated(
     if (static_cast<double>(x) > texel_u) --x;
     if (static_cast<double>(y) > texel_v) --y;
 
-    // Most GLES texture samples land inside the normalized image domain.
-    // In that case every supported address mode resolves to the same texel,
-    // so bypass clamp/repeat/mirror handling and its 64-bit remainder work.
+    // In-range results need no clamp/repeat/mirror address arithmetic.
     if (x >= 0 && x < texture.width &&
         y >= 0 && y < texture.height)
     {
