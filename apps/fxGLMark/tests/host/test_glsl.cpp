@@ -522,6 +522,72 @@ static void test_user_function_prototypes_and_forward_definitions()
     assert(near(nested_forward_runtime.fragment_color.data[0], 7.0f));
 }
 
+static void test_user_function_overloads_use_exact_argument_types()
+{
+    static const char source[] =
+        "float measure(float value);\n"
+        "vec2 measure(vec2 value);\n"
+        "float measure(float input) { return input * 10.0; }\n"
+        "vec2 measure(vec2 input) { return input * 2.0; }\n"
+        "void main() {\n"
+        "  float scalar_result = measure(1.5);\n"
+        "  vec2 vector_result = measure(vec2(2.0, 3.0));\n"
+        "  gl_FragColor = vec4(scalar_result, vector_result.x, vector_result.y, 1.0);\n"
+        "}\n";
+
+    ShaderModule module = {};
+    const bool compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, source, module);
+    if (!compiled)
+        std::fprintf(stderr, "overload diagnostic: %s\n", module.info_log);
+    assert(compiled);
+    assert(module.function_count == 3);
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 15.0f));
+    assert(near(runtime.fragment_color.data[1], 4.0f));
+    assert(near(runtime.fragment_color.data[2], 6.0f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+
+    // Definitions may be encountered before prototypes; matching uses only
+    // name and parameter types, not parameter identifiers or declaration order.
+    static const char mixed_order_source[] =
+        "float select_value(float x) { return x + 1.0; }\n"
+        "vec2 select_value(vec2 x) { return x + vec2(1.0); }\n"
+        "float select_value(float);\n"
+        "vec2 select_value(vec2);\n"
+        "void main() { gl_FragColor = vec4(select_value(2.0), select_value(vec2(3.0)).x, 0.0, 1.0); }\n";
+    ShaderModule mixed_order_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, mixed_order_source, mixed_order_module));
+    ShaderRuntime mixed_order_runtime = {};
+    assert(fxgl::execute_glsl(mixed_order_module, mixed_order_runtime));
+    assert(near(mixed_order_runtime.fragment_color.data[0], 3.0f));
+    assert(near(mixed_order_runtime.fragment_color.data[1], 4.0f));
+}
+
+static void test_user_function_overload_errors()
+{
+    const char *invalid_sources[] = {
+        // The return type cannot distinguish two overloads.
+        "float convert_value(float x); vec2 convert_value(float x); void main() { gl_FragColor = vec4(1.0); }",
+        // Same signature may be declared repeatedly but defined only once.
+        "float convert_value(float x) { return x; } float convert_value(float x) { return x + 1.0; } void main() { gl_FragColor = vec4(1.0); }",
+        // No implicit int-to-float promotion is used for user overloads.
+        "float convert_value(float x) { return x; } void main() { gl_FragColor = vec4(convert_value(1)); }",
+        // Every overload needs a definition, even if a different overload is defined.
+        "float convert_value(float x); vec2 convert_value(vec2 x) { return x; } void main() { gl_FragColor = vec4(1.0); }"
+    };
+
+    for (const char *source : invalid_sources)
+    {
+        ShaderModule module = {};
+        assert(!fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+        assert(!module.compiled);
+        assert(module.info_log[0] != '\0');
+    }
+}
+
 static void test_user_function_call_depth_is_bounded()
 {
     static const char source[] =
@@ -679,7 +745,6 @@ static void test_compiler_rejects_unsupported_or_invalid_source()
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
         "void main() { gl_Position = vec4(1.0); }",
         "float missing(float value); void main() { gl_FragColor = vec4(1.0); }",
-        "float helper(float value); float helper(vec2 value) { return 1.0; } void main() { gl_FragColor = vec4(1.0); }",
         "float helper(float value); float helper(float input) { return input; } float helper(float other) { return other; } void main() { gl_FragColor = vec4(1.0); }",
         "void main() { gl_FragColor = vec4(later(1.0)); } float later(float value) { return value; }",
         "float helper(float value) { return value; } void main() { gl_FragColor = vec4(helper(vec2(1.0))); }",
@@ -786,6 +851,8 @@ int main()
     test_loop_break_continue_and_nested_targets();
     test_user_defined_functions_and_value_returns();
     test_user_function_prototypes_and_forward_definitions();
+    test_user_function_overloads_use_exact_argument_types();
+    test_user_function_overload_errors();
     test_user_function_call_depth_is_bounded();
     test_non_terminating_shader_hits_execution_budget();
     test_essl_math_and_geometric_builtins();

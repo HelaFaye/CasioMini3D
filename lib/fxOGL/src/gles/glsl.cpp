@@ -752,12 +752,67 @@ private:
         return emit(instruction);
     }
 
-    int find_function(const char *name) const
+    int find_function(
+        const char *name,
+        const ShaderVariable *parameters,
+        size_t parameter_count) const
+    {
+        for (size_t i = 0; i < module_.function_count; ++i)
+        {
+            const ShaderFunction& function = module_.functions[i];
+            if (std::strcmp(function.name, name) != 0 ||
+                function.parameter_count != parameter_count)
+                continue;
+
+            bool matches = true;
+            for (size_t parameter = 0; parameter < parameter_count; ++parameter)
+            {
+                if (function.parameters[parameter].type !=
+                    parameters[parameter].type)
+                {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    int find_function(
+        const char *name,
+        const ShaderType *argument_types,
+        size_t argument_count) const
+    {
+        for (size_t i = 0; i < module_.function_count; ++i)
+        {
+            const ShaderFunction& function = module_.functions[i];
+            if (std::strcmp(function.name, name) != 0 ||
+                function.parameter_count != argument_count)
+                continue;
+
+            bool matches = true;
+            for (size_t argument = 0; argument < argument_count; ++argument)
+            {
+                if (function.parameters[argument].type != argument_types[argument])
+                {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    bool has_function_name(const char *name) const
     {
         for (size_t i = 0; i < module_.function_count; ++i)
             if (std::strcmp(module_.functions[i].name, name) == 0)
-                return static_cast<int>(i);
-        return -1;
+                return true;
+        return false;
     }
 
     bool add_function_local(
@@ -880,7 +935,9 @@ private:
             return;
         }
 
-        int existing_index = find_function(name);
+        // GLSL ES overload identity is the function name plus the exact
+        // parameter-type sequence. Return type does not participate.
+        int existing_index = find_function(name, parameters, parameter_count);
         size_t function_index = 0;
         if (existing_index >= 0)
         {
@@ -892,7 +949,7 @@ private:
                 matches = existing.parameters[i].type == parameters[i].type;
             if (!matches)
             {
-                fail("conflicting function declaration or unsupported overload");
+                fail("function declaration conflicts with an existing signature");
                 return;
             }
             if (is_prototype)
@@ -2156,31 +2213,21 @@ private:
             return arguments[0];
         }
 
-        const int function_index = find_function(name);
+        const int function_index = find_function(name, arguments, argument_count);
         if (function_index >= 0)
         {
             const ShaderFunction& function =
                 module_.functions[static_cast<size_t>(function_index)];
-            if (argument_count != function.parameter_count)
-            {
-                fail("user function argument count mismatch");
-                return ShaderType::Invalid;
-            }
-            for (size_t i = 0; i < argument_count; ++i)
-            {
-                if (arguments[i] != function.parameters[i].type)
-                {
-                    fail("user function argument type mismatch");
-                    return ShaderType::Invalid;
-                }
-            }
             emit_simple(ShaderOp::Call, function.return_type,
                         static_cast<uint8_t>(function_index),
                         static_cast<uint8_t>(argument_count));
             return function.return_type;
         }
 
-        fail("unsupported built-in or undeclared user function");
+        if (has_function_name(name))
+            fail("no exact matching user-defined function overload");
+        else
+            fail("unsupported built-in or undeclared user function");
         return ShaderType::Invalid;
     }
 
