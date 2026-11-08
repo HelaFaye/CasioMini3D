@@ -1,6 +1,9 @@
 #include "texture.hpp"
 
 #include <stddef.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 
 namespace gfx
 {
@@ -98,10 +101,26 @@ static uint16_t interpolate_rgb565(uint16_t a, uint16_t b, uint32_t t)
 
 bool texture_valid(const Texture2DView& texture)
 {
-    return texture.pixels != nullptr &&
-           texture.width > 0 &&
-           texture.height > 0 &&
-           texture.stride >= texture.width;
+    if (!texture.pixels || texture.width == 0 || texture.height == 0 ||
+        texture.stride < texture.width ||
+        texture.mip_level_count > 7 ||
+        (texture.mip_level_count != 0 && !texture.mip_levels))
+        return false;
+
+    uint16_t expected_width = texture.width;
+    uint16_t expected_height = texture.height;
+    for (size_t i = 0; i < texture.mip_level_count; ++i)
+    {
+        expected_width = expected_width > 1
+            ? static_cast<uint16_t>(expected_width / 2) : 1;
+        expected_height = expected_height > 1
+            ? static_cast<uint16_t>(expected_height / 2) : 1;
+        const TextureMipLevel& level = texture.mip_levels[i];
+        if (!level.pixels || level.width != expected_width ||
+            level.height != expected_height || level.stride < level.width)
+            return false;
+    }
+    return true;
 }
 
 bool sampler_valid(const TextureSampler& sampler)
@@ -117,34 +136,138 @@ bool sampler_valid(const TextureSampler& sampler)
         sampler.address_v == TextureAddressMode::Clamp ||
         sampler.address_v == TextureAddressMode::Repeat ||
         sampler.address_v == TextureAddressMode::MirroredRepeat;
-    return filter_ok && address_u_ok && address_v_ok;
+    const bool min_filter_ok =
+        sampler.min_filter == TextureMinFilter::Nearest ||
+        sampler.min_filter == TextureMinFilter::Linear ||
+        sampler.min_filter == TextureMinFilter::NearestMipmapNearest ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapNearest ||
+        sampler.min_filter == TextureMinFilter::NearestMipmapLinear ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapLinear;
+    return filter_ok && address_u_ok && address_v_ok && min_filter_ok;
+}
+
+static Texture2DView level_view(
+    const Texture2DView& texture,
+    size_t level)
+{
+    if (level == 0)
+        return {texture.pixels, texture.width, texture.height,
+                texture.stride, nullptr, 0};
+    const TextureMipLevel& mip = texture.mip_levels[level - 1];
+    return {mip.pixels, mip.width, mip.height, mip.stride, nullptr, 0};
+}
+
+static int64_t scale_coordinate(
+    int64_t coordinate,
+    uint16_t base_size,
+    uint16_t level_size)
+{
+    const int64_t divisor = base_size;
+    const int64_t quotient = coordinate / divisor;
+    const int64_t remainder = coordinate % divisor;
+    if (quotient > 0 &&
+        quotient > INT64_MAX / static_cast<int64_t>(level_size))
+        return INT64_MAX;
+    if (quotient < 0 &&
+        quotient < INT64_MIN / static_cast<int64_t>(level_size))
+        return INT64_MIN;
+    return quotient * level_size +
+        remainder * static_cast<int64_t>(level_size) / divisor;
+}
+
+static uint16_t sample_level(
+    const Texture2DView& level,
+    int64_t u,
+    int64_t v,
+    TextureFilter filter,
+    TextureAddressMode address_u,
+    TextureAddressMode address_v)
+{
+    TextureSampler sampler = {filter, address_u, address_v};
+    if (filter == TextureFilter::Nearest)
+    {
+        const FixedCoordinate fixed_u = split_coordinate(u);
+        const FixedCoordinate fixed_v = split_coordinate(v);
+        return texel(level, fixed_u.whole, fixed_v.whole, sampler);
+    }
+
+    const FixedCoordinate fixed_u = split_coordinate(u);
+    const FixedCoordinate fixed_v = split_coordinate(v);
+    const uint16_t top_left = texel(level, fixed_u.whole, fixed_v.whole, sampler);
+    const uint16_t top_right = texel(level, fixed_u.whole + 1, fixed_v.whole, sampler);
+    const uint16_t bottom_left = texel(level, fixed_u.whole, fixed_v.whole + 1, sampler);
+    const uint16_t bottom_right = texel(
+        level, fixed_u.whole + 1, fixed_v.whole + 1, sampler);
+    const uint16_t top = interpolate_rgb565(
+        top_left, top_right, fixed_u.fraction);
+    const uint16_t bottom = interpolate_rgb565(
+        bottom_left, bottom_right, fixed_u.fraction);
+    return interpolate_rgb565(top, bottom, fixed_v.fraction);
 }
 
 uint16_t sample_texture(
     const Texture2DView& texture,
     int64_t u_16_16,
     int64_t v_16_16,
-    const TextureSampler& sampler)
+    const TextureSampler& sampler,
+    float lod)
 {
-    if (!texture_valid(texture) || !sampler_valid(sampler))
+    if (!texture_valid(texture) || !sampler_valid(sampler) ||
+        !std::isfinite(lod))
         return 0;
 
-    const FixedCoordinate u = split_coordinate(u_16_16);
-    const FixedCoordinate v = split_coordinate(v_16_16);
+    if (lod <= 0.0f)
+        return sample_level(level_view(texture, 0), u_16_16, v_16_16,
+            sampler.filter, sampler.address_u, sampler.address_v);
 
-    if (sampler.filter == TextureFilter::Nearest)
-        return texel(texture, u.whole, v.whole, sampler);
+    const bool linear_texel =
+        sampler.min_filter == TextureMinFilter::Linear ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapNearest ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapLinear;
+    const bool mip_linear =
+        sampler.min_filter == TextureMinFilter::NearestMipmapLinear ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapLinear;
+    const bool uses_mipmaps =
+        sampler.min_filter == TextureMinFilter::NearestMipmapNearest ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapNearest ||
+        sampler.min_filter == TextureMinFilter::NearestMipmapLinear ||
+        sampler.min_filter == TextureMinFilter::LinearMipmapLinear;
 
-    const uint16_t top_left = texel(texture, u.whole, v.whole, sampler);
-    const uint16_t top_right = texel(texture, u.whole + 1, v.whole, sampler);
-    const uint16_t bottom_left = texel(texture, u.whole, v.whole + 1, sampler);
-    const uint16_t bottom_right = texel(
-        texture, u.whole + 1, v.whole + 1, sampler);
+    if (!uses_mipmaps || texture.mip_level_count == 0)
+        return sample_level(level_view(texture, 0), u_16_16, v_16_16,
+            linear_texel ? TextureFilter::Bilinear : TextureFilter::Nearest,
+            sampler.address_u, sampler.address_v);
 
-    const uint16_t top = interpolate_rgb565(top_left, top_right, u.fraction);
-    const uint16_t bottom =
-        interpolate_rgb565(bottom_left, bottom_right, u.fraction);
-    return interpolate_rgb565(top, bottom, v.fraction);
+    const float maximum_lod = static_cast<float>(texture.mip_level_count);
+    const float clamped_lod = std::max(0.0f, std::min(lod, maximum_lod));
+    const size_t lower_level = static_cast<size_t>(std::floor(clamped_lod));
+    const size_t selected_level = std::min(
+        lower_level, static_cast<size_t>(texture.mip_level_count));
+    const TextureFilter filter = linear_texel
+        ? TextureFilter::Bilinear : TextureFilter::Nearest;
+
+    const Texture2DView lower = level_view(texture, selected_level);
+    const int64_t lower_u = scale_coordinate(
+        u_16_16, texture.width, lower.width);
+    const int64_t lower_v = scale_coordinate(
+        v_16_16, texture.height, lower.height);
+    const uint16_t first = sample_level(lower, lower_u, lower_v, filter,
+        sampler.address_u, sampler.address_v);
+
+    if (!mip_linear || selected_level >= texture.mip_level_count)
+        return first;
+
+    const size_t upper_level = selected_level + 1;
+    const Texture2DView upper = level_view(texture, upper_level);
+    const int64_t upper_u = scale_coordinate(
+        u_16_16, texture.width, upper.width);
+    const int64_t upper_v = scale_coordinate(
+        v_16_16, texture.height, upper.height);
+    const uint16_t second = sample_level(upper, upper_u, upper_v, filter,
+        sampler.address_u, sampler.address_v);
+    const uint32_t fraction = static_cast<uint32_t>(
+        (clamped_lod - static_cast<float>(selected_level)) * 65536.0f + 0.5f);
+    return interpolate_rgb565(first, second, std::min(fraction, 65536u));
 }
 
 } // namespace gfx
