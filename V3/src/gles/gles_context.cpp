@@ -167,6 +167,8 @@ struct Context
 };
 
 Context g_context;
+static gfx::TextureMipLevel g_texture_mip_views[
+    FXGL_MAX_TEXTURES][FXGL_MAX_TEXTURE_LEVELS - 1] = {};
 
 static void set_error(GLenum error)
 {
@@ -920,11 +922,27 @@ static bool sample_bound_texture(
     if (!fxgl::get_texture_binding(static_cast<size_t>(unit), texture, sampler))
         return false;
 
-    /* Shader coordinates are normalized. For bilinear filtering, move the
-       origin to texel centers; nearest filtering floors u*dimension. */
+    const float rho_x = std::sqrt(
+        (dudx * texture.width) * (dudx * texture.width) +
+        (dvdx * texture.height) * (dvdx * texture.height));
+    const float rho_y = std::sqrt(
+        (dudy * texture.width) * (dudy * texture.width) +
+        (dvdy * texture.height) * (dvdy * texture.height));
+    const float rho = std::max(rho_x, rho_y);
+    const float lod = rho > 0.0f ? std::log2(rho) : 0.0f;
+
+    const bool minifying = lod > 0.0f;
+    const bool linear_filter = minifying
+        ? (sampler.min_filter == gfx::TextureMinFilter::Linear ||
+           sampler.min_filter == gfx::TextureMinFilter::LinearMipmapNearest ||
+           sampler.min_filter == gfx::TextureMinFilter::LinearMipmapLinear)
+        : sampler.filter == gfx::TextureFilter::Bilinear;
+
+    /* Normalized GLES coordinates are converted to texel-space coordinates.
+       Linear filtering is centered half a texel between neighboring samples. */
     double texel_u = static_cast<double>(u) * texture.width;
     double texel_v = static_cast<double>(v) * texture.height;
-    if (sampler.filter == gfx::TextureFilter::Bilinear)
+    if (linear_filter)
     {
         texel_u -= 0.5;
         texel_v -= 0.5;
@@ -945,7 +963,8 @@ static bool sample_bound_texture(
         texture,
         static_cast<int64_t>(scaled_u),
         static_cast<int64_t>(scaled_v),
-        sampler);
+        sampler,
+        lod);
     rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
     rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
     rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
@@ -3612,16 +3631,52 @@ bool get_texture_binding(
     if (!g_context.current || unit >= FXGL_MAX_TEXTURE_UNITS)
         return false;
 
-    TextureObject *object = find_texture(
-        g_context.texture_binding_2d[unit]);
+    const GLuint name = g_context.texture_binding_2d[unit];
+    TextureObject *object = find_texture(name);
     if (!object || !object->pixels || object->width == 0 || object->height == 0)
         return false;
 
+    view = {};
     view.pixels = object->pixels;
     view.width = object->width;
     view.height = object->height;
     view.stride = object->width;
+    const size_t object_index = static_cast<size_t>(name - 1);
+
+    size_t level_count = 0;
+    for (size_t i = 0; i < FXGL_MAX_TEXTURE_LEVELS - 1; ++i)
+    {
+        const TextureMipObject& level = object->mip_levels[i];
+        if (!level.pixels)
+            break;
+        g_texture_mip_views[object_index][i] = {
+            level.pixels, level.width, level.height, level.width
+        };
+        ++level_count;
+    }
+    view.mip_levels = g_texture_mip_views[object_index];
+    view.mip_level_count = static_cast<uint8_t>(level_count);
+
     sampler = make_sampler(*object);
+    const bool mip_filter =
+        object->min_filter == GL_NEAREST_MIPMAP_NEAREST ||
+        object->min_filter == GL_LINEAR_MIPMAP_NEAREST ||
+        object->min_filter == GL_NEAREST_MIPMAP_LINEAR ||
+        object->min_filter == GL_LINEAR_MIPMAP_LINEAR;
+    if (mip_filter)
+    {
+        size_t expected_levels = 0;
+        uint16_t width = object->width;
+        uint16_t height = object->height;
+        while (width > 1 || height > 1)
+        {
+            width = width > 1 ? static_cast<uint16_t>(width / 2) : 1;
+            height = height > 1 ? static_cast<uint16_t>(height / 2) : 1;
+            ++expected_levels;
+        }
+        if (level_count != expected_levels)
+            return false;
+    }
     return gfx::texture_valid(view) && gfx::sampler_valid(sampler);
 }
 
