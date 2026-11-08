@@ -18,8 +18,8 @@ The library currently contains:
   flow, loop jumps, and user-defined functions with prototypes, forward
   definitions, exact-type overload resolution, typed returns, and bounded
   `in`/`out`/`inout` copy semantics. Input parameters are mutable local
-  copies; outputs copy back to writable locals and non-overlapping vector
-  swizzles. Global outputs are not yet supported as copy-out targets.
+  copies; outputs copy back to writable locals, vertex varyings, `gl_Position`,
+  and `gl_FragColor`, including non-overlapping vector swizzles.
 
 This is an incremental compatibility implementation, not full OpenGL ES 2.0
 support and not a Khronos-conformant implementation. See

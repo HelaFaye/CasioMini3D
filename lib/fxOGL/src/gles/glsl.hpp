@@ -90,6 +90,8 @@ enum class ShaderOp : uint8_t
     LoadUniform,
     LoadVarying,
     LoadLocal,
+    LoadPosition,
+    LoadFragmentColor,
     StoreVarying,
     StoreLocal,
     StorePosition,

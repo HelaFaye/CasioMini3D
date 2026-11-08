@@ -229,6 +229,16 @@ struct ResolvedVariable
 
 static constexpr uint16_t CALL_OUTPUT_TARGET_FULL = 0x8000;
 static constexpr uint16_t CALL_OUTPUT_TARGET_NONE = 0xffff;
+static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_SHIFT = 12;
+static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_MASK = 0x3000;
+
+enum class CallOutputStorage : uint8_t
+{
+    Local,
+    Varying,
+    Position,
+    FragmentColor
+};
 
 enum class BuiltinFunction : uint8_t
 {
@@ -692,10 +702,10 @@ private:
     {
         if (stage_ == ShaderStage::Vertex &&
             std::strcmp(name, "gl_Position") == 0)
-            return {Storage::Position, ShaderType::Vec4, 0};
+            return {Storage::Position, ShaderType::Vec4, 0, true};
         if (stage_ == ShaderStage::Fragment &&
             std::strcmp(name, "gl_FragColor") == 0)
-            return {Storage::FragmentColor, ShaderType::Vec4, 0};
+            return {Storage::FragmentColor, ShaderType::Vec4, 0, true};
 
         if (active_function_ < module_.function_count)
         {
@@ -720,7 +730,8 @@ private:
         variable = find_variable(
             module_.varyings, module_.varying_count, name);
         if (variable)
-            return {Storage::Varying, variable->type, variable->index};
+            return {Storage::Varying, variable->type, variable->index,
+                    stage_ == ShaderStage::Vertex};
 
         return {Storage::Local, ShaderType::Invalid, 0};
     }
@@ -1845,10 +1856,8 @@ private:
             case Storage::Uniform: op = ShaderOp::LoadUniform; break;
             case Storage::Varying: op = ShaderOp::LoadVarying; break;
             case Storage::Local: op = ShaderOp::LoadLocal; break;
-            default:
-                fail("output built-ins cannot be used as expressions");
-                result_type = ShaderType::Invalid;
-                return;
+            case Storage::Position: op = ShaderOp::LoadPosition; break;
+            case Storage::FragmentColor: op = ShaderOp::LoadFragmentColor; break;
         }
         emit_simple(op, variable.type, variable.index);
         result_type = variable.type;
@@ -2268,17 +2277,41 @@ private:
                     continue;
 
                 const ResolvedVariable& target = argument_lvalues[i];
-                if (target.storage != Storage::Local || !target.writable ||
+                if (!target.writable ||
                     target.type != function.parameters[i].type)
                 {
-                    fail("out/inout arguments require a writable local variable or vector swizzle");
+                    fail("out/inout arguments require a writable variable or swizzle");
                     return ShaderType::Invalid;
+                }
+
+                uint16_t storage_bits = 0;
+                switch (target.storage)
+                {
+                    case Storage::Local:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::Local) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    case Storage::Varying:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::Varying) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    case Storage::Position:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::Position) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    case Storage::FragmentColor:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::FragmentColor) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    default:
+                        fail("unsupported output argument storage");
+                        return ShaderType::Invalid;
                 }
 
                 if (!target.is_swizzle)
                 {
                     call.output_targets[i] = static_cast<uint16_t>(
-                        CALL_OUTPUT_TARGET_FULL | target.index);
+                        CALL_OUTPUT_TARGET_FULL | storage_bits | target.index);
                     output_masks[i] = 0xff;
                     continue;
                 }
@@ -2291,7 +2324,8 @@ private:
                     return ShaderType::Invalid;
                 }
 
-                uint16_t descriptor = target.index;
+                uint16_t descriptor =
+                    static_cast<uint16_t>(storage_bits | target.index);
                 uint8_t mask = 0;
                 for (size_t component = 0; component < components; ++component)
                 {
@@ -2326,8 +2360,8 @@ private:
                         continue;
                     if (argument_lvalues[i].index ==
                             argument_lvalues[j].index &&
-                        argument_lvalues[i].storage == Storage::Local &&
-                        argument_lvalues[j].storage == Storage::Local &&
+                        argument_lvalues[i].storage ==
+                            argument_lvalues[j].storage &&
                         (output_masks[i] & output_masks[j]) != 0)
                     {
                         fail("overlapping output arguments are unsupported");
@@ -2471,7 +2505,7 @@ private:
         emit(instruction);
         type = instruction.type;
 
-        if (base_lvalue.storage == Storage::Local && base_lvalue.writable)
+        if (base_lvalue.writable)
         {
             expression_lvalue_ = base_lvalue;
             expression_lvalue_.type = instruction.type;
@@ -2559,6 +2593,64 @@ static bool push_value(
         return false;
     copy_shader_value(stack[stack_size++], value);
     return true;
+}
+
+static ShaderValue *call_output_target_value(
+    uint16_t descriptor,
+    ShaderRuntime& runtime,
+    ShaderValue *locals)
+{
+    const uint8_t storage = static_cast<uint8_t>(
+        (descriptor & CALL_OUTPUT_TARGET_STORAGE_MASK) >>
+        CALL_OUTPUT_TARGET_STORAGE_SHIFT);
+    const uint8_t index = static_cast<uint8_t>(descriptor & 0x7);
+    switch (static_cast<CallOutputStorage>(storage))
+    {
+        case CallOutputStorage::Local:
+            return index < GLSL_MAX_LOCALS ? &locals[index] : nullptr;
+        case CallOutputStorage::Varying:
+            return index < GLSL_MAX_VARYINGS ? &runtime.varyings[index] : nullptr;
+        case CallOutputStorage::Position:
+            return index == 0 ? &runtime.position : nullptr;
+        case CallOutputStorage::FragmentColor:
+            return index == 0 ? &runtime.fragment_color : nullptr;
+        default:
+            return nullptr;
+    }
+}
+
+static ShaderType call_output_target_declared_type(
+    const ShaderModule& module,
+    size_t caller_function_index,
+    uint16_t descriptor)
+{
+    const uint8_t storage = static_cast<uint8_t>(
+        (descriptor & CALL_OUTPUT_TARGET_STORAGE_MASK) >>
+        CALL_OUTPUT_TARGET_STORAGE_SHIFT);
+    const uint8_t index = static_cast<uint8_t>(descriptor & 0x7);
+    switch (static_cast<CallOutputStorage>(storage))
+    {
+        case CallOutputStorage::Local:
+            if (caller_function_index >= module.function_count)
+                return ShaderType::Invalid;
+            for (size_t i = 0;
+                 i < module.functions[caller_function_index].local_count; ++i)
+            {
+                const ShaderVariable& local =
+                    module.functions[caller_function_index].locals[i];
+                if (local.index == index)
+                    return local.type;
+            }
+            return ShaderType::Invalid;
+        case CallOutputStorage::Varying:
+            return index < module.varying_count
+                ? module.varyings[index].type : ShaderType::Invalid;
+        case CallOutputStorage::Position:
+        case CallOutputStorage::FragmentColor:
+            return index == 0 ? ShaderType::Vec4 : ShaderType::Invalid;
+        default:
+            return ShaderType::Invalid;
+    }
 }
 
 static void apply_binary(
@@ -2823,8 +2915,39 @@ bool execute_glsl(
                     return false;
                 break;
             case ShaderOp::LoadVarying:
-                if (instruction.index >= GLSL_MAX_VARYINGS ||
-                    !push_value(stack, stack_size, runtime.varyings[instruction.index]))
+                if (instruction.index >= GLSL_MAX_VARYINGS)
+                    return false;
+                if (runtime.varyings[instruction.index].type == instruction.type)
+                {
+                    if (!push_value(stack, stack_size,
+                                    runtime.varyings[instruction.index]))
+                        return false;
+                }
+                else
+                {
+                    set_zero_value(result, instruction.type);
+                    if (!push_value(stack, stack_size, result))
+                        return false;
+                }
+                break;
+            case ShaderOp::LoadPosition:
+                if (instruction.type != ShaderType::Vec4)
+                    return false;
+                if (runtime.position.type == ShaderType::Vec4)
+                    copy_shader_value(result, runtime.position);
+                else
+                    set_zero_value(result, ShaderType::Vec4);
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+            case ShaderOp::LoadFragmentColor:
+                if (instruction.type != ShaderType::Vec4)
+                    return false;
+                if (runtime.fragment_color.type == ShaderType::Vec4)
+                    copy_shader_value(result, runtime.fragment_color);
+                else
+                    set_zero_value(result, ShaderType::Vec4);
+                if (!push_value(stack, stack_size, result))
                     return false;
                 break;
             case ShaderOp::LoadLocal:
@@ -2929,23 +3052,32 @@ bool execute_glsl(
                         const uint16_t descriptor = instruction.output_targets[i];
                         if (descriptor == CALL_OUTPUT_TARGET_NONE)
                             return false;
-                        const uint8_t target =
-                            static_cast<uint8_t>(descriptor & 0x7);
-                        if (target >= GLSL_MAX_LOCALS)
+                        ShaderValue *target_value = call_output_target_value(
+                            descriptor, runtime, locals);
+                        const size_t caller_function_index = call_depth == 0
+                            ? module.main_function
+                            : call_frames[call_depth - 1].function_index;
+                        const ShaderType target_type =
+                            call_output_target_declared_type(
+                                module, caller_function_index, descriptor);
+                        if (!target_value || target_type == ShaderType::Invalid)
+                            return false;
+                        if (target_value->type == ShaderType::Invalid)
+                            set_zero_value(*target_value, target_type);
+                        else if (target_value->type != target_type)
                             return false;
 
                         if (descriptor & CALL_OUTPUT_TARGET_FULL)
                         {
-                            if (locals[target].type != parameter.type)
+                            if (target_type != parameter.type)
                                 return false;
                         }
                         else
                         {
-                            if (!is_any_vector(locals[target].type) ||
+                            if (!is_any_vector(target_type) ||
                                 vector_type_for(
                                     component_count(parameter.type),
-                                    vector_base_type(locals[target].type)) !=
-                                    parameter.type)
+                                    vector_base_type(target_type)) != parameter.type)
                                 return false;
                             for (size_t component = 0;
                                  component < component_count(parameter.type);
@@ -2953,7 +3085,7 @@ bool execute_glsl(
                             {
                                 const uint8_t selector = static_cast<uint8_t>(
                                     (descriptor >> (3 + 2 * component)) & 0x3);
-                                if (selector >= vector_dimension(locals[target].type))
+                                if (selector >= vector_dimension(target_type))
                                     return false;
                             }
                         }
@@ -3000,6 +3132,9 @@ bool execute_glsl(
 
                 const ShaderFunction& function =
                     module.functions[frame.function_index];
+                const size_t caller_function_index = call_depth == 1
+                    ? module.main_function
+                    : call_frames[call_depth - 2].function_index;
                 ShaderValue *caller_locals = call_depth == 1
                     ? runtime.locals : call_frames[call_depth - 2].locals;
                 for (size_t i = 0; i < function.parameter_count; ++i)
@@ -3010,28 +3145,32 @@ bool execute_glsl(
 
                     const uint16_t descriptor = frame.output_targets[i];
                     if (descriptor == CALL_OUTPUT_TARGET_NONE ||
-                        parameter.index >= GLSL_MAX_LOCALS)
-                        return false;
-                    const uint8_t target =
-                        static_cast<uint8_t>(descriptor & 0x7);
-                    if (target >= GLSL_MAX_LOCALS ||
+                        parameter.index >= GLSL_MAX_LOCALS ||
                         frame.locals[parameter.index].type != parameter.type)
+                        return false;
+
+                    ShaderValue *target_value = call_output_target_value(
+                        descriptor, runtime, caller_locals);
+                    const ShaderType target_type =
+                        call_output_target_declared_type(
+                            module, caller_function_index, descriptor);
+                    if (!target_value || target_type == ShaderType::Invalid ||
+                        target_value->type != target_type)
                         return false;
 
                     if (descriptor & CALL_OUTPUT_TARGET_FULL)
                     {
-                        if (caller_locals[target].type != parameter.type)
+                        if (target_type != parameter.type)
                             return false;
                         copy_shader_value(
-                            caller_locals[target], frame.locals[parameter.index]);
+                            *target_value, frame.locals[parameter.index]);
                     }
                     else
                     {
-                        if (!is_any_vector(caller_locals[target].type) ||
+                        if (!is_any_vector(target_type) ||
                             vector_type_for(
                                 component_count(parameter.type),
-                                vector_base_type(caller_locals[target].type)) !=
-                                parameter.type)
+                                vector_base_type(target_type)) != parameter.type)
                             return false;
 
                         for (size_t component = 0;
@@ -3040,15 +3179,15 @@ bool execute_glsl(
                         {
                             const uint8_t selector = static_cast<uint8_t>(
                                 (descriptor >> (3 + 2 * component)) & 0x3);
-                            if (selector >= vector_dimension(caller_locals[target].type))
+                            if (selector >= vector_dimension(target_type))
                                 return false;
-                            caller_locals[target].data[selector] =
+                            target_value->data[selector] =
                                 frame.locals[parameter.index].data[component];
                             if (selector < 4)
                             {
-                                caller_locals[target].ddx[selector] =
+                                target_value->ddx[selector] =
                                     frame.locals[parameter.index].ddx[component];
-                                caller_locals[target].ddy[selector] =
+                                target_value->ddy[selector] =
                                     frame.locals[parameter.index].ddy[component];
                             }
                         }
