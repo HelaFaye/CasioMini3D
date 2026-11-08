@@ -657,8 +657,12 @@ static void test_user_function_out_and_inout_parameters()
         "}\n";
 
     ShaderModule return_out_module = {};
-    assert(fxgl::compile_glsl(
-        ShaderStage::Fragment, return_out_source, return_out_module));
+    const bool return_out_compiled = fxgl::compile_glsl(
+        ShaderStage::Fragment, return_out_source, return_out_module);
+    if (!return_out_compiled)
+        std::fprintf(stderr, "return/out diagnostic: %s\\n",
+                     return_out_module.info_log);
+    assert(return_out_compiled);
     ShaderRuntime return_out_runtime = {};
     assert(fxgl::execute_glsl(return_out_module, return_out_runtime));
     assert(near(return_out_runtime.fragment_color.data[0], 12.0f));
