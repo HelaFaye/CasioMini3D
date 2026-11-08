@@ -2209,12 +2209,16 @@ bool execute_glsl(
                 if (!pop_value(stack, stack_size, c) ||
                     !pop_value(stack, stack_size, b) ||
                     !pop_value(stack, stack_size, a) ||
-                    a.type != b.type || c.type != ShaderType::Float)
+                    a.type != b.type ||
+                    (c.type != ShaderType::Float && c.type != a.type))
                     return false;
                 result = zero_value(a.type);
                 for (size_t i = 0; i < component_count(a.type); ++i)
-                    result.data[i] = a.data[i] * (1.0f - c.data[0]) +
-                                     b.data[i] * c.data[0];
+                {
+                    const float factor = c.data[component_count(c.type) == 1 ? 0 : i];
+                    result.data[i] = a.data[i] * (1.0f - factor) +
+                                     b.data[i] * factor;
+                }
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -2245,16 +2249,260 @@ bool execute_glsl(
             case ShaderOp::Maximum:
                 if (!pop_value(stack, stack_size, b) ||
                     !pop_value(stack, stack_size, a) ||
-                    a.type != b.type)
+                    (a.type != b.type &&
+                     !(is_vector(a.type) && b.type == ShaderType::Float)))
                     return false;
                 result = zero_value(a.type);
                 for (size_t i = 0; i < component_count(a.type); ++i)
+                {
+                    const float rhs = b.data[component_count(b.type) == 1 ? 0 : i];
                     result.data[i] = instruction.op == ShaderOp::Minimum
-                        ? std::min(a.data[i], b.data[i])
-                        : std::max(a.data[i], b.data[i]);
-                if (!push_value(stack, stack_size, result))
+                        ? std::min(a.data[i], rhs)
+                        : std::max(a.data[i], rhs);
+                }
+                if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
                 break;
+
+            case ShaderOp::Builtin:
+            {
+                if (instruction.argument_count == 0 ||
+                    instruction.argument_count > 3 ||
+                    stack_size < instruction.argument_count)
+                    return false;
+
+                ShaderValue args[3] = {};
+                for (size_t i = instruction.argument_count; i > 0; --i)
+                    if (!pop_value(stack, stack_size, args[i - 1]))
+                        return false;
+
+                const BuiltinFunction function =
+                    static_cast<BuiltinFunction>(instruction.index);
+                result = zero_value(instruction.type);
+
+                const auto component = [](const ShaderValue& value, size_t index)
+                {
+                    return value.data[component_count(value.type) == 1 ? 0 : index];
+                };
+
+                switch (function)
+                {
+                    case BuiltinFunction::Sin:
+                    case BuiltinFunction::Cos:
+                    case BuiltinFunction::Tan:
+                    case BuiltinFunction::Asin:
+                    case BuiltinFunction::Acos:
+                    case BuiltinFunction::Atan:
+                    case BuiltinFunction::Exp:
+                    case BuiltinFunction::Log:
+                    case BuiltinFunction::Exp2:
+                    case BuiltinFunction::Log2:
+                    case BuiltinFunction::Sqrt:
+                    case BuiltinFunction::InverseSqrt:
+                    case BuiltinFunction::Abs:
+                    case BuiltinFunction::Sign:
+                    case BuiltinFunction::Floor:
+                    case BuiltinFunction::Ceil:
+                    case BuiltinFunction::Fract:
+                    case BuiltinFunction::Radians:
+                    case BuiltinFunction::Degrees:
+                        if (instruction.argument_count != 1 ||
+                            args[0].type != instruction.type ||
+                            !is_gen_type(args[0].type))
+                            return false;
+                        for (size_t i = 0; i < component_count(instruction.type); ++i)
+                        {
+                            const float value = args[0].data[i];
+                            float output = 0.0f;
+                            switch (function)
+                            {
+                                case BuiltinFunction::Sin: output = std::sin(value); break;
+                                case BuiltinFunction::Cos: output = std::cos(value); break;
+                                case BuiltinFunction::Tan: output = std::tan(value); break;
+                                case BuiltinFunction::Asin: output = std::asin(value); break;
+                                case BuiltinFunction::Acos: output = std::acos(value); break;
+                                case BuiltinFunction::Atan: output = std::atan(value); break;
+                                case BuiltinFunction::Exp: output = std::exp(value); break;
+                                case BuiltinFunction::Log: output = std::log(value); break;
+                                case BuiltinFunction::Exp2: output = std::exp2(value); break;
+                                case BuiltinFunction::Log2: output = std::log2(value); break;
+                                case BuiltinFunction::Sqrt: output = std::sqrt(value); break;
+                                case BuiltinFunction::InverseSqrt:
+                                    output = value > 0.0f ? 1.0f / std::sqrt(value) : 0.0f;
+                                    break;
+                                case BuiltinFunction::Abs: output = std::fabs(value); break;
+                                case BuiltinFunction::Sign:
+                                    output = value > 0.0f ? 1.0f : value < 0.0f ? -1.0f : 0.0f;
+                                    break;
+                                case BuiltinFunction::Floor: output = std::floor(value); break;
+                                case BuiltinFunction::Ceil: output = std::ceil(value); break;
+                                case BuiltinFunction::Fract: output = value - std::floor(value); break;
+                                case BuiltinFunction::Radians:
+                                    output = value * 0.01745329251994329577f;
+                                    break;
+                                case BuiltinFunction::Degrees:
+                                    output = value * 57.295779513082320876f;
+                                    break;
+                                default: return false;
+                            }
+                            result.data[i] = output;
+                        }
+                        break;
+
+                    case BuiltinFunction::Atan2:
+                    case BuiltinFunction::Pow:
+                    case BuiltinFunction::Mod:
+                    case BuiltinFunction::Step:
+                        if (instruction.argument_count != 2 ||
+                            args[0].type != instruction.type ||
+                            (args[1].type != instruction.type &&
+                             !(is_vector(instruction.type) &&
+                               args[1].type == ShaderType::Float)))
+                            return false;
+                        for (size_t i = 0; i < component_count(instruction.type); ++i)
+                        {
+                            const float x = args[0].data[i];
+                            const float y = component(args[1], i);
+                            float output = 0.0f;
+                            switch (function)
+                            {
+                                case BuiltinFunction::Atan2: output = std::atan2(x, y); break;
+                                case BuiltinFunction::Pow: output = std::pow(x, y); break;
+                                case BuiltinFunction::Mod:
+                                    output = y == 0.0f ? 0.0f :
+                                        x - y * std::floor(x / y);
+                                    break;
+                                case BuiltinFunction::Step: output = y < x ? 0.0f : 1.0f; break;
+                                default: return false;
+                            }
+                            result.data[i] = output;
+                        }
+                        break;
+
+                    case BuiltinFunction::Distance:
+                        if (instruction.argument_count != 2 ||
+                            !is_vector(args[0].type) ||
+                            args[0].type != args[1].type ||
+                            instruction.type != ShaderType::Float)
+                            return false;
+                        for (size_t i = 0; i < component_count(args[0].type); ++i)
+                        {
+                            const float delta = args[0].data[i] - args[1].data[i];
+                            result.data[0] += delta * delta;
+                        }
+                        result.data[0] = std::sqrt(result.data[0]);
+                        break;
+
+                    case BuiltinFunction::Cross:
+                        if (instruction.argument_count != 2 ||
+                            args[0].type != ShaderType::Vec3 ||
+                            args[1].type != ShaderType::Vec3 ||
+                            instruction.type != ShaderType::Vec3)
+                            return false;
+                        result.data[0] = args[0].data[1] * args[1].data[2] -
+                                         args[0].data[2] * args[1].data[1];
+                        result.data[1] = args[0].data[2] * args[1].data[0] -
+                                         args[0].data[0] * args[1].data[2];
+                        result.data[2] = args[0].data[0] * args[1].data[1] -
+                                         args[0].data[1] * args[1].data[0];
+                        break;
+
+                    case BuiltinFunction::FaceForward:
+                        if (instruction.argument_count != 3 ||
+                            !is_vector(args[0].type) ||
+                            args[0].type != args[1].type ||
+                            args[0].type != args[2].type ||
+                            instruction.type != args[0].type)
+                            return false;
+                        {
+                            float dot = 0.0f;
+                            for (size_t i = 0; i < component_count(args[0].type); ++i)
+                                dot += args[2].data[i] * args[1].data[i];
+                            const float sign = dot < 0.0f ? 1.0f : -1.0f;
+                            for (size_t i = 0; i < component_count(args[0].type); ++i)
+                                result.data[i] = args[0].data[i] * sign;
+                        }
+                        break;
+
+                    case BuiltinFunction::Reflect:
+                        if (instruction.argument_count != 2 ||
+                            !is_vector(args[0].type) ||
+                            args[0].type != args[1].type ||
+                            instruction.type != args[0].type)
+                            return false;
+                        {
+                            float dot = 0.0f;
+                            for (size_t i = 0; i < component_count(args[0].type); ++i)
+                                dot += args[1].data[i] * args[0].data[i];
+                            for (size_t i = 0; i < component_count(args[0].type); ++i)
+                                result.data[i] = args[0].data[i] -
+                                    2.0f * dot * args[1].data[i];
+                        }
+                        break;
+
+                    case BuiltinFunction::Refract:
+                        if (instruction.argument_count != 3 ||
+                            !is_vector(args[0].type) ||
+                            args[0].type != args[1].type ||
+                            args[2].type != ShaderType::Float ||
+                            instruction.type != args[0].type)
+                            return false;
+                        {
+                            float dot = 0.0f;
+                            for (size_t i = 0; i < component_count(args[0].type); ++i)
+                                dot += args[1].data[i] * args[0].data[i];
+                            const float eta = args[2].data[0];
+                            const float k = 1.0f - eta * eta * (1.0f - dot * dot);
+                            if (k < 0.0f)
+                            {
+                                result = zero_value(instruction.type);
+                            }
+                            else
+                            {
+                                const float factor = eta * dot + std::sqrt(k);
+                                for (size_t i = 0; i < component_count(args[0].type); ++i)
+                                    result.data[i] = eta * args[0].data[i] -
+                                        factor * args[1].data[i];
+                            }
+                        }
+                        break;
+
+                    case BuiltinFunction::SmoothStep:
+                        if (instruction.argument_count != 3 ||
+                            (args[0].type != instruction.type &&
+                             args[0].type != ShaderType::Float) ||
+                            (args[1].type != instruction.type &&
+                             args[1].type != ShaderType::Float) ||
+                            args[2].type != instruction.type)
+                            return false;
+                        for (size_t i = 0; i < component_count(instruction.type); ++i)
+                        {
+                            const float edge0 = component(args[0], i);
+                            const float edge1 = component(args[1], i);
+                            const float x = args[2].data[i];
+                            const float denominator = edge1 - edge0;
+                            const float t = denominator == 0.0f ? 0.0f :
+                                std::max(0.0f, std::min(1.0f,
+                                    (x - edge0) / denominator));
+                            result.data[i] = t * t * (3.0f - 2.0f * t);
+                        }
+                        break;
+
+                    case BuiltinFunction::MatrixCompMult:
+                        if (instruction.argument_count != 2 ||
+                            !is_matrix(args[0].type) ||
+                            args[0].type != args[1].type ||
+                            instruction.type != args[0].type)
+                            return false;
+                        for (size_t i = 0; i < component_count(instruction.type); ++i)
+                            result.data[i] = args[0].data[i] * args[1].data[i];
+                        break;
+                }
+
+                if (!finite_value(result) || !push_value(stack, stack_size, result))
+                    return false;
+                break;
+            }
 
             case ShaderOp::Texture2D:
                 if (!pop_value(stack, stack_size, b) ||
