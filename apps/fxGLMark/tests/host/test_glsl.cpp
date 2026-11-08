@@ -640,6 +640,31 @@ static void test_user_function_out_and_inout_parameters()
     assert(fxgl::execute_glsl(inout_module, inout_runtime));
     assert(near(inout_runtime.fragment_color.data[0], 12.0f));
 
+    // A non-void return value and output parameters must survive the same
+    // return path: copy-outs update the caller while the result is pushed.
+    static const char return_out_source[] =
+        "float update(inout float state, out float previous);\\n"
+        "void main() {\\n"
+        "  float state = 2.0;\\n"
+        "  float previous = 0.0;\\n"
+        "  float result = update(state, previous);\\n"
+        "  gl_FragColor = vec4(result, state, previous, 1.0);\\n"
+        "}\\n"
+        "float update(inout float value, out float old_value) {\\n"
+        "  old_value = value;\\n"
+        "  value = value + 2.0;\\n"
+        "  return value * 3.0;\\n"
+        "}\\n";
+
+    ShaderModule return_out_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, return_out_source, return_out_module));
+    ShaderRuntime return_out_runtime = {};
+    assert(fxgl::execute_glsl(return_out_module, return_out_runtime));
+    assert(near(return_out_runtime.fragment_color.data[0], 12.0f));
+    assert(near(return_out_runtime.fragment_color.data[1], 4.0f));
+    assert(near(return_out_runtime.fragment_color.data[2], 2.0f));
+
     // Copy-out propagates through nested calls and runs on explicit returns.
     static const char nested_source[] =
         "void inner(out float doubled, inout float state);\n"
