@@ -2218,11 +2218,6 @@ private:
         {
             const ShaderFunction& function =
                 module_.functions[static_cast<size_t>(function_index)];
-            if (!function.defined)
-            {
-                fail("called user function has no definition");
-                return ShaderType::Invalid;
-            }
             emit_simple(ShaderOp::Call, function.return_type,
                         static_cast<uint8_t>(function_index),
                         static_cast<uint8_t>(argument_count));
