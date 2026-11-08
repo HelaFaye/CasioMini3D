@@ -71,15 +71,19 @@ Recent measured optimizations include:
   `gl_FragColor = texture2D(u_texture, v_uv);` shader form, while retaining
   the normal sampler callback.
 
-The latest user-supplied physical fx-CG50 run exercised the integrated
-GLSL user-function prototype/forward-definition Gouraud and textured vertex
-shaders through fxGLMark Quick Smoke. The 24-frame VBO build scene averaged
-3.198292 seconds; the paired nearest-filter texture scene averaged 3.167104
-seconds (144 triangles per frame). Relative to the immediately preceding
-hardware run, the scene means differed by +0.13% and +0.36%, respectively;
-this is treated as run-to-run variation, not a performance claim. These
-device measurements are configuration-specific and not directly comparable
-to desktop/mobile glmark2.
+The latest user-supplied physical fx-CG50 run exercised the overloaded
+Gouraud and textured vertex shaders through fxGLMark Quick Smoke. The
+24-frame VBO build scene averaged 3.206439 seconds; the paired nearest-filter
+texture scene averaged 3.180418 seconds (144 triangles per frame). Relative
+to the immediately preceding prototype/forward-definition run, the scene
+means differed by +0.25% and +0.42%, respectively; this is treated as
+run-to-run variation, not a performance claim. The shader VM microbenchmark
+remained at 122.535 microseconds per iteration. These device measurements are
+configuration-specific and not directly comparable to desktop/mobile glmark2.
+
+Previous prototype/forward-definition hardware baseline: 3.198292 seconds
+for the VBO build scene and 3.167104 seconds for the nearest-filter texture
+scene, each measured over 24 frames of 144 triangles per frame.
 
 ## Priorities
 
