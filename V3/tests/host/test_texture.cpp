@@ -60,6 +60,57 @@ static void test_sampler_derivative_requirements()
     assert(gfx::sampler_requires_implicit_derivatives(sampler));
 }
 
+static void test_validated_sampler_matches_checked_sampler()
+{
+    const uint16_t base[16] = {
+        0xf800, 0xf800, 0x07e0, 0x07e0,
+        0xf800, 0xf800, 0x07e0, 0x07e0,
+        0x001f, 0x001f, 0xffff, 0xffff,
+        0x001f, 0x001f, 0xffff, 0xffff
+    };
+    const uint16_t mip1[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
+    const uint16_t mip2[1] = {0x8410};
+    const TextureMipLevel levels[2] = {
+        {mip1, 2, 2, 2}, {mip2, 1, 1, 1}
+    };
+    const Texture2DView texture = {base, 4, 4, 4, levels, 2};
+    TextureSampler samplers[6] = {
+        nearest_clamp(),
+        {TextureFilter::Bilinear, TextureAddressMode::Clamp,
+         TextureAddressMode::Clamp, gfx::TextureMinFilter::Linear},
+        {TextureFilter::Nearest, TextureAddressMode::Repeat,
+         TextureAddressMode::MirroredRepeat, gfx::TextureMinFilter::NearestMipmapNearest},
+        {TextureFilter::Bilinear, TextureAddressMode::Repeat,
+         TextureAddressMode::Clamp, gfx::TextureMinFilter::LinearMipmapNearest},
+        {TextureFilter::Nearest, TextureAddressMode::MirroredRepeat,
+         TextureAddressMode::Repeat, gfx::TextureMinFilter::NearestMipmapLinear},
+        {TextureFilter::Bilinear, TextureAddressMode::Clamp,
+         TextureAddressMode::MirroredRepeat, gfx::TextureMinFilter::LinearMipmapLinear}
+    };
+    const int64_t coordinates[][2] = {
+        {0, 0}, {ONE / 2, ONE / 2}, {ONE, ONE},
+        {-ONE / 2, 3 * ONE / 2}, {3 * ONE, 2 * ONE}
+    };
+    const float lods[] = {0.0f, 0.25f, 0.5f, 1.0f, 1.4f, 1.6f, 2.0f};
+
+    assert(gfx::texture_valid(texture));
+    for (const TextureSampler& sampler : samplers)
+    {
+        assert(gfx::sampler_valid(sampler));
+        for (const auto& coordinate : coordinates)
+        {
+            for (float lod : lods)
+            {
+                const uint16_t checked = gfx::sample_texture(
+                    texture, coordinate[0], coordinate[1], sampler, lod);
+                const uint16_t fast = gfx::sample_texture_validated(
+                    texture, coordinate[0], coordinate[1], sampler, lod);
+                assert(checked == fast);
+            }
+        }
+    }
+}
+
 static void test_view_and_sampler_validation()
 {
     const uint16_t pixels[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
@@ -248,6 +299,7 @@ static void test_invalid_inputs_fail_closed()
 int main()
 {
     test_sampler_derivative_requirements();
+    test_validated_sampler_matches_checked_sampler();
     test_view_and_sampler_validation();
     test_nearest_texel_centres_and_stride();
     test_clamp_and_repeat_addressing();
