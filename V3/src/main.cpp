@@ -42,7 +42,7 @@ static char g_status[64] = "Choose individual tests or a battery";
 static uint16_t g_depth_buffer[DWIDTH * DHEIGHT];
 
 constexpr uint32_t MICROBENCH_REPEATS = 3;
-constexpr size_t MICROBENCH_COUNT = 6;
+constexpr size_t MICROBENCH_COUNT = 7;
 constexpr uint32_t MICROBENCH_TEXTURE_SAMPLES = 16384;
 constexpr uint32_t MICROBENCH_RASTER_TRIANGLES = 8;
 constexpr uint32_t MICROBENCH_SHADER_EXECUTIONS = 1024;
@@ -66,8 +66,12 @@ static fxgl::PipelineState g_microbench_pipeline_state = {};
 static fxgl::ClipVertex g_microbench_triangle[3] = {};
 static fxgl::ShaderModule g_microbench_shader = {};
 static fxgl::ShaderRuntime g_microbench_runtime = {};
+static fxgl::ShaderModule g_microbench_texture_shader = {};
+static fxgl::ShaderRuntime g_microbench_texture_runtime = {};
+static gfx::TextureNearestRepeatPow2Sampler g_microbench_repeat_sampler = {};
 static bool g_microbench_raster_ready = false;
 static bool g_microbench_shader_ready = false;
+static bool g_microbench_texture_shader_ready = false;
 
 struct CsvWriteArgs
 {
@@ -282,6 +286,32 @@ static bool microbench_fragment(
     return true;
 }
 
+static bool microbench_texture_sample(
+    int texture_unit,
+    float u,
+    float v,
+    float,
+    float,
+    float,
+    float,
+    float rgba[4],
+    void *user_data)
+{
+    if (texture_unit != 0 || !user_data)
+        return false;
+    const gfx::TextureNearestRepeatPow2Sampler& sampler =
+        *static_cast<const gfx::TextureNearestRepeatPow2Sampler *>(user_data);
+    uint16_t pixel = 0;
+    if (!gfx::sample_texture_nearest_repeat_pow2_cached(
+            sampler, u, v, pixel))
+        return false;
+    rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
+    rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
+    rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
+    rgba[3] = 1.0f;
+    return true;
+}
+
 static bool prepare_renderer_microbenchmarks()
 {
     for (size_t i = 0; i < sizeof(g_microbench_texture_pixels) /
@@ -310,6 +340,35 @@ static bool prepare_renderer_microbenchmarks()
         fxgl::ShaderStage::Fragment, fragment_source, g_microbench_shader);
     if (!g_microbench_shader_ready)
         return false;
+
+    const gfx::Texture2DView texture_view = {
+        g_microbench_texture_pixels, 32, 32, 32
+    };
+    const gfx::TextureSampler repeat_sampler = {
+        gfx::TextureFilter::Nearest,
+        gfx::TextureAddressMode::Repeat,
+        gfx::TextureAddressMode::Repeat
+    };
+    if (!gfx::prepare_texture_nearest_repeat_pow2_sampler(
+            texture_view, repeat_sampler, g_microbench_repeat_sampler))
+        return false;
+
+    const char *texture_fragment_source =
+        "#version 100\\n"
+        "precision mediump float;\\n"
+        "uniform sampler2D u_texture;\\n"
+        "varying vec2 v_uv;\\n"
+        "void main() { gl_FragColor = texture2D(u_texture, v_uv); }\\n";
+    g_microbench_texture_shader_ready = fxgl::compile_glsl(
+        fxgl::ShaderStage::Fragment, texture_fragment_source,
+        g_microbench_texture_shader);
+    if (!g_microbench_texture_shader_ready)
+        return false;
+
+    g_microbench_texture_runtime = {};
+    g_microbench_texture_runtime.uniforms[0].type = fxgl::ShaderType::Sampler2D;
+    g_microbench_texture_runtime.uniforms[0].data[0] = 0.0f;
+    g_microbench_texture_runtime.varyings[0].type = fxgl::ShaderType::Vec2;
 
     g_microbench_runtime = {};
     g_microbench_runtime.varyings[0].type = fxgl::ShaderType::Vec4;
@@ -452,6 +511,33 @@ static bool benchmark_shader_execution(uint32_t iterations)
     return true;
 }
 
+static bool benchmark_texture2d_vm(uint32_t iterations)
+{
+    if (!g_microbench_texture_shader_ready)
+        return false;
+
+    float checksum = 0.0f;
+    for (uint32_t i = 0; i < iterations; ++i)
+    {
+        const uint32_t u_bits = (i * 977u + 12345u) & 0x00ffffffu;
+        const uint32_t v_bits = (i * 3253u + 7919u) & 0x00ffffffu;
+        g_microbench_texture_runtime.varyings[0].data[0] =
+            static_cast<float>(u_bits) * (6.0f / 16777216.0f);
+        g_microbench_texture_runtime.varyings[0].data[1] =
+            static_cast<float>(v_bits) * (6.0f / 16777216.0f);
+
+        if (!fxgl::execute_glsl(
+                g_microbench_texture_shader,
+                g_microbench_texture_runtime,
+                microbench_texture_sample,
+                &g_microbench_repeat_sampler))
+            return false;
+        checksum += g_microbench_texture_runtime.fragment_color.data[0];
+    }
+    g_microbench_shader_sink = checksum;
+    return true;
+}
+
 static bool benchmark_framebuffer_presentation(uint32_t iterations)
 {
     for (uint32_t i = 0; i < iterations; ++i)
@@ -517,7 +603,7 @@ static void show_renderer_microbench_results(
         // Use two lines per stage. The previous three-line rows overlapped
         // because the final metric line was only four pixels from the next
         // stage label on the 224px display.
-        const int y = 19 + static_cast<int>(i) * 28;
+        const int y = 16 + static_cast<int>(i) * 24;
         if (!valid[i])
         {
             dtext(8, y, C_WHITE, "FAILED: component benchmark");
@@ -560,6 +646,7 @@ static void run_renderer_microbenchmarks()
         "texture-nearest-repeat",
         "triangle-raster",
         "shader-vm",
+        "texture2d-vm",
         "framebuffer-present"
     };
     static const uint32_t iterations[MICROBENCH_COUNT] = {
@@ -567,6 +654,7 @@ static void run_renderer_microbenchmarks()
         MICROBENCH_TEXTURE_SAMPLES,
         MICROBENCH_TEXTURE_SAMPLES,
         MICROBENCH_RASTER_TRIANGLES,
+        MICROBENCH_SHADER_EXECUTIONS,
         MICROBENCH_SHADER_EXECUTIONS,
         MICROBENCH_PRESENT_CALLS
     };
@@ -576,6 +664,7 @@ static void run_renderer_microbenchmarks()
         benchmark_texture_nearest_repeat,
         benchmark_triangle_rasterization,
         benchmark_shader_execution,
+        benchmark_texture2d_vm,
         benchmark_framebuffer_presentation
     };
 
