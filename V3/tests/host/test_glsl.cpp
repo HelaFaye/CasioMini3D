@@ -540,9 +540,6 @@ static void test_instruction_budget_and_stack_safety()
     assert(fxgl::execute_glsl(module, runtime));
     assert(near(runtime.fragment_color.data[0], 55.0f));
 }
-} // namespace
-
-
 static void test_reused_runtime_resets_locals_and_outputs()
 {
     static const char source[] =
@@ -599,6 +596,8 @@ static void test_reused_runtime_resets_locals_and_outputs()
     assert(near(runtime.fragment_color.data[2], 0.5f));
     assert(near(runtime.fragment_color.data[3], 0.5f));
 }
+} // namespace
+
 
 int main()
 {
