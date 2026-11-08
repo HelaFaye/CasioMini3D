@@ -588,6 +588,146 @@ static void test_user_function_overload_errors()
     }
 }
 
+static void test_user_function_out_and_inout_parameters()
+{
+    static const char split_source[] =
+        "void split(float source, out float whole, out float fraction);\n"
+        "void main() {\n"
+        "  float whole = 0.0;\n"
+        "  float fraction = 0.0;\n"
+        "  split(3.75, (whole), fraction);\n"
+        "  gl_FragColor = vec4(whole, fraction, 0.0, 1.0);\n"
+        "}\n"
+        "void split(float input_value, out float integer_part, out float fractional_part) {\n"
+        "  integer_part = floor(input_value);\n"
+        "  fractional_part = input_value - integer_part;\n"
+        "}\n";
+
+    ShaderModule split_module = {};
+    const bool split_compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, split_source, split_module);
+    if (!split_compiled)
+        std::fprintf(stderr, "out-parameter diagnostic: %s\n", split_module.info_log);
+    assert(split_compiled);
+    assert(split_module.functions[0].parameters[0].qualifier ==
+           fxgl::ShaderParameterQualifier::In);
+    assert(split_module.functions[0].parameters[1].qualifier ==
+           fxgl::ShaderParameterQualifier::Out);
+    assert(split_module.functions[0].parameters[2].qualifier ==
+           fxgl::ShaderParameterQualifier::Out);
+    ShaderRuntime split_runtime = {};
+    assert(fxgl::execute_glsl(split_module, split_runtime));
+    assert(near(split_runtime.fragment_color.data[0], 3.0f));
+    assert(near(split_runtime.fragment_color.data[1], 0.75f));
+
+    // An explicit in qualifier and the default qualifier are compatible
+    // between prototype and definition. Values are copied into parameters.
+    static const char inout_source[] =
+        "void bump(in float amount, inout float current);\n"
+        "void main() {\n"
+        "  float state = 10.0;\n"
+        "  bump(2.0, state);\n"
+        "  gl_FragColor = vec4(state, 0.0, 0.0, 1.0);\n"
+        "}\n"
+        "void bump(float delta, inout float value) {\n"
+        "  value = value + delta;\n"
+        "}\n";
+
+    ShaderModule inout_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, inout_source, inout_module));
+    ShaderRuntime inout_runtime = {};
+    assert(fxgl::execute_glsl(inout_module, inout_runtime));
+    assert(near(inout_runtime.fragment_color.data[0], 12.0f));
+
+    // A non-void return value and output parameters must survive the same
+    // return path: copy-outs update the caller while the result is pushed.
+    static const char return_out_source[] =
+        "float update(inout float state, out float previous);\n"
+        "void main() {\n"
+        "  float state = 2.0;\n"
+        "  float previous = 0.0;\n"
+        "  float result = update(state, previous);\n"
+        "  gl_FragColor = vec4(result, state, previous, 1.0);\n"
+        "}\n"
+        "float update(inout float value, out float old_value) {\n"
+        "  old_value = value;\n"
+        "  value = value + 2.0;\n"
+        "  return value * 3.0;\n"
+        "}\n";
+
+    ShaderModule return_out_module = {};
+    const bool return_out_compiled = fxgl::compile_glsl(
+        ShaderStage::Fragment, return_out_source, return_out_module);
+    if (!return_out_compiled)
+        std::fprintf(stderr, "return/out diagnostic: %s\\n",
+                     return_out_module.info_log);
+    assert(return_out_compiled);
+    ShaderRuntime return_out_runtime = {};
+    assert(fxgl::execute_glsl(return_out_module, return_out_runtime));
+    assert(near(return_out_runtime.fragment_color.data[0], 12.0f));
+    assert(near(return_out_runtime.fragment_color.data[1], 4.0f));
+    assert(near(return_out_runtime.fragment_color.data[2], 2.0f));
+
+    // Copy-out propagates through nested calls and runs on explicit returns.
+    static const char nested_source[] =
+        "void inner(out float doubled, inout float state);\n"
+        "void outer(inout float state, out float total);\n"
+        "void main() {\n"
+        "  float state = 3.0;\n"
+        "  float total = 0.0;\n"
+        "  outer(state, total);\n"
+        "  gl_FragColor = vec4(state, total, 0.0, 1.0);\n"
+        "}\n"
+        "void outer(inout float value, out float sum) {\n"
+        "  float doubled = 0.0;\n"
+        "  inner(doubled, value);\n"
+        "  sum = doubled + value;\n"
+        "  return;\n"
+        "}\n"
+        "void inner(out float twice, inout float value) {\n"
+        "  twice = value * 2.0;\n"
+        "  value = value + 1.0;\n"
+        "  return;\n"
+        "}\n";
+
+    ShaderModule nested_module = {};
+    const bool nested_compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, nested_source, nested_module);
+    if (!nested_compiled)
+        std::fprintf(stderr, "nested out/inout diagnostic: %s\n",
+                     nested_module.info_log);
+    assert(nested_compiled);
+    ShaderRuntime nested_runtime = {};
+    assert(fxgl::execute_glsl(nested_module, nested_runtime));
+    assert(near(nested_runtime.fragment_color.data[0], 4.0f));
+    assert(near(nested_runtime.fragment_color.data[1], 10.0f));
+}
+
+static void test_user_function_out_inout_rejections()
+{
+    const char *invalid_sources[] = {
+        "void store(out float value); void main() { store(1.0); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
+        "void store(out float value); void main() { float x = 1.0; store(x + 1.0); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
+        "uniform float u_value; void store(out float value); void main() { store(u_value); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
+        "void store(out vec2 value); void main() { vec3 color = vec3(1.0); store(color.xy); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(0.0); }",
+        "void store(in float source, out float value); void main() { float x = 1.0; store(x, x); gl_FragColor = vec4(1.0); } void store(in float source, out float value) { value = source; }",
+        "void edit(in float value) { value = 2.0; } void main() { edit(1.0); gl_FragColor = vec4(1.0); }",
+        "void store(out float value); void relay(in float source) { store(source); } void store(out float value) { value = 2.0; } void main() { relay(1.0); gl_FragColor = vec4(1.0); }",
+        "void store(out float value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(inout float value) { value = 2.0; }",
+        "void select_value(in float value); void select_value(out float value); void main() { gl_FragColor = vec4(1.0); }",
+        "void store(out vec2 value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(1.0); }"
+    };
+
+    for (const char *source : invalid_sources)
+    {
+        ShaderModule module = {};
+        assert(!fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+        assert(!module.compiled);
+        assert(module.info_log[0] != '\0');
+    }
+}
+
 static void test_user_function_call_depth_is_bounded()
 {
     static const char source[] =
@@ -853,6 +993,8 @@ int main()
     test_user_function_prototypes_and_forward_definitions();
     test_user_function_overloads_use_exact_argument_types();
     test_user_function_overload_errors();
+    test_user_function_out_and_inout_parameters();
+    test_user_function_out_inout_rejections();
     test_user_function_call_depth_is_bounded();
     test_non_terminating_shader_hits_execution_budget();
     test_essl_math_and_geometric_builtins();

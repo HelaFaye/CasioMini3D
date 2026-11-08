@@ -53,11 +53,20 @@ struct ShaderValue
     float ddy[4];
 };
 
+enum class ShaderParameterQualifier : uint8_t
+{
+    In,
+    Out,
+    InOut
+};
+
 struct ShaderVariable
 {
     char name[GLSL_NAME_BYTES];
     ShaderType type;
     uint8_t index;
+    /* Used only for function parameters. In is the default qualifier. */
+    ShaderParameterQualifier qualifier;
 };
 
 struct ShaderFunction
@@ -171,15 +180,17 @@ using TextureSampleFunction = bool (*)(
     void *user_data);
 
 /* Compile the explicitly documented GLSL ES 1.00 subset. The bounded parser
-   supports overloaded typed user functions with up to four value parameters,
-   prototypes and forward definitions, typed returns, and bounded nested
-   calls. User overload resolution requires an exact match for every argument
-   type; return type alone cannot distinguish signatures. A prototype must
-   precede each call and every prototype must have one matching definition.
+   supports overloaded typed user functions with up to four parameters,
+   prototypes and forward definitions, typed returns, bounded nested calls,
+   and in/out/inout parameter copy semantics. User overload resolution
+   requires an exact match for every argument type; parameter qualifiers and
+   return type do not distinguish overloads, but declarations of the same
+   parameter types must agree on return type and qualifiers. out/inout actual
+   arguments are currently restricted to distinct, writable local variables;
+   swizzles and global outputs are not supported as copy-out targets.
    Built-in function dispatch remains on its existing fixed-signature path.
-   Arrays, structs, out/inout parameters, do-while, switch, preprocessor
-   directives and precision qualifiers other than ordinary precision
-   statements remain unsupported. */
+   Arrays, structs, do-while, switch, preprocessor directives and precision
+   qualifiers other than ordinary precision statements remain unsupported. */
 bool compile_glsl(
     ShaderStage stage,
     const char *source,
