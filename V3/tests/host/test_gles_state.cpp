@@ -1433,11 +1433,15 @@ void test_gles_mipmap_generation_and_level_uploads()
     assert(fxgl::get_texture_binding(0, view, sampler));
     assert(view.mip_levels[0].pixels[0] == green);
 
-    // Replacing level zero invalidates the lower mip chain.
+    // Replacing level zero invalidates the lower mip chain. The object
+    // remains bindable, but mipmapped sampling returns black until levels
+    // are regenerated or uploaded again.
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0,
         GL_RGB, GL_UNSIGNED_SHORT_5_6_5, base_pixels);
     assert(glGetError() == GL_NO_ERROR);
-    assert(!fxgl::get_texture_binding(0, view, sampler));
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.mip_level_count == 0);
+    assert(gfx::sample_texture(view, 0, 0, sampler, 1.0f) == 0);
 
     // An explicit mip level with the wrong expected dimensions is rejected.
     glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 1, 1, 0,
