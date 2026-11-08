@@ -1873,11 +1873,37 @@ private:
     size_t recursion_depth_;
 };
 
-static ShaderValue zero_value(ShaderType type)
+static void set_zero_value(ShaderValue& value, ShaderType type)
 {
-    ShaderValue value = {};
     value.type = type;
-    return value;
+    const size_t components = component_count(type);
+    for (size_t i = 0; i < components; ++i)
+        value.data[i] = 0.0f;
+    const size_t derivative_components = std::min<size_t>(components, 4);
+    for (size_t i = 0; i < derivative_components; ++i)
+    {
+        value.ddx[i] = 0.0f;
+        value.ddy[i] = 0.0f;
+    }
+}
+
+/* ShaderValue reserves storage for mat4, but most VM stack entries are
+   scalars or short vectors. Copy only active components; derivative storage
+   is relevant only to the first four components. Unused slots are never read
+   for the copied type. */
+static void copy_shader_value(ShaderValue& destination,
+                              const ShaderValue& source)
+{
+    destination.type = source.type;
+    const size_t components = component_count(source.type);
+    for (size_t i = 0; i < components; ++i)
+        destination.data[i] = source.data[i];
+    const size_t derivative_components = std::min<size_t>(components, 4);
+    for (size_t i = 0; i < derivative_components; ++i)
+    {
+        destination.ddx[i] = source.ddx[i];
+        destination.ddy[i] = source.ddy[i];
+    }
 }
 
 static float convert_component(ShaderType destination, float value)
@@ -1896,7 +1922,7 @@ static bool pop_value(
 {
     if (stack_size == 0)
         return false;
-    value = stack[--stack_size];
+    copy_shader_value(value, stack[--stack_size]);
     return true;
 }
 
@@ -1907,7 +1933,7 @@ static bool push_value(
 {
     if (stack_size >= GLSL_MAX_STACK)
         return false;
-    stack[stack_size++] = value;
+    copy_shader_value(stack[stack_size++], value);
     return true;
 }
 
@@ -1918,7 +1944,7 @@ static void apply_binary(
     ShaderType result_type,
     ShaderValue& result)
 {
-    result = zero_value(result_type);
+    set_zero_value(result, result_type);
     const size_t count = component_count(result_type);
 
     const size_t left_dimension = matrix_dimension(left.type);
@@ -1927,7 +1953,7 @@ static void apply_binary(
     if (op == ShaderOp::Multiply &&
         left_dimension != 0 && right.type == vector_type(left_dimension))
     {
-        result = zero_value(right.type);
+        set_zero_value(result, right.type);
         for (size_t row = 0; row < left_dimension; ++row)
         {
             for (size_t column = 0; column < left_dimension; ++column)
@@ -1948,7 +1974,7 @@ static void apply_binary(
     if (op == ShaderOp::Multiply &&
         left.type == vector_type(right_dimension) && right_dimension != 0)
     {
-        result = zero_value(left.type);
+        set_zero_value(result, left.type);
         for (size_t column = 0; column < right_dimension; ++column)
         {
             for (size_t row = 0; row < right_dimension; ++row)
@@ -1969,7 +1995,7 @@ static void apply_binary(
     if (op == ShaderOp::Multiply &&
         left_dimension != 0 && left_dimension == right_dimension)
     {
-        result = zero_value(left.type);
+        set_zero_value(result, left.type);
         for (size_t column = 0; column < left_dimension; ++column)
         {
             for (size_t row = 0; row < left_dimension; ++row)
@@ -2123,7 +2149,7 @@ bool execute_glsl(
         {
             case ShaderOp::PushFloat:
             case ShaderOp::PushInt:
-                result = zero_value(instruction.type);
+                set_zero_value(result, instruction.type);
                 result.data[0] = instruction.literal;
                 if (!push_value(stack, stack_size, result))
                     return false;
@@ -2155,26 +2181,26 @@ bool execute_glsl(
                     instruction.index >= GLSL_MAX_VARYINGS ||
                     a.type != instruction.type)
                     return false;
-                runtime.varyings[instruction.index] = a;
+                copy_shader_value(runtime.varyings[instruction.index], a);
                 break;
             case ShaderOp::StoreLocal:
                 if (!pop_value(stack, stack_size, a) ||
                     instruction.index >= GLSL_MAX_LOCALS ||
                     a.type != instruction.type)
                     return false;
-                runtime.locals[instruction.index] = a;
+                copy_shader_value(runtime.locals[instruction.index], a);
                 break;
             case ShaderOp::StorePosition:
                 if (!pop_value(stack, stack_size, a) ||
                     a.type != ShaderType::Vec4)
                     return false;
-                runtime.position = a;
+                copy_shader_value(runtime.position, a);
                 break;
             case ShaderOp::StoreFragmentColor:
                 if (!pop_value(stack, stack_size, a) ||
                     a.type != ShaderType::Vec4)
                     return false;
-                runtime.fragment_color = a;
+                copy_shader_value(runtime.fragment_color, a);
                 break;
 
             case ShaderOp::BranchIfFalse:
@@ -2196,7 +2222,7 @@ bool execute_glsl(
                 if (!pop_value(stack, stack_size, a) ||
                     a.type != ShaderType::Bool)
                     return false;
-                result = zero_value(ShaderType::Bool);
+                set_zero_value(result, ShaderType::Bool);
                 result.data[0] = a.data[0] == 0.0f ? 1.0f : 0.0f;
                 if (!push_value(stack, stack_size, result))
                     return false;
@@ -2213,7 +2239,7 @@ bool execute_glsl(
                     if (!pop_value(stack, stack_size, args[i - 1]))
                         return false;
 
-                result = zero_value(instruction.type);
+                set_zero_value(result, instruction.type);
                 const size_t wanted = component_count(instruction.type);
                 const size_t destination_dimension =
                     matrix_dimension(instruction.type);
@@ -2300,7 +2326,7 @@ bool execute_glsl(
                     instruction.argument_count == 0 ||
                     instruction.argument_count > 4)
                     return false;
-                result = zero_value(instruction.type);
+                set_zero_value(result, instruction.type);
                 for (size_t i = 0; i < instruction.argument_count; ++i)
                 {
                     const size_t source = instruction.swizzle[i];
@@ -2319,7 +2345,7 @@ bool execute_glsl(
                 if (!pop_value(stack, stack_size, a) ||
                     a.type != instruction.type)
                     return false;
-                result = a;
+                copy_shader_value(result, a);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                 {
                     result.data[i] = -result.data[i];
@@ -2424,7 +2450,7 @@ bool execute_glsl(
                     a.type != b.type)
                     return false;
 
-                result = zero_value(ShaderType::Bool);
+                set_zero_value(result, ShaderType::Bool);
                 if (instruction.op == ShaderOp::LogicalAnd ||
                     instruction.op == ShaderOp::LogicalOr)
                 {
@@ -2471,7 +2497,7 @@ bool execute_glsl(
                     !pop_value(stack, stack_size, a) ||
                     a.type != b.type || !is_vector(a.type))
                     return false;
-                result = zero_value(ShaderType::Float);
+                set_zero_value(result, ShaderType::Float);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                     result.data[0] += a.data[i] * b.data[i];
                 if (!push_value(stack, stack_size, result))
@@ -2481,7 +2507,7 @@ bool execute_glsl(
             case ShaderOp::Length:
                 if (!pop_value(stack, stack_size, a) || !is_vector(a.type))
                     return false;
-                result = zero_value(ShaderType::Float);
+                set_zero_value(result, ShaderType::Float);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                     result.data[0] += a.data[i] * a.data[i];
                 result.data[0] = std::sqrt(result.data[0]);
@@ -2492,7 +2518,7 @@ bool execute_glsl(
             case ShaderOp::Normalize:
                 if (!pop_value(stack, stack_size, a) || !is_vector(a.type))
                     return false;
-                result = a;
+                copy_shader_value(result, a);
                 {
                     float length_squared = 0.0f;
                     for (size_t i = 0; i < component_count(a.type); ++i)
@@ -2513,7 +2539,7 @@ bool execute_glsl(
                     a.type != b.type ||
                     (c.type != ShaderType::Float && c.type != a.type))
                     return false;
-                result = zero_value(a.type);
+                set_zero_value(result, a.type);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                 {
                     const float factor = c.data[component_count(c.type) == 1 ? 0 : i];
@@ -2545,7 +2571,7 @@ bool execute_glsl(
                      !(is_vector(a.type) && b.type == ShaderType::Float &&
                        c.type == ShaderType::Float)))
                     return false;
-                result = zero_value(a.type);
+                set_zero_value(result, a.type);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                 {
                     const float lower = b.data[component_count(b.type) == 1 ? 0 : i];
@@ -2564,7 +2590,7 @@ bool execute_glsl(
                     (a.type != b.type &&
                      !(is_vector(a.type) && b.type == ShaderType::Float)))
                     return false;
-                result = zero_value(a.type);
+                set_zero_value(result, a.type);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                 {
                     const float rhs = b.data[component_count(b.type) == 1 ? 0 : i];
@@ -2590,7 +2616,7 @@ bool execute_glsl(
 
                 const BuiltinFunction function =
                     static_cast<BuiltinFunction>(instruction.index);
-                result = zero_value(instruction.type);
+                set_zero_value(result, instruction.type);
 
                 const auto component = [](const ShaderValue& value, size_t index)
                 {
@@ -2783,7 +2809,7 @@ bool execute_glsl(
                             const float k = 1.0f - eta * eta * (1.0f - dot * dot);
                             if (k < 0.0f)
                             {
-                                result = zero_value(instruction.type);
+                                set_zero_value(result, instruction.type);
                             }
                             else
                             {
@@ -2899,7 +2925,7 @@ bool execute_glsl(
                     b.type != ShaderType::Vec2 ||
                     !texture_sample)
                     return false;
-                result = zero_value(ShaderType::Vec4);
+                set_zero_value(result, ShaderType::Vec4);
                 if (!texture_sample(static_cast<int>(a.data[0]),
                                     b.data[0], b.data[1],
                                     b.ddx[0], b.ddx[1],
