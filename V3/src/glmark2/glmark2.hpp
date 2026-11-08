@@ -83,6 +83,11 @@ struct RunConfig
     uint32_t repeat_count;
 };
 
+using FramePresentCallback = bool (*)(
+    uint32_t frame_index,
+    uint32_t total_frames,
+    void *user_data);
+
 struct BenchmarkResult
 {
     char description[96];
@@ -133,7 +138,9 @@ bool battery_request(BatteryId battery, size_t index, BenchmarkRequest& request,
     char *error, size_t error_capacity);
 
 bool run_benchmark(const BenchmarkRequest& request, const RunConfig& config,
-    BenchmarkResult& result, char *error, size_t error_capacity);
+    BenchmarkResult& result, char *error, size_t error_capacity,
+    FramePresentCallback present_callback = nullptr,
+    void *present_user_data = nullptr);
 
 const char *default_benchmark_description(size_t index);
 size_t default_benchmark_count();
