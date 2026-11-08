@@ -11,7 +11,11 @@ LCD framebuffer and saves `emulated-screen.ppm`.
 
 The GitHub Actions workflow builds the fxSDK/Gint toolchain using the Docker
 recipe from [hexbinoct/casio-cg50](https://github.com/hexbinoct/casio-cg50),
-builds the add-in, builds the headless emulator, and runs the test.
+builds the add-in, builds the headless emulator, and runs the test. The upstream
+recipe's initial GCC pass occurs before fxlibc is installed, so the workflow
+inserts the documented second `sh-elf-gcc` pass after fxlibc to build the
+SH-4 C++ standard library (`libstdc++-v3`). It then checks the standard-library
+headers before compiling fxOGL.
 
 **Scope:** this is a startup, shader, rasterization, and display-transfer smoke
 test. `casio-emu` is a work-in-progress emulator; it does not emulate the
