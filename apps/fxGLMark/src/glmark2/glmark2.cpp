@@ -198,9 +198,7 @@ static const char *const gouraud_vertex_shader =
     "uniform mat4 u_model;\n"
     "uniform vec3 u_light_dir;\n"
     "varying vec4 v_color;\n"
-    "float calculate_diffuse(vec3 normal, vec3 light_dir) {\n"
-    "  return max(dot(normalize(normal), normalize(light_dir)), 0.0);\n"
-    "}\n"
+    "float calculate_diffuse(vec3 normal, vec3 light_dir);\n"
     "void main() {\n"
     "  vec3 n = (u_model * vec4(a_normal, 0.0)).xyz;\n"
     "  float diffuse = calculate_diffuse(n, u_light_dir);\n"
@@ -208,6 +206,9 @@ static const char *const gouraud_vertex_shader =
     "  vec3 base = vec3(0.12, 0.48, 0.92);\n"
     "  v_color = vec4(base * light, 1.0);\n"
     "  gl_Position = u_mvp * vec4(a_position, 1.0);\n"
+    "}\n"
+    "float calculate_diffuse(vec3 normal, vec3 light_dir) {\n"
+    "  return max(dot(normalize(normal), normalize(light_dir)), 0.0);\n"
     "}\n";
 
 static const char *const gouraud_fragment_shader =
@@ -222,12 +223,13 @@ static const char *const texture_vertex_shader =
     "attribute vec2 a_texcoord;\n"
     "uniform mat4 u_mvp;\n"
     "varying vec2 v_uv;\n"
-    "vec2 scale_texcoord(vec2 coordinate, float scale) {\n"
-    "  return coordinate * scale;\n"
-    "}\n"
+    "vec2 scale_texcoord(vec2 coordinate, float scale);\n"
     "void main() {\n"
     "  gl_Position = u_mvp * vec4(a_position, 1.0);\n"
     "  v_uv = scale_texcoord(a_texcoord, 6.0);\n"
+    "}\n"
+    "vec2 scale_texcoord(vec2 coordinate, float scale) {\n"
+    "  return coordinate * scale;\n"
     "}\n";
 
 static const char *const texture_fragment_shader =
