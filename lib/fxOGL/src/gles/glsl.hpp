@@ -131,7 +131,12 @@ struct ShaderInstruction
     ShaderType type;
     uint8_t index;
     uint8_t argument_count;
-    uint8_t swizzle[4];
+    union
+    {
+        uint8_t swizzle[4];
+        /* Call op: compact local-variable copy-out descriptors. */
+        uint16_t output_targets[GLSL_MAX_PARAMETERS];
+    };
     float literal;
 };
 
@@ -185,9 +190,11 @@ using TextureSampleFunction = bool (*)(
    and in/out/inout parameter copy semantics. User overload resolution
    requires an exact match for every argument type; parameter qualifiers and
    return type do not distinguish overloads, but declarations of the same
-   parameter types must agree on return type and qualifiers. out/inout actual
-   arguments are currently restricted to distinct, writable local variables;
-   swizzles and global outputs are not supported as copy-out targets.
+   parameter types must agree on return type and qualifiers. Function
+   parameters are mutable local copies. out/inout actual arguments currently
+   target writable local variables or non-overlapping vector swizzles thereof;
+   global outputs are not supported as copy-out targets. Input/output aliases
+   follow value-return semantics; overlapping output destinations are rejected.
    Built-in function dispatch remains on its existing fixed-signature path.
    Arrays, structs, do-while, switch, preprocessor directives and precision
    qualifiers other than ordinary precision statements remain unsupported. */

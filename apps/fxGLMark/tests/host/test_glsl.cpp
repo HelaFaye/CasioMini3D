@@ -640,6 +640,92 @@ static void test_user_function_out_and_inout_parameters()
     assert(fxgl::execute_glsl(inout_module, inout_runtime));
     assert(near(inout_runtime.fragment_color.data[0], 12.0f));
 
+    // An in parameter is a writable local copy: modifications remain local
+    // and do not escape to the argument supplied by the caller.
+    static const char mutable_in_source[] =
+        "void mutate(in float value) { value = value + 5.0; }\\n"
+        "void main() { float x = 2.0; mutate(x); gl_FragColor = vec4(x); }\\n";
+    ShaderModule mutable_in_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, mutable_in_source, mutable_in_module));
+    ShaderRuntime mutable_in_runtime = {};
+    assert(fxgl::execute_glsl(mutable_in_module, mutable_in_runtime));
+    assert(near(mutable_in_runtime.fragment_color.data[0], 2.0f));
+
+    // Input/output aliasing is valid with value-return semantics: the input
+    // is copied before the function executes, then the output is copied back.
+    static const char input_output_alias_source[] =
+        "void increment(in float original, out float result);\\n"
+        "void main() { float x = 4.0; increment(x, x); gl_FragColor = vec4(x); }\\n"
+        "void increment(float original, out float result) { result = original + 1.0; }\\n";
+    ShaderModule input_output_alias_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, input_output_alias_source,
+        input_output_alias_module));
+    ShaderRuntime input_output_alias_runtime = {};
+    assert(fxgl::execute_glsl(input_output_alias_module,
+                              input_output_alias_runtime));
+    assert(near(input_output_alias_runtime.fragment_color.data[0], 5.0f));
+
+    // A mutable copy of an in parameter can itself be passed to an out call.
+    // Copy-out updates the helper's local copy, not the original caller.
+    static const char forward_input_source[] =
+        "void write_value(out float value);\\n"
+        "void relay(in float source) { write_value(source); }\\n"
+        "void main() { float x = 3.0; relay(x); gl_FragColor = vec4(x); }\\n"
+        "void write_value(out float value) { value = 8.0; }\\n";
+    ShaderModule forward_input_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, forward_input_source, forward_input_module));
+    ShaderRuntime forward_input_runtime = {};
+    assert(fxgl::execute_glsl(forward_input_module, forward_input_runtime));
+    assert(near(forward_input_runtime.fragment_color.data[0], 3.0f));
+
+    // Swizzles are writable copy-out l-values. The selector order is retained
+    // when values are copied back into the base vector.
+    static const char swizzle_source[] =
+        "void transform(inout vec2 pair, out float extra);\\n"
+        "void main() {\\n"
+        "  vec4 color = vec4(10.0, 20.0, 30.0, 40.0);\\n"
+        "  transform(color.yx, color.z);\\n"
+        "  gl_FragColor = color;\\n"
+        "}\\n"
+        "void transform(inout vec2 pair, out float extra) {\\n"
+        "  pair = pair + vec2(1.0, 2.0);\\n"
+        "  extra = 99.0;\\n"
+        "}\\n";
+    ShaderModule swizzle_module = {};
+    const bool swizzle_compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, swizzle_source, swizzle_module);
+    if (!swizzle_compiled)
+        std::fprintf(stderr, "swizzle copy-out diagnostic: %s\\n",
+                     swizzle_module.info_log);
+    assert(swizzle_compiled);
+    ShaderRuntime swizzle_runtime = {};
+    assert(fxgl::execute_glsl(swizzle_module, swizzle_runtime));
+    assert(near(swizzle_runtime.fragment_color.data[0], 12.0f));
+    assert(near(swizzle_runtime.fragment_color.data[1], 21.0f));
+    assert(near(swizzle_runtime.fragment_color.data[2], 99.0f));
+    assert(near(swizzle_runtime.fragment_color.data[3], 40.0f));
+
+    // Disjoint output swizzles of the same vector are safe; only overlapping
+    // output component masks are rejected.
+    static const char disjoint_swizzle_source[] =
+        "void split(out vec2 first, out vec2 second);\\n"
+        "void main() { vec4 color = vec4(0.0); split(color.yx, color.wz); gl_FragColor = color; }\\n"
+        "void split(out vec2 first, out vec2 second) { first = vec2(1.0, 2.0); second = vec2(3.0, 4.0); }\\n";
+    ShaderModule disjoint_swizzle_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Fragment, disjoint_swizzle_source,
+        disjoint_swizzle_module));
+    ShaderRuntime disjoint_swizzle_runtime = {};
+    assert(fxgl::execute_glsl(disjoint_swizzle_module,
+                              disjoint_swizzle_runtime));
+    assert(near(disjoint_swizzle_runtime.fragment_color.data[0], 2.0f));
+    assert(near(disjoint_swizzle_runtime.fragment_color.data[1], 1.0f));
+    assert(near(disjoint_swizzle_runtime.fragment_color.data[2], 4.0f));
+    assert(near(disjoint_swizzle_runtime.fragment_color.data[3], 3.0f));
+
     // A non-void return value and output parameters must survive the same
     // return path: copy-outs update the caller while the result is pushed.
     static const char return_out_source[] =
@@ -710,10 +796,10 @@ static void test_user_function_out_inout_rejections()
         "void store(out float value); void main() { store(1.0); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
         "void store(out float value); void main() { float x = 1.0; store(x + 1.0); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
         "uniform float u_value; void store(out float value); void main() { store(u_value); gl_FragColor = vec4(1.0); } void store(out float value) { value = 2.0; }",
+        "void store(out vec2 value); void main() { vec3 color = vec3(1.0); store(color.xx); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(0.0); }",
         "void store(out vec2 value); void main() { vec3 color = vec3(1.0); store(color.xy); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(0.0); }",
-        "void store(in float source, out float value); void main() { float x = 1.0; store(x, x); gl_FragColor = vec4(1.0); } void store(in float source, out float value) { value = source; }",
-        "void edit(in float value) { value = 2.0; } void main() { edit(1.0); gl_FragColor = vec4(1.0); }",
-        "void store(out float value); void relay(in float source) { store(source); } void store(out float value) { value = 2.0; } void main() { relay(1.0); gl_FragColor = vec4(1.0); }",
+        "void store(out vec3 value); void main() { vec3 color = vec3(1.0); store(color.xy); gl_FragColor = vec4(1.0); } void store(out vec3 value) { value = vec3(0.0); }",
+        "void store(out vec2 first, out vec2 second); void main() { vec4 color = vec4(1.0); store(color.xy, color.yz); gl_FragColor = color; } void store(out vec2 first, out vec2 second) { first = vec2(0.0); second = vec2(0.0); }",
         "void store(out float value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(inout float value) { value = 2.0; }",
         "void select_value(in float value); void select_value(out float value); void main() { gl_FragColor = vec4(1.0); }",
         "void store(out vec2 value); void main() { float x = 0.0; store(x); gl_FragColor = vec4(1.0); } void store(out vec2 value) { value = vec2(1.0); }"

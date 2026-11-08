@@ -17,9 +17,9 @@ The library currently contains:
 - A bounded GLSL ES 1.00 compiler and bytecode VM with conditional/loop control
   flow, loop jumps, and user-defined functions with prototypes, forward
   definitions, exact-type overload resolution, typed returns, and bounded
-  `in`/`out`/`inout` copy semantics. `out`/`inout` copy back to distinct,
-  writable local-variable arguments; swizzles and global outputs are not yet
-  supported as copy-out targets.
+  `in`/`out`/`inout` copy semantics. Input parameters are mutable local
+  copies; outputs copy back to writable locals and non-overlapping vector
+  swizzles. Global outputs are not yet supported as copy-out targets.
 
 This is an incremental compatibility implementation, not full OpenGL ES 2.0
 support and not a Khronos-conformant implementation. See

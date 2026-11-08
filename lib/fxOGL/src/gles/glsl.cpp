@@ -223,7 +223,12 @@ struct ResolvedVariable
     ShaderType type;
     uint8_t index;
     bool writable = false;
+    bool is_swizzle = false;
+    uint8_t components[4] = {};
 };
+
+static constexpr uint16_t CALL_OUTPUT_TARGET_FULL = 0x8000;
+static constexpr uint16_t CALL_OUTPUT_TARGET_NONE = 0xffff;
 
 enum class BuiltinFunction : uint8_t
 {
@@ -699,13 +704,7 @@ private:
             const ShaderVariable *local = find_variable(
                 function.locals, function.local_count, name);
             if (local)
-            {
-                const bool writable =
-                    local->index >= function.parameter_count ||
-                    function.parameters[local->index].qualifier !=
-                        ShaderParameterQualifier::In;
-                return {Storage::Local, local->type, local->index, writable};
-            }
+                return {Storage::Local, local->type, local->index, true};
         }
 
         const ShaderVariable *variable = find_variable(
@@ -2258,43 +2257,81 @@ private:
             call.type = function.return_type;
             call.index = static_cast<uint8_t>(function_index);
             call.argument_count = static_cast<uint8_t>(argument_count);
+            uint8_t output_masks[GLSL_MAX_PARAMETERS] = {};
             for (size_t i = 0; i < GLSL_MAX_PARAMETERS; ++i)
-                call.swizzle[i] = 0xff;
+                call.output_targets[i] = CALL_OUTPUT_TARGET_NONE;
 
             for (size_t i = 0; i < argument_count; ++i)
             {
-                if (argument_lvalues[i].storage == Storage::Local)
-                    call.swizzle[i] = argument_lvalues[i].index;
-
-                if (function.parameters[i].qualifier !=
+                if (function.parameters[i].qualifier ==
                     ShaderParameterQualifier::In)
+                    continue;
+
+                const ResolvedVariable& target = argument_lvalues[i];
+                if (target.storage != Storage::Local || !target.writable ||
+                    target.type != function.parameters[i].type)
                 {
-                    const ResolvedVariable& target = argument_lvalues[i];
-                    if (target.storage != Storage::Local || !target.writable ||
-                        target.type != function.parameters[i].type)
+                    fail("out/inout arguments require a writable local variable or vector swizzle");
+                    return ShaderType::Invalid;
+                }
+
+                if (!target.is_swizzle)
+                {
+                    call.output_targets[i] = static_cast<uint16_t>(
+                        CALL_OUTPUT_TARGET_FULL | target.index);
+                    output_masks[i] = 0xff;
+                    continue;
+                }
+
+                const size_t components =
+                    component_count(function.parameters[i].type);
+                if (!is_any_vector(function.parameters[i].type) ||
+                    components == 0 || components > 4)
+                {
+                    fail("copy-out swizzle requires a vector parameter");
+                    return ShaderType::Invalid;
+                }
+
+                uint16_t descriptor = target.index;
+                uint8_t mask = 0;
+                for (size_t component = 0; component < components; ++component)
+                {
+                    const uint8_t selector = target.components[component];
+                    const uint8_t bit = static_cast<uint8_t>(1u << selector);
+                    if (mask & bit)
                     {
-                        fail("out/inout arguments require a writable local variable");
+                        fail("copy-out swizzle cannot repeat a component");
                         return ShaderType::Invalid;
                     }
+                    mask = static_cast<uint8_t>(mask | bit);
+                    descriptor = static_cast<uint16_t>(
+                        descriptor | (static_cast<uint16_t>(selector)
+                                      << (3 + 2 * component)));
                 }
+                call.output_targets[i] = descriptor;
+                output_masks[i] = mask;
             }
 
-            // GLSL ES leaves aliased input/output argument combinations
-            // undefined. Reject aliases between the plain local l-values
-            // represented by this bounded copy-out model.
+            // Input arguments are copied before the call and may alias an
+            // output destination. Only overlapping output destinations are
+            // rejected; disjoint swizzles of one local are safe to merge.
             for (size_t i = 0; i < argument_count; ++i)
             {
+                if (function.parameters[i].qualifier ==
+                    ShaderParameterQualifier::In)
+                    continue;
                 for (size_t j = 0; j < i; ++j)
                 {
-                    if (argument_lvalues[i].storage == Storage::Local &&
+                    if (function.parameters[j].qualifier ==
+                        ShaderParameterQualifier::In)
+                        continue;
+                    if (argument_lvalues[i].index ==
+                            argument_lvalues[j].index &&
+                        argument_lvalues[i].storage == Storage::Local &&
                         argument_lvalues[j].storage == Storage::Local &&
-                        argument_lvalues[i].index == argument_lvalues[j].index &&
-                        (function.parameters[i].qualifier !=
-                             ShaderParameterQualifier::In ||
-                         function.parameters[j].qualifier !=
-                             ShaderParameterQualifier::In))
+                        (output_masks[i] & output_masks[j]) != 0)
                     {
-                        fail("aliased input/output arguments are unsupported");
+                        fail("overlapping output arguments are unsupported");
                         return ShaderType::Invalid;
                     }
                 }
@@ -2383,6 +2420,7 @@ private:
         if (!accept_punctuation('.'))
             return;
 
+        const ResolvedVariable base_lvalue = expression_lvalue_;
         expression_lvalue_ = {};
         if (!is_any_vector(type) || current_.kind != TokenKind::Identifier)
         {
@@ -2433,6 +2471,15 @@ private:
         advance();
         emit(instruction);
         type = instruction.type;
+
+        if (base_lvalue.storage == Storage::Local && base_lvalue.writable)
+        {
+            expression_lvalue_ = base_lvalue;
+            expression_lvalue_.type = instruction.type;
+            expression_lvalue_.is_swizzle = true;
+            for (size_t i = 0; i < instruction.argument_count; ++i)
+                expression_lvalue_.components[i] = instruction.swizzle[i];
+        }
     }
 
     ShaderStage stage_;
@@ -2725,7 +2772,7 @@ bool execute_glsl(
         size_t return_pc;
         size_t stack_base;
         uint8_t function_index;
-        uint8_t output_targets[GLSL_MAX_PARAMETERS];
+        uint16_t output_targets[GLSL_MAX_PARAMETERS];
         ShaderValue locals[GLSL_MAX_LOCALS];
     };
 
@@ -2857,7 +2904,7 @@ bool execute_glsl(
                 frame.stack_base = stack_size;
                 frame.function_index = instruction.index;
                 for (size_t i = 0; i < GLSL_MAX_PARAMETERS; ++i)
-                    frame.output_targets[i] = 0xff;
+                    frame.output_targets[i] = CALL_OUTPUT_TARGET_NONE;
 
                 for (size_t i = 0; i < function.local_count; ++i)
                 {
@@ -2880,11 +2927,40 @@ bool execute_glsl(
                     }
                     else
                     {
-                        const uint8_t target = instruction.swizzle[i];
-                        if (target >= GLSL_MAX_LOCALS ||
-                            locals[target].type != parameter.type)
+                        const uint16_t descriptor = instruction.output_targets[i];
+                        if (descriptor == CALL_OUTPUT_TARGET_NONE)
                             return false;
-                        frame.output_targets[i] = target;
+                        const uint8_t target =
+                            static_cast<uint8_t>(descriptor & 0x7);
+                        if (target >= GLSL_MAX_LOCALS)
+                            return false;
+
+                        if (descriptor & CALL_OUTPUT_TARGET_FULL)
+                        {
+                            if (locals[target].type != parameter.type)
+                                return false;
+                        }
+                        else
+                        {
+                            if (!is_any_vector(locals[target].type) ||
+                                !is_any_vector(parameter.type) ||
+                                vector_type_for(
+                                    component_count(parameter.type),
+                                    vector_base_type(locals[target].type)) !=
+                                    parameter.type)
+                                return false;
+                            for (size_t component = 0;
+                                 component < component_count(parameter.type);
+                                 ++component)
+                            {
+                                const uint8_t selector = static_cast<uint8_t>(
+                                    (descriptor >> (3 + 2 * component)) & 0x3);
+                                if (selector >= vector_dimension(locals[target].type))
+                                    return false;
+                            }
+                        }
+
+                        frame.output_targets[i] = descriptor;
                         if (parameter.qualifier == ShaderParameterQualifier::InOut)
                             copy_shader_value(
                                 frame.locals[parameter.index], call_arguments[i]);
@@ -2934,14 +3010,52 @@ bool execute_glsl(
                     if (parameter.qualifier == ShaderParameterQualifier::In)
                         continue;
 
-                    const uint8_t target = frame.output_targets[i];
-                    if (target >= GLSL_MAX_LOCALS ||
-                        parameter.index >= GLSL_MAX_LOCALS ||
-                        frame.locals[parameter.index].type != parameter.type ||
-                        caller_locals[target].type != parameter.type)
+                    const uint16_t descriptor = frame.output_targets[i];
+                    if (descriptor == CALL_OUTPUT_TARGET_NONE ||
+                        parameter.index >= GLSL_MAX_LOCALS)
                         return false;
-                    copy_shader_value(
-                        caller_locals[target], frame.locals[parameter.index]);
+                    const uint8_t target =
+                        static_cast<uint8_t>(descriptor & 0x7);
+                    if (target >= GLSL_MAX_LOCALS ||
+                        frame.locals[parameter.index].type != parameter.type)
+                        return false;
+
+                    if (descriptor & CALL_OUTPUT_TARGET_FULL)
+                    {
+                        if (caller_locals[target].type != parameter.type)
+                            return false;
+                        copy_shader_value(
+                            caller_locals[target], frame.locals[parameter.index]);
+                    }
+                    else
+                    {
+                        if (!is_any_vector(caller_locals[target].type) ||
+                            !is_any_vector(parameter.type) ||
+                            vector_type_for(
+                                component_count(parameter.type),
+                                vector_base_type(caller_locals[target].type)) !=
+                                parameter.type)
+                            return false;
+
+                        for (size_t component = 0;
+                             component < component_count(parameter.type);
+                             ++component)
+                        {
+                            const uint8_t selector = static_cast<uint8_t>(
+                                (descriptor >> (3 + 2 * component)) & 0x3);
+                            if (selector >= vector_dimension(caller_locals[target].type))
+                                return false;
+                            caller_locals[target].data[selector] =
+                                frame.locals[parameter.index].data[component];
+                            if (selector < 4)
+                            {
+                                caller_locals[target].ddx[selector] =
+                                    frame.locals[parameter.index].ddx[component];
+                                caller_locals[target].ddy[selector] =
+                                    frame.locals[parameter.index].ddy[component];
+                            }
+                        }
+                    }
                 }
 
                 pc = frame.return_pc;
