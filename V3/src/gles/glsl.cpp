@@ -264,17 +264,6 @@ static size_t matrix_dimension(ShaderType type)
     }
 }
 
-static ShaderType matrix_type(size_t dimension)
-{
-    switch (dimension)
-    {
-        case 2: return ShaderType::Mat2;
-        case 3: return ShaderType::Mat3;
-        case 4: return ShaderType::Mat4;
-        default: return ShaderType::Invalid;
-    }
-}
-
 static bool is_matrix(ShaderType type)
 {
     return matrix_dimension(type) != 0;
