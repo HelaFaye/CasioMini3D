@@ -1113,7 +1113,7 @@ static bool draw_vertex_point(
     if (!execute_vertex(program, index, vertex))
         return false;
 
-    DrawInvocation invocation = {program, false};
+    DrawInvocation invocation = {program, find_passthrough_varying_offset(program), false};
     fxgl::draw_clip_point(
         vertex,
         program.varying_scalar_count,
@@ -1137,7 +1137,7 @@ static bool draw_vertex_line(
         !execute_vertex(program, second, vertices[1]))
         return false;
 
-    DrawInvocation invocation = {program, false};
+    DrawInvocation invocation = {program, find_passthrough_varying_offset(program), false};
     fxgl::draw_clip_line(
         vertices,
         program.varying_scalar_count,
