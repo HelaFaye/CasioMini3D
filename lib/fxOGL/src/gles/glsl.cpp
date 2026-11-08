@@ -389,8 +389,8 @@ class Parser
 public:
     Parser(ShaderStage stage, const char *source, ShaderModule& module)
         : stage_(stage), lexer_(source), module_(module), current_(),
-          failed_(false), recursion_depth_(0), loop_depth_(0),
-          jump_patch_count_(0), loop_stack_{}, jump_patches_{}
+          failed_(false), recursion_depth_(0), loop_stack_{}, jump_patches_{},
+          loop_depth_(0), jump_patch_count_(0)
     {
         advance();
     }
