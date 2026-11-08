@@ -148,10 +148,11 @@ using TextureSampleFunction = bool (*)(
     float rgba[4],
     void *user_data);
 
-/* Compile the explicitly documented GLSL ES 1.00 subset. Arrays, structs,
-   user-defined functions, control flow, preprocessor directives and precision
-   qualifiers other than ordinary precision statements are unsupported and
-   produce a diagnostic in module.info_log. */
+/* Compile the explicitly documented GLSL ES 1.00 subset. The parser supports
+   if/else, for/while loops, and loop-local break/continue jumps. Arrays,
+   structs, user-defined functions, do-while, switch, preprocessor directives
+   and precision qualifiers other than ordinary precision statements are
+   unsupported and produce a diagnostic in module.info_log. */
 bool compile_glsl(
     ShaderStage stage,
     const char *source,
