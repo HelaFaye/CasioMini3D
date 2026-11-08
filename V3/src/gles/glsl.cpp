@@ -246,7 +246,15 @@ static size_t component_count(ShaderType type)
         case ShaderType::Vec3:
             return 3;
         case ShaderType::Vec4:
+        case ShaderType::IVec4:
+        case ShaderType::BVec4:
             return 4;
+        case ShaderType::IVec2:
+        case ShaderType::BVec2:
+            return 2;
+        case ShaderType::IVec3:
+        case ShaderType::BVec3:
+            return 3;
         case ShaderType::Mat2:
             return 4;
         case ShaderType::Mat3:
@@ -276,6 +284,75 @@ static bool is_vector(ShaderType type)
            type == ShaderType::Vec4;
 }
 
+static bool is_int_vector(ShaderType type)
+{
+    return type == ShaderType::IVec2 || type == ShaderType::IVec3 ||
+           type == ShaderType::IVec4;
+}
+
+static bool is_bool_vector(ShaderType type)
+{
+    return type == ShaderType::BVec2 || type == ShaderType::BVec3 ||
+           type == ShaderType::BVec4;
+}
+
+static bool is_any_vector(ShaderType type)
+{
+    return is_vector(type) || is_int_vector(type) || is_bool_vector(type);
+}
+
+static size_t vector_dimension(ShaderType type)
+{
+    switch (type)
+    {
+        case ShaderType::Vec2:
+        case ShaderType::IVec2:
+        case ShaderType::BVec2: return 2;
+        case ShaderType::Vec3:
+        case ShaderType::IVec3:
+        case ShaderType::BVec3: return 3;
+        case ShaderType::Vec4:
+        case ShaderType::IVec4:
+        case ShaderType::BVec4: return 4;
+        default: return 0;
+    }
+}
+
+static ShaderType vector_type_for(size_t components, ShaderType base)
+{
+    if (base == ShaderType::Float)
+        return vector_type(components);
+    if (base == ShaderType::Int)
+    {
+        switch (components)
+        {
+            case 2: return ShaderType::IVec2;
+            case 3: return ShaderType::IVec3;
+            case 4: return ShaderType::IVec4;
+            default: return ShaderType::Invalid;
+        }
+    }
+    if (base == ShaderType::Bool)
+    {
+        switch (components)
+        {
+            case 2: return ShaderType::BVec2;
+            case 3: return ShaderType::BVec3;
+            case 4: return ShaderType::BVec4;
+            default: return ShaderType::Invalid;
+        }
+    }
+    return ShaderType::Invalid;
+}
+
+static ShaderType vector_base_type(ShaderType type)
+{
+    if (is_vector(type)) return ShaderType::Float;
+    if (is_int_vector(type)) return ShaderType::Int;
+    if (is_bool_vector(type)) return ShaderType::Bool;
+    return ShaderType::Invalid;
+}
+
 static bool is_gen_type(ShaderType type)
 {
     return type == ShaderType::Float || is_vector(type);
@@ -299,7 +376,8 @@ static bool is_matrix(ShaderType type)
 
 static bool is_numeric(ShaderType type)
 {
-    return type == ShaderType::Float || is_vector(type) || is_matrix(type);
+    return type == ShaderType::Float || type == ShaderType::Int ||
+           is_vector(type) || is_int_vector(type) || is_matrix(type);
 }
 
 class Parser
@@ -623,6 +701,12 @@ private:
                std::strcmp(current_.text, "vec2") == 0 ||
                std::strcmp(current_.text, "vec3") == 0 ||
                std::strcmp(current_.text, "vec4") == 0 ||
+               std::strcmp(current_.text, "ivec2") == 0 ||
+               std::strcmp(current_.text, "ivec3") == 0 ||
+               std::strcmp(current_.text, "ivec4") == 0 ||
+               std::strcmp(current_.text, "bvec2") == 0 ||
+               std::strcmp(current_.text, "bvec3") == 0 ||
+               std::strcmp(current_.text, "bvec4") == 0 ||
                std::strcmp(current_.text, "mat2") == 0 ||
                std::strcmp(current_.text, "mat3") == 0 ||
                std::strcmp(current_.text, "mat4") == 0 ||
@@ -1577,6 +1661,12 @@ private:
         if (std::strcmp(name, "vec2") == 0) return ShaderType::Vec2;
         if (std::strcmp(name, "vec3") == 0) return ShaderType::Vec3;
         if (std::strcmp(name, "vec4") == 0) return ShaderType::Vec4;
+        if (std::strcmp(name, "ivec2") == 0) return ShaderType::IVec2;
+        if (std::strcmp(name, "ivec3") == 0) return ShaderType::IVec3;
+        if (std::strcmp(name, "ivec4") == 0) return ShaderType::IVec4;
+        if (std::strcmp(name, "bvec2") == 0) return ShaderType::BVec2;
+        if (std::strcmp(name, "bvec3") == 0) return ShaderType::BVec3;
+        if (std::strcmp(name, "bvec4") == 0) return ShaderType::BVec4;
         if (std::strcmp(name, "mat2") == 0) return ShaderType::Mat2;
         if (std::strcmp(name, "mat3") == 0) return ShaderType::Mat3;
         if (std::strcmp(name, "mat4") == 0) return ShaderType::Mat4;
@@ -1614,6 +1704,19 @@ private:
                 (arguments[0] == ShaderType::Float ||
                  arguments[0] == ShaderType::Int ||
                  arguments[0] == ShaderType::Bool);
+        if (is_any_vector(destination))
+        {
+            for (size_t i = 0; i < argument_count; ++i)
+            {
+                if (arguments[i] == ShaderType::Sampler2D ||
+                    is_matrix(arguments[i]))
+                    return false;
+            }
+            if (argument_count == 1 &&
+                component_count(arguments[0]) == 1)
+                return true;
+            return supplied == required;
+        }
         return supplied == required;
     }
 
@@ -1622,7 +1725,7 @@ private:
         if (!accept_punctuation('.'))
             return;
 
-        if (!is_vector(type) || current_.kind != TokenKind::Identifier)
+        if (!is_any_vector(type) || current_.kind != TokenKind::Identifier)
         {
             fail("swizzles require a vector and a component selector");
             type = ShaderType::Invalid;
@@ -1639,7 +1742,7 @@ private:
 
         ShaderInstruction instruction = {};
         instruction.op = ShaderOp::Swizzle;
-        instruction.type = vector_type(length);
+        instruction.type = vector_type_for(length, vector_base_type(type));
         instruction.argument_count = static_cast<uint8_t>(length);
 
         const char *selectors = "xyzw";
@@ -2018,7 +2121,7 @@ bool execute_glsl(
 
             case ShaderOp::Swizzle:
                 if (!pop_value(stack, stack_size, a) ||
-                    !is_vector(a.type) ||
+                    !is_any_vector(a.type) ||
                     instruction.argument_count == 0 ||
                     instruction.argument_count > 4)
                     return false;
