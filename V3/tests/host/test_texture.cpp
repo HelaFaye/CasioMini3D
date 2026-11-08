@@ -263,8 +263,8 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
         }
     }
 
-    // Match the repeated-UV range used by the glmark2 sphere (0..6),
-    // exercising both power-of-two and non-power-of-two address periods.
+    // Match the repeated-UV range used by the glmark2 sphere (0..6)
+    // with a power-of-two texture; non-power-of-two wrap is tested above.
     {
         constexpr uint16_t width = 32;
         constexpr uint16_t height = 32;

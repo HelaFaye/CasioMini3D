@@ -509,7 +509,7 @@ static void show_renderer_microbench_results(
     dtext(8, 5, C_WHITE, "Renderer component microbenchmarks");
     for (size_t i = 0; i < MICROBENCH_COUNT; ++i)
     {
-        // Five stages fit with compact 3-line rows on the 224px display.
+        // Six stages fit with compact 3-line rows on the 224px display.
         const int y = 16 + static_cast<int>(i) * 28;
         if (!valid[i])
         {
