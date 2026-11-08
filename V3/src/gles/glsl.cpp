@@ -124,7 +124,7 @@ public:
             return token;
         }
 
-        if (std::strchr("=!<>&|", c))
+        if (std::strchr("=!<>&|+-", c))
         {
             const char next = source_[offset_ + 1];
             const bool pair =
