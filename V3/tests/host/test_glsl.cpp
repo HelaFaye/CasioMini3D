@@ -120,7 +120,7 @@ static void test_compile_and_execute_texture_fragment_shader()
         "uniform sampler2D u_texture;\n"
         "varying vec2 v_uv;\n"
         "void main() {\n"
-        "  gl_FragColor = texture2D(u_texture, v_uv);\n"
+        "  gl_FragColor = texture2D(u_texture, v_uv * 2.0);\n"
         "}\n";
 
     ShaderModule module = {};
@@ -140,12 +140,12 @@ static void test_compile_and_execute_texture_fragment_shader()
     sampled_unit = -1;
     assert(fxgl::execute_glsl(module, runtime, test_texture_sample));
     assert(sampled_unit == 1);
-    assert(near(sampled_u, 0.25f));
-    assert(near(sampled_v, 0.75f));
-    assert(near(sampled_dudx, 0.01f));
-    assert(near(sampled_dvdx, 0.02f));
-    assert(near(sampled_dudy, 0.03f));
-    assert(near(sampled_dvdy, 0.04f));
+    assert(near(sampled_u, 0.5f));
+    assert(near(sampled_v, 1.5f));
+    assert(near(sampled_dudx, 0.02f));
+    assert(near(sampled_dvdx, 0.04f));
+    assert(near(sampled_dudy, 0.06f));
+    assert(near(sampled_dvdy, 0.08f));
     assert(runtime.fragment_color.type == ShaderType::Vec4);
     assert(near(runtime.fragment_color.data[0], 0.1f));
     assert(near(runtime.fragment_color.data[1], 0.2f));
