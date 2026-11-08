@@ -8,6 +8,7 @@ using gfx::Texture2DView;
 using gfx::TextureAddressMode;
 using gfx::TextureFilter;
 using gfx::TextureSampler;
+using gfx::TextureMipLevel;
 
 namespace
 {
