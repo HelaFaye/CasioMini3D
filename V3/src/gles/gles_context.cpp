@@ -887,6 +887,7 @@ struct DrawInvocation
     bool fragment_failed;
     bool varying_derivatives;
     CachedTextureBinding textures[FXGL_MAX_TEXTURE_UNITS];
+    fxgl::ShaderRuntime fragment_runtime;
 };
 
 static int find_passthrough_varying_offset(
@@ -1091,7 +1092,11 @@ static bool execute_fragment(
         return true;
     }
 
-    fxgl::ShaderRuntime runtime = {};
+    // Keep one runtime per draw instead of clearing its full maximum-sized
+    // storage for every covered fragment. Locals and output validity are
+    // reset here; all declared uniforms and varyings are refreshed below.
+    fxgl::ShaderRuntime& runtime = invocation.fragment_runtime;
+    fxgl::prepare_shader_runtime(module, runtime);
 
     for (size_t i = 0; i < module.uniform_count; ++i)
     {

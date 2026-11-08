@@ -160,6 +160,13 @@ bool compile_glsl(
 /* Execute compiled shader bytecode without allocation. Vertex shaders write
    position/varyings; fragment shaders read interpolated varyings and write
    fragment_color. texture2D requires a caller-provided texture callback. */
+/* Prepare a reused runtime for one invocation. Declared locals are reset
+   to zero and stage outputs are invalidated; callers must refresh the
+   invocation's attributes, uniforms and varyings before execute_glsl(). */
+void prepare_shader_runtime(
+    const ShaderModule& module,
+    ShaderRuntime& runtime);
+
 bool execute_glsl(
     const ShaderModule& module,
     ShaderRuntime& runtime,

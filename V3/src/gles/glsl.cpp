@@ -2115,6 +2115,23 @@ bool compile_glsl(
     return module.compiled;
 }
 
+void prepare_shader_runtime(
+    const ShaderModule& module,
+    ShaderRuntime& runtime)
+{
+    for (size_t i = 0; i < module.local_count; ++i)
+    {
+        const ShaderVariable& variable = module.locals[i];
+        if (variable.index < GLSL_MAX_LOCALS)
+            set_zero_value(runtime.locals[variable.index], variable.type);
+    }
+
+    // A reused output must not make an invocation appear successful when
+    // its shader failed to write the required stage result.
+    runtime.position.type = ShaderType::Invalid;
+    runtime.fragment_color.type = ShaderType::Invalid;
+}
+
 bool execute_glsl(
     const ShaderModule& module,
     ShaderRuntime& runtime,

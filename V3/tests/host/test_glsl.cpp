@@ -542,6 +542,64 @@ static void test_instruction_budget_and_stack_safety()
 }
 } // namespace
 
+
+static void test_reused_runtime_resets_locals_and_outputs()
+{
+    static const char source[] =
+        "uniform vec4 u_color;\n"
+        "varying vec4 v_color;\n"
+        "void main() {\n"
+        "  vec4 combined = u_color + v_color;\n"
+        "  gl_FragColor = combined;\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+    assert(module.local_count == 1);
+
+    ShaderRuntime runtime = {};
+    runtime.locals[0] = value(ShaderType::Vec4, 91.0f, 92.0f, 93.0f, 94.0f);
+    runtime.position = value(ShaderType::Vec4, 81.0f, 82.0f, 83.0f, 84.0f);
+    runtime.fragment_color = value(ShaderType::Vec4, 71.0f, 72.0f, 73.0f, 74.0f);
+    runtime.locals[0].ddx[0] = 55.0f;
+    runtime.locals[0].ddy[0] = 66.0f;
+
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(runtime.locals[0].type == ShaderType::Vec4);
+    for (size_t i = 0; i < 4; ++i)
+    {
+        assert(runtime.locals[0].data[i] == 0.0f);
+        assert(runtime.locals[0].ddx[i] == 0.0f);
+        assert(runtime.locals[0].ddy[i] == 0.0f);
+    }
+    assert(runtime.position.type == ShaderType::Invalid);
+    assert(runtime.fragment_color.type == ShaderType::Invalid);
+
+    runtime.uniforms[0] = value(ShaderType::Vec4, 0.1f, 0.2f, 0.3f, 0.4f);
+    runtime.varyings[0] = value(ShaderType::Vec4, 0.4f, 0.3f, 0.2f, 0.1f);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.5f));
+    assert(near(runtime.fragment_color.data[1], 0.5f));
+    assert(near(runtime.fragment_color.data[2], 0.5f));
+    assert(near(runtime.fragment_color.data[3], 0.5f));
+
+    // Poison the prior invocation's local/output values, then prove the
+    // preparation step removes them before new fragment inputs are executed.
+    runtime.locals[0] = value(ShaderType::Vec4, 101.0f, 102.0f, 103.0f, 104.0f);
+    runtime.fragment_color = value(ShaderType::Vec4, 111.0f, 112.0f, 113.0f, 114.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(runtime.locals[0].data[0] == 0.0f);
+    assert(runtime.fragment_color.type == ShaderType::Invalid);
+
+    runtime.uniforms[0] = value(ShaderType::Vec4, 0.2f, 0.1f, 0.4f, 0.3f);
+    runtime.varyings[0] = value(ShaderType::Vec4, 0.3f, 0.4f, 0.1f, 0.2f);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.5f));
+    assert(near(runtime.fragment_color.data[1], 0.5f));
+    assert(near(runtime.fragment_color.data[2], 0.5f));
+    assert(near(runtime.fragment_color.data[3], 0.5f));
+}
+
 int main()
 {
     test_compile_and_execute_vertex_shader();
@@ -559,6 +617,7 @@ int main()
     test_ivec_bvec_constructors_swizzles_and_vector_relations();
     test_compiler_rejects_unsupported_or_invalid_source();
     test_instruction_budget_and_stack_safety();
+    test_reused_runtime_resets_locals_and_outputs();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;
