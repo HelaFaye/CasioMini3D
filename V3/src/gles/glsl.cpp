@@ -322,6 +322,8 @@ static size_t vector_dimension(ShaderType type)
 
 static ShaderType vector_type_for(size_t components, ShaderType base)
 {
+    if (components == 1)
+        return base;
     if (base == ShaderType::Float)
         return vector_type(components);
     if (base == ShaderType::Int)
