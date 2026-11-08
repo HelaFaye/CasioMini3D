@@ -76,6 +76,7 @@ small and independently useful: fxSDK integration fixes, reproducible
 toolchain/build reports, or Gint driver/primitive bug fixes demonstrated by a
 minimal case. The software GLES renderer itself belongs here.
 
-See [`docs/repository-layout.md`](docs/repository-layout.md) for the full tree
-and [`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md) for project
-references and attribution.
+See [`docs/repository-layout.md`](docs/repository-layout.md) for the full tree,
+[`docs/source-provenance.md`](docs/source-provenance.md) for inherited-code
+and licensing boundaries, and [`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md)
+for project references and attribution.

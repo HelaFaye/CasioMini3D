@@ -11,6 +11,15 @@
 
 No glmark2 assets or test data are intentionally redistributed by this project.
 
+## Inherited CasioMini3D source
+
+This repository retains active-app and historical source inherited from
+[`leofarhi/CasioMini3D`](https://github.com/leofarhi/CasioMini3D). The parent
+repository had no root LICENSE or COPYING file and no recognized license
+metadata at the time of the 2026-11-08 audit. Do not assume inherited source
+may be relicensed or submitted to other projects. See
+[`source-provenance.md`](source-provenance.md).
+
 ## Gint and fxSDK
 
 fxGLMark uses Gint and the fxSDK for calculator hardware access, add-in
