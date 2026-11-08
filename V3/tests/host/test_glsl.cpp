@@ -82,17 +82,29 @@ static void test_compile_and_execute_vertex_shader()
 static int sampled_unit = -1;
 static float sampled_u = 0.0f;
 static float sampled_v = 0.0f;
+static float sampled_dudx = 0.0f;
+static float sampled_dvdx = 0.0f;
+static float sampled_dudy = 0.0f;
+static float sampled_dvdy = 0.0f;
 
 static bool test_texture_sample(
     int unit,
     float u,
     float v,
+    float dudx,
+    float dvdx,
+    float dudy,
+    float dvdy,
     float rgba[4],
     void *)
 {
     sampled_unit = unit;
     sampled_u = u;
     sampled_v = v;
+    sampled_dudx = dudx;
+    sampled_dvdx = dvdx;
+    sampled_dudy = dudy;
+    sampled_dvdy = dvdy;
     rgba[0] = 0.1f;
     rgba[1] = 0.2f;
     rgba[2] = 0.3f;
@@ -120,12 +132,20 @@ static void test_compile_and_execute_texture_fragment_shader()
     ShaderRuntime runtime = {};
     runtime.uniforms[0] = value(ShaderType::Sampler2D, 1.0f);
     runtime.varyings[0] = value(ShaderType::Vec2, 0.25f, 0.75f);
+    runtime.varyings[0].ddx[0] = 0.01f;
+    runtime.varyings[0].ddx[1] = 0.02f;
+    runtime.varyings[0].ddy[0] = 0.03f;
+    runtime.varyings[0].ddy[1] = 0.04f;
 
     sampled_unit = -1;
     assert(fxgl::execute_glsl(module, runtime, test_texture_sample));
     assert(sampled_unit == 1);
     assert(near(sampled_u, 0.25f));
     assert(near(sampled_v, 0.75f));
+    assert(near(sampled_dudx, 0.01f));
+    assert(near(sampled_dvdx, 0.02f));
+    assert(near(sampled_dudy, 0.03f));
+    assert(near(sampled_dvdy, 0.04f));
     assert(runtime.fragment_color.type == ShaderType::Vec4);
     assert(near(runtime.fragment_color.data[0], 0.1f));
     assert(near(runtime.fragment_color.data[1], 0.2f));
