@@ -325,9 +325,55 @@ bool sample_texture_nearest_validated(
         !std::isfinite(u) || !std::isfinite(v))
         return false;
 
-    // The original GLES conversion bounded the 16.16 texel coordinate to
-    // signed 64-bit before sampling. The same bound keeps this direct floor
-    // conversion defined while avoiding the fixed-point round trip.
+    // The dominant GLES case uses normalized coordinates inside [0, 1).
+    // Float multiplication and a 16-bit conversion are enough unless the
+    // rounded product lands exactly on an integer texel boundary. At such a
+    // boundary, recompute only that axis in double precision: this preserves
+    // the exact floor decision for values immediately above/below the edge.
+    if (u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f)
+    {
+        const float scaled_u = u * static_cast<float>(texture.width);
+        const float scaled_v = v * static_cast<float>(texture.height);
+
+        uint16_t x = 0;
+        uint16_t y = 0;
+        if (scaled_u >= 0.0f &&
+            scaled_u < static_cast<float>(texture.width))
+        {
+            x = static_cast<uint16_t>(scaled_u);
+            if (scaled_u == static_cast<float>(x))
+                x = static_cast<uint16_t>(
+                    static_cast<double>(u) * texture.width);
+        }
+        else
+        {
+            // A value extremely close to one can round to the extent in
+            // float. The exact product remains below the extent.
+            x = static_cast<uint16_t>(
+                static_cast<double>(u) * texture.width);
+        }
+
+        if (scaled_v >= 0.0f &&
+            scaled_v < static_cast<float>(texture.height))
+        {
+            y = static_cast<uint16_t>(scaled_v);
+            if (scaled_v == static_cast<float>(y))
+                y = static_cast<uint16_t>(
+                    static_cast<double>(v) * texture.height);
+        }
+        else
+        {
+            y = static_cast<uint16_t>(
+                static_cast<double>(v) * texture.height);
+        }
+
+        pixel = texture.pixels[
+            static_cast<size_t>(y) * texture.stride + x];
+        return true;
+    }
+
+    // Preserve full-range behavior for negative and out-of-domain values,
+    // including clamp, repeat and mirrored-repeat addressing.
     constexpr double coordinate_limit = 140737488355328.0; // 2^47
     const double texel_u = static_cast<double>(u) * texture.width;
     const double texel_v = static_cast<double>(v) * texture.height;
@@ -341,18 +387,6 @@ bool sample_texture_nearest_validated(
     int64_t y = static_cast<int64_t>(texel_v);
     if (static_cast<double>(x) > texel_u) --x;
     if (static_cast<double>(y) > texel_v) --y;
-
-    // Most GLES texture samples land inside the normalized image domain.
-    // In that case every supported address mode resolves to the same texel,
-    // so bypass clamp/repeat/mirror handling and its 64-bit remainder work.
-    if (x >= 0 && x < texture.width &&
-        y >= 0 && y < texture.height)
-    {
-        pixel = texture.pixels[
-            static_cast<size_t>(y) * texture.stride +
-            static_cast<size_t>(x)];
-        return true;
-    }
 
     const uint16_t addressed_x =
         address_index(x, texture.width, sampler.address_u);

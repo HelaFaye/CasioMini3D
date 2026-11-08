@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 
 #include "../../src/gfx/texture.hpp"
 
@@ -174,6 +175,91 @@ static void test_normalized_nearest_fast_path_matches_fixed_point()
             assert(gfx::sample_texture_nearest_validated(
                 texture, u, v, sampler, actual));
             assert(actual == expected);
+        }
+    }
+
+    // Exercise all texel edges for non-power-of-two dimensions, including
+    // adjacent representable float values and padded row strides.
+    {
+        constexpr uint16_t width = 127;
+        constexpr uint16_t height = 63;
+        constexpr size_t stride = 129;
+        static uint16_t boundary_pixels[height * stride] = {};
+        for (uint16_t y = 0; y < height; ++y)
+        {
+            for (uint16_t x = 0; x < stride; ++x)
+            {
+                boundary_pixels[static_cast<size_t>(y) * stride + x] =
+                    static_cast<uint16_t>(
+                        (static_cast<uint32_t>(x) * 131u +
+                         static_cast<uint32_t>(y) * 71u) ^
+                        (static_cast<uint32_t>(x) << 7));
+            }
+        }
+
+        const Texture2DView boundary_texture = {
+            boundary_pixels, width, height, stride
+        };
+        const TextureSampler boundary_samplers[] = {
+            nearest_clamp(),
+            nearest_repeat(),
+            {TextureFilter::Nearest, TextureAddressMode::MirroredRepeat,
+             TextureAddressMode::Repeat}
+        };
+
+        for (const TextureSampler& boundary_sampler : boundary_samplers)
+        {
+            for (int xi = -1; xi <= static_cast<int>(width) + 1; ++xi)
+            {
+                const float boundary_u =
+                    static_cast<float>(xi) / static_cast<float>(width);
+                const float us[4] = {
+                    std::nextafter(boundary_u,
+                        -std::numeric_limits<float>::infinity()),
+                    boundary_u,
+                    std::nextafter(boundary_u,
+                        std::numeric_limits<float>::infinity()),
+                    (static_cast<float>(xi) + 0.371f) /
+                        static_cast<float>(width)
+                };
+
+                for (int yi = -1; yi <= static_cast<int>(height) + 1; ++yi)
+                {
+                    const float boundary_v =
+                        static_cast<float>(yi) / static_cast<float>(height);
+                    const float vs[4] = {
+                        std::nextafter(boundary_v,
+                            -std::numeric_limits<float>::infinity()),
+                        boundary_v,
+                        std::nextafter(boundary_v,
+                            std::numeric_limits<float>::infinity()),
+                        (static_cast<float>(yi) + 0.619f) /
+                            static_cast<float>(height)
+                    };
+
+                    for (float u : us)
+                    {
+                        for (float v : vs)
+                        {
+                            const int64_t fixed_u = static_cast<int64_t>(
+                                std::floor(static_cast<double>(u) *
+                                    width * 65536.0));
+                            const int64_t fixed_v = static_cast<int64_t>(
+                                std::floor(static_cast<double>(v) *
+                                    height * 65536.0));
+                            const uint16_t expected =
+                                gfx::sample_texture_validated(
+                                    boundary_texture, fixed_u, fixed_v,
+                                    boundary_sampler, 0.0f);
+                            uint16_t actual = 0;
+                            assert(gfx::sample_texture_nearest_validated(
+                                boundary_texture, u, v,
+                                boundary_sampler, actual));
+                            assert(actual == expected);
+                        }
+                    }
+                }
+            }
         }
     }
 
