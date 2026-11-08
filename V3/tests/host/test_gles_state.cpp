@@ -790,6 +790,102 @@ void test_gles_draw_arrays_and_elements()
     fxglReleaseCurrent();
 }
 
+void test_draw_call_texture_cache_refreshes_between_draws()
+{
+    uint16_t color[16] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "#version 100\n"
+        "attribute vec4 a_position;\n"
+        "attribute vec2 a_uv;\n"
+        "varying vec2 v_uv;\n"
+        "void main() { gl_Position = a_position; v_uv = a_uv; }";
+    static const GLchar fragment_source[] =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "uniform sampler2D u_texture;\n"
+        "varying vec2 v_uv;\n"
+        "void main() { gl_FragColor = texture2D(u_texture, v_uv); }";
+
+    const GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *vertex_parts[] = {vertex_source};
+    const GLchar *fragment_parts[] = {fragment_source};
+    glShaderSource(vertex_shader, 1, vertex_parts, nullptr);
+    glShaderSource(fragment_shader, 1, fragment_parts, nullptr);
+    glCompileShader(vertex_shader);
+    glCompileShader(fragment_shader);
+
+    GLint compiled = GL_FALSE;
+    glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &compiled);
+    assert(compiled == GL_TRUE);
+    glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &compiled);
+    assert(compiled == GL_TRUE);
+
+    const GLuint program = glCreateProgram();
+    glBindAttribLocation(program, 0, "a_position");
+    glBindAttribLocation(program, 1, "a_uv");
+    glAttachShader(program, vertex_shader);
+    glAttachShader(program, fragment_shader);
+    glLinkProgram(program);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    assert(linked == GL_TRUE);
+    glUseProgram(program);
+
+    const GLint sampler_location =
+        glGetUniformLocation(program, "u_texture");
+    assert(sampler_location >= 0);
+    glUniform1i(sampler_location, 0);
+
+    const uint16_t red_texel = RED;
+    const uint16_t green_texel = GREEN;
+    GLuint textures[2] = {};
+    glGenTextures(2, textures);
+
+    glBindTexture(GL_TEXTURE_2D, textures[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &red_texel);
+    glBindTexture(GL_TEXTURE_2D, textures[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &green_texel);
+    assert(glGetError() == GL_NO_ERROR);
+
+    const GLfloat vertices[] = {
+        -1.0f, -1.0f, 0.0f, 1.0f, 0.5f, 0.5f,
+         1.0f, -1.0f, 0.0f, 1.0f, 0.5f, 0.5f,
+        -1.0f,  1.0f, 0.0f, 1.0f, 0.5f, 0.5f
+    };
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE,
+        6 * sizeof(GLfloat), vertices);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
+        6 * sizeof(GLfloat), vertices + 4);
+    glEnableVertexAttribArray(1);
+
+    // The first draw caches texture zero and samples red.
+    glBindTexture(GL_TEXTURE_2D, textures[0]);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(color[0] == RED);
+
+    // A subsequent draw must resolve the newly bound texture, not reuse the
+    // previous draw's cached view or sampler.
+    for (uint16_t& pixel : color)
+        pixel = 0;
+    glBindTexture(GL_TEXTURE_2D, textures[1]);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(color[0] == GREEN);
+    assert(glGetError() == GL_NO_ERROR);
+
+    glDeleteTextures(2, textures);
+    glDeleteProgram(program);
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
+    fxglReleaseCurrent();
+}
+
 void test_shader_compile_and_program_link_failures()
 {
     uint16_t color[4] = {};
@@ -1485,6 +1581,7 @@ int main()
     test_integer_and_boolean_vector_uniform_api();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
+    test_draw_call_texture_cache_refreshes_between_draws();
     test_shader_compile_and_program_link_failures();
     test_context_drives_software_pipeline();
 
