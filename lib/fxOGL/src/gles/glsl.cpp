@@ -222,6 +222,7 @@ struct ResolvedVariable
     Storage storage;
     ShaderType type;
     uint8_t index;
+    bool writable = false;
 };
 
 enum class BuiltinFunction : uint8_t
@@ -390,8 +391,8 @@ public:
     Parser(ShaderStage stage, const char *source, ShaderModule& module)
         : stage_(stage), lexer_(source), module_(module), current_(),
           failed_(false), recursion_depth_(0), active_function_(NO_ACTIVE_FUNCTION),
-          main_terminated_(false), loop_stack_{}, jump_patches_{},
-          loop_depth_(0), jump_patch_count_(0)
+          main_terminated_(false), expression_lvalue_{}, loop_stack_{},
+          jump_patches_{}, loop_depth_(0), jump_patch_count_(0)
     {
         advance();
     }
@@ -698,7 +699,13 @@ private:
             const ShaderVariable *local = find_variable(
                 function.locals, function.local_count, name);
             if (local)
-                return {Storage::Local, local->type, local->index};
+            {
+                const bool writable =
+                    local->index >= function.parameter_count ||
+                    function.parameters[local->index].qualifier !=
+                        ShaderParameterQualifier::In;
+                return {Storage::Local, local->type, local->index, writable};
+            }
         }
 
         const ShaderVariable *variable = find_variable(
@@ -874,6 +881,21 @@ private:
                     fail("function parameter limit exceeded");
                     return;
                 }
+                ShaderParameterQualifier qualifier =
+                    ShaderParameterQualifier::In;
+                if (is_identifier("in"))
+                    advance();
+                else if (is_identifier("out"))
+                {
+                    qualifier = ShaderParameterQualifier::Out;
+                    advance();
+                }
+                else if (is_identifier("inout"))
+                {
+                    qualifier = ShaderParameterQualifier::InOut;
+                    advance();
+                }
+
                 const ShaderType parameter_type = parse_type();
                 if (failed_)
                     return;
@@ -881,6 +903,7 @@ private:
                 ShaderVariable& parameter = parameters[parameter_count];
                 parameter.type = parameter_type;
                 parameter.index = static_cast<uint8_t>(parameter_count);
+                parameter.qualifier = qualifier;
                 if (current_.kind == TokenKind::Identifier)
                 {
                     std::snprintf(parameter.name, sizeof(parameter.name), "%s",
@@ -946,7 +969,8 @@ private:
             bool matches = existing.return_type == return_type &&
                            existing.parameter_count == parameter_count;
             for (size_t i = 0; matches && i < parameter_count; ++i)
-                matches = existing.parameters[i].type == parameters[i].type;
+                matches = existing.parameters[i].type == parameters[i].type &&
+                    existing.parameters[i].qualifier == parameters[i].qualifier;
             if (!matches)
             {
                 fail("function declaration conflicts with an existing signature");
@@ -1256,7 +1280,8 @@ private:
             fail("assignment target is not declared");
             return;
         }
-        if (target.storage == Storage::Attribute ||
+        if ((target.storage == Storage::Local && !target.writable) ||
+            target.storage == Storage::Attribute ||
             target.storage == Storage::Uniform ||
             (target.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex) ||
             (target.storage == Storage::Position && stage_ == ShaderStage::Fragment) ||
@@ -1292,9 +1317,9 @@ private:
         std::snprintf(name, sizeof(name), "%s", current_.text);
         advance();
         const ResolvedVariable target = lookup(name);
-        if (target.storage != Storage::Local)
+        if (target.storage != Storage::Local || !target.writable)
         {
-            fail("for-loop increment target must be a local variable");
+            fail("for-loop increment target must be a writable local variable");
             return;
         }
 
@@ -1566,6 +1591,7 @@ private:
         {
             advance();
             parse_unary(result_type);
+            expression_lvalue_ = {};
             if (result_type != ShaderType::Bool)
             {
                 fail("logical not requires a bool operand");
@@ -1577,6 +1603,7 @@ private:
         if (accept_punctuation('-'))
         {
             parse_unary(result_type);
+            expression_lvalue_ = {};
             if (!is_numeric(result_type))
             {
                 fail("unary minus requires a numeric scalar, vector or matrix");
@@ -1588,6 +1615,7 @@ private:
         if (accept_punctuation('+'))
         {
             parse_unary(result_type);
+            expression_lvalue_ = {};
             return;
         }
         parse_primary(result_type);
@@ -1644,6 +1672,7 @@ private:
             }
             emit_simple(op, result_type);
             left_type = result_type;
+            expression_lvalue_ = {};
         }
 
         --recursion_depth_;
@@ -1739,6 +1768,7 @@ private:
 
     void parse_primary(ShaderType& result_type)
     {
+        expression_lvalue_ = {};
         if (current_.kind == TokenKind::Number)
         {
             ShaderInstruction instruction = {};
@@ -1774,6 +1804,7 @@ private:
         if (accept_punctuation('('))
         {
             result_type = parse_call(name);
+            expression_lvalue_ = {};
             parse_swizzle(result_type);
             return;
         }
@@ -1807,6 +1838,7 @@ private:
             return;
         }
 
+        expression_lvalue_ = variable;
         ShaderOp op = ShaderOp::LoadLocal;
         switch (variable.storage)
         {
@@ -1827,6 +1859,7 @@ private:
     ShaderType parse_call(const char *name)
     {
         ShaderType arguments[4] = {};
+        ResolvedVariable argument_lvalues[4] = {};
         size_t argument_count = 0;
 
         if (!accept_punctuation(')'))
@@ -1838,7 +1871,9 @@ private:
                     fail("function argument limit exceeded");
                     return ShaderType::Invalid;
                 }
-                arguments[argument_count++] = parse_expression(1);
+                const size_t argument_index = argument_count++;
+                arguments[argument_index] = parse_expression(1);
+                argument_lvalues[argument_index] = expression_lvalue_;
                 if (failed_)
                     return ShaderType::Invalid;
                 if (accept_punctuation(')'))
@@ -2218,9 +2253,54 @@ private:
         {
             const ShaderFunction& function =
                 module_.functions[static_cast<size_t>(function_index)];
-            emit_simple(ShaderOp::Call, function.return_type,
-                        static_cast<uint8_t>(function_index),
-                        static_cast<uint8_t>(argument_count));
+            ShaderInstruction call = {};
+            call.op = ShaderOp::Call;
+            call.type = function.return_type;
+            call.index = static_cast<uint8_t>(function_index);
+            call.argument_count = static_cast<uint8_t>(argument_count);
+            for (size_t i = 0; i < GLSL_MAX_PARAMETERS; ++i)
+                call.swizzle[i] = 0xff;
+
+            for (size_t i = 0; i < argument_count; ++i)
+            {
+                if (argument_lvalues[i].storage == Storage::Local)
+                    call.swizzle[i] = argument_lvalues[i].index;
+
+                if (function.parameters[i].qualifier !=
+                    ShaderParameterQualifier::In)
+                {
+                    const ResolvedVariable& target = argument_lvalues[i];
+                    if (target.storage != Storage::Local || !target.writable ||
+                        target.type != function.parameters[i].type)
+                    {
+                        fail("out/inout arguments require a writable local variable");
+                        return ShaderType::Invalid;
+                    }
+                }
+            }
+
+            // GLSL ES leaves aliased input/output argument combinations
+            // undefined. Reject aliases between the plain local l-values
+            // represented by this bounded copy-out model.
+            for (size_t i = 0; i < argument_count; ++i)
+            {
+                for (size_t j = 0; j < i; ++j)
+                {
+                    if (argument_lvalues[i].storage == Storage::Local &&
+                        argument_lvalues[j].storage == Storage::Local &&
+                        argument_lvalues[i].index == argument_lvalues[j].index &&
+                        (function.parameters[i].qualifier !=
+                             ShaderParameterQualifier::In ||
+                         function.parameters[j].qualifier !=
+                             ShaderParameterQualifier::In))
+                    {
+                        fail("aliased input/output arguments are unsupported");
+                        return ShaderType::Invalid;
+                    }
+                }
+            }
+
+            emit(call);
             return function.return_type;
         }
 
@@ -2303,6 +2383,7 @@ private:
         if (!accept_punctuation('.'))
             return;
 
+        expression_lvalue_ = {};
         if (!is_any_vector(type) || current_.kind != TokenKind::Identifier)
         {
             fail("swizzles require a vector and a component selector");
@@ -2362,6 +2443,7 @@ private:
     size_t recursion_depth_;
     size_t active_function_;
     bool main_terminated_;
+    ResolvedVariable expression_lvalue_;
     static constexpr size_t NO_ACTIVE_FUNCTION = static_cast<size_t>(-1);
     LoopFrame loop_stack_[MAX_LOOP_NESTING];
     LoopJumpPatch jump_patches_[GLSL_MAX_INSTRUCTIONS];
@@ -2642,6 +2724,8 @@ bool execute_glsl(
     {
         size_t return_pc;
         size_t stack_base;
+        uint8_t function_index;
+        uint8_t output_targets[GLSL_MAX_PARAMETERS];
         ShaderValue locals[GLSL_MAX_LOCALS];
     };
 
@@ -2755,12 +2839,26 @@ bool execute_glsl(
                 const size_t argument_count = instruction.argument_count;
                 if (!function.defined ||
                     argument_count != function.parameter_count ||
+                    argument_count > GLSL_MAX_PARAMETERS ||
                     stack_size < argument_count)
                     return false;
 
+                ShaderValue call_arguments[GLSL_MAX_PARAMETERS];
+                for (size_t i = argument_count; i > 0; --i)
+                {
+                    if (!pop_value(stack, stack_size, call_arguments[i - 1]) ||
+                        call_arguments[i - 1].type !=
+                            function.parameters[i - 1].type)
+                        return false;
+                }
+
                 CallFrame& frame = call_frames[call_depth];
                 frame.return_pc = pc;
-                frame.stack_base = stack_size - argument_count;
+                frame.stack_base = stack_size;
+                frame.function_index = instruction.index;
+                for (size_t i = 0; i < GLSL_MAX_PARAMETERS; ++i)
+                    frame.output_targets[i] = 0xff;
+
                 for (size_t i = 0; i < function.local_count; ++i)
                 {
                     const ShaderVariable& local = function.locals[i];
@@ -2769,12 +2867,28 @@ bool execute_glsl(
                     set_zero_value(frame.locals[local.index], local.type);
                 }
 
-                for (size_t i = argument_count; i > 0; --i)
+                for (size_t i = 0; i < argument_count; ++i)
                 {
-                    if (!pop_value(stack, stack_size, a) ||
-                        a.type != function.parameters[i - 1].type)
+                    const ShaderVariable& parameter = function.parameters[i];
+                    if (parameter.index >= GLSL_MAX_LOCALS)
                         return false;
-                    copy_shader_value(frame.locals[i - 1], a);
+
+                    if (parameter.qualifier == ShaderParameterQualifier::In)
+                    {
+                        copy_shader_value(
+                            frame.locals[parameter.index], call_arguments[i]);
+                    }
+                    else
+                    {
+                        const uint8_t target = instruction.swizzle[i];
+                        if (target >= GLSL_MAX_LOCALS ||
+                            locals[target].type != parameter.type)
+                            return false;
+                        frame.output_targets[i] = target;
+                        if (parameter.qualifier == ShaderParameterQualifier::InOut)
+                            copy_shader_value(
+                                frame.locals[parameter.index], call_arguments[i]);
+                    }
                 }
 
                 ++call_depth;
@@ -2806,8 +2920,30 @@ bool execute_glsl(
                 }
 
                 const CallFrame& frame = call_frames[call_depth - 1];
-                if (stack_size != frame.stack_base)
+                if (stack_size != frame.stack_base ||
+                    frame.function_index >= module.function_count)
                     return false;
+
+                const ShaderFunction& function =
+                    module.functions[frame.function_index];
+                ShaderValue *caller_locals = call_depth == 1
+                    ? runtime.locals : call_frames[call_depth - 2].locals;
+                for (size_t i = 0; i < function.parameter_count; ++i)
+                {
+                    const ShaderVariable& parameter = function.parameters[i];
+                    if (parameter.qualifier == ShaderParameterQualifier::In)
+                        continue;
+
+                    const uint8_t target = frame.output_targets[i];
+                    if (target >= GLSL_MAX_LOCALS ||
+                        parameter.index >= GLSL_MAX_LOCALS ||
+                        frame.locals[parameter.index].type != parameter.type ||
+                        caller_locals[target].type != parameter.type)
+                        return false;
+                    copy_shader_value(
+                        caller_locals[target], frame.locals[parameter.index]);
+                }
+
                 pc = frame.return_pc;
                 --call_depth;
                 if (returns_value && !push_value(stack, stack_size, result))
