@@ -219,15 +219,14 @@ static uint16_t sample_level(
     return interpolate_rgb565(top, bottom, fixed_v.fraction);
 }
 
-uint16_t sample_texture(
+static uint16_t sample_texture_impl(
     const Texture2DView& texture,
     int64_t u_16_16,
     int64_t v_16_16,
     const TextureSampler& sampler,
     float lod)
 {
-    if (!texture_valid(texture) || !sampler_valid(sampler) ||
-        !std::isfinite(lod))
+    if (!std::isfinite(lod))
         return 0;
 
     if (lod <= 0.0f)
@@ -302,6 +301,28 @@ uint16_t sample_texture(
     const uint32_t fraction = static_cast<uint32_t>(
         (clamped_lod - static_cast<float>(selected_level)) * 65536.0f + 0.5f);
     return interpolate_rgb565(first, second, std::min<uint32_t>(fraction, 65536u));
+}
+
+uint16_t sample_texture_validated(
+    const Texture2DView& texture,
+    int64_t u_16_16,
+    int64_t v_16_16,
+    const TextureSampler& sampler,
+    float lod)
+{
+    return sample_texture_impl(texture, u_16_16, v_16_16, sampler, lod);
+}
+
+uint16_t sample_texture(
+    const Texture2DView& texture,
+    int64_t u_16_16,
+    int64_t v_16_16,
+    const TextureSampler& sampler,
+    float lod)
+{
+    if (!texture_valid(texture) || !sampler_valid(sampler))
+        return 0;
+    return sample_texture_validated(texture, u_16_16, v_16_16, sampler, lod);
 }
 
 } // namespace gfx
