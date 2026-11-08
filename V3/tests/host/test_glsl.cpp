@@ -362,6 +362,84 @@ static void test_non_terminating_shader_hits_execution_budget()
     assert(!fxgl::execute_glsl(module, runtime));
 }
 
+static void test_essl_math_and_geometric_builtins()
+{
+    static const char scalar_source[] =
+        "void main() {\n"
+        "  vec3 x = vec3(1.0, 0.0, 0.0);\n"
+        "  vec3 y = vec3(0.0, 1.0, 0.0);\n"
+        "  vec3 crossed = cross(x, y);\n"
+        "  float distance_value = distance(x, y);\n"
+        "  float power_value = pow(2.0, 3.0);\n"
+        "  float smooth_value = smoothstep(0.0, 1.0, 0.5);\n"
+        "  float fractional = fract(-1.25);\n"
+        "  gl_FragColor = vec4(crossed.z, distance_value, power_value, smooth_value);\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, scalar_source, module));
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 1.0f));
+    assert(near(runtime.fragment_color.data[1], std::sqrt(2.0f)));
+    assert(near(runtime.fragment_color.data[2], 8.0f));
+    assert(near(runtime.fragment_color.data[3], 0.5f));
+
+    static const char vector_source[] =
+        "void main() {\n"
+        "  vec3 stepped = step(0.5, vec3(0.25, 0.5, 0.75));\n"
+        "  vec3 reflected = reflect(vec3(1.0, -1.0, 0.0), vec3(0.0, 1.0, 0.0));\n"
+        "  vec3 smooth = smoothstep(0.0, 1.0, vec3(0.25, 0.5, 0.75));\n"
+        "  float angle = radians(180.0);\n"
+        "  float back = degrees(angle);\n"
+        "  gl_FragColor = vec4(stepped.x, stepped.y, smooth.z, reflected.y);\n"
+        "}\n";
+
+    module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, vector_source, module));
+    runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.0f));
+    assert(near(runtime.fragment_color.data[1], 1.0f));
+    assert(near(runtime.fragment_color.data[2], 0.84375f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+
+    static const char unary_source[] =
+        "void main() {\n"
+        "  vec4 values = vec4(sin(0.0), cos(0.0), sqrt(4.0), inversesqrt(4.0));\n"
+        "  gl_FragColor = values;\n"
+        "}\n";
+    module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, unary_source, module));
+    runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.0f));
+    assert(near(runtime.fragment_color.data[1], 1.0f));
+    assert(near(runtime.fragment_color.data[2], 2.0f));
+    assert(near(runtime.fragment_color.data[3], 0.5f));
+}
+
+static void test_matrix_component_multiply_and_scalar_broadcast()
+{
+    static const char source[] =
+        "void main() {\n"
+        "  mat2 a = mat2(2.0);\n"
+        "  mat2 b = mat2(3.0);\n"
+        "  mat2 c = matrixCompMult(a, b);\n"
+        "  vec2 values = min(vec2(4.0, 2.0), 3.0);\n"
+        "  gl_FragColor = vec4(c[0][0], c[1][1], values.x, values.y);\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 6.0f));
+    assert(near(runtime.fragment_color.data[1], 6.0f));
+    assert(near(runtime.fragment_color.data[2], 3.0f));
+    assert(near(runtime.fragment_color.data[3], 2.0f));
+}
+
 static void test_compiler_rejects_unsupported_or_invalid_source()
 {
     const char *unsupported[] = {
@@ -412,6 +490,8 @@ int main()
     test_nested_if_else_and_boolean_not();
     test_bounded_for_and_while_loops();
     test_non_terminating_shader_hits_execution_budget();
+    test_essl_math_and_geometric_builtins();
+    test_matrix_component_multiply_and_scalar_broadcast();
     test_compiler_rejects_unsupported_or_invalid_source();
     test_instruction_budget_and_stack_safety();
 
