@@ -146,6 +146,20 @@ bool sampler_valid(const TextureSampler& sampler)
     return filter_ok && address_u_ok && address_v_ok && min_filter_ok;
 }
 
+bool sampler_requires_implicit_derivatives(const TextureSampler& sampler)
+{
+    if (!sampler_valid(sampler))
+        return true;
+
+    // With identical non-mipmapped minification and magnification filters,
+    // implicit LOD cannot affect the selected texel or filtering operation.
+    return !(
+        (sampler.min_filter == TextureMinFilter::Nearest &&
+         sampler.filter == TextureFilter::Nearest) ||
+        (sampler.min_filter == TextureMinFilter::Linear &&
+         sampler.filter == TextureFilter::Bilinear));
+}
+
 static Texture2DView level_view(
     const Texture2DView& texture,
     size_t level)
