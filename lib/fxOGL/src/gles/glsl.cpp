@@ -2285,10 +2285,9 @@ private:
 
                 const size_t components =
                     component_count(function.parameters[i].type);
-                if (!is_any_vector(function.parameters[i].type) ||
-                    components == 0 || components > 4)
+                if (components == 0 || components > 4)
                 {
-                    fail("copy-out swizzle requires a vector parameter");
+                    fail("copy-out swizzle has an unsupported component count");
                     return ShaderType::Invalid;
                 }
 
@@ -2943,7 +2942,6 @@ bool execute_glsl(
                         else
                         {
                             if (!is_any_vector(locals[target].type) ||
-                                !is_any_vector(parameter.type) ||
                                 vector_type_for(
                                     component_count(parameter.type),
                                     vector_base_type(locals[target].type)) !=
@@ -3030,7 +3028,6 @@ bool execute_glsl(
                     else
                     {
                         if (!is_any_vector(caller_locals[target].type) ||
-                            !is_any_vector(parameter.type) ||
                             vector_type_for(
                                 component_count(parameter.type),
                                 vector_base_type(caller_locals[target].type)) !=
