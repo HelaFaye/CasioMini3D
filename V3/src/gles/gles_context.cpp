@@ -872,61 +872,22 @@ static bool fetch_vertex_attribute(
     return true;
 }
 
+struct CachedTextureBinding
+{
+    gfx::Texture2DView view;
+    gfx::TextureSampler sampler;
+    bool valid;
+    bool requires_derivatives;
+};
+
 struct DrawInvocation
 {
     fxgl::LinkedProgramView program;
     int passthrough_varying_offset;
     bool fragment_failed;
+    bool varying_derivatives;
+    CachedTextureBinding textures[FXGL_MAX_TEXTURE_UNITS];
 };
-
-static bool fragment_shader_requires_texture_derivatives(
-    const fxgl::LinkedProgramView& program)
-{
-    if (!program.fragment_shader)
-        return false;
-
-    const fxgl::ShaderModule& module = *program.fragment_shader;
-    bool uses_texture = false;
-    for (size_t i = 0; i < module.instruction_count; ++i)
-    {
-        if (module.instructions[i].op == fxgl::ShaderOp::Texture2D)
-        {
-            uses_texture = true;
-            break;
-        }
-    }
-    if (!uses_texture)
-        return false;
-
-    bool found_sampler = false;
-    for (size_t i = 0; i < module.uniform_count; ++i)
-    {
-        if (module.uniforms[i].type != fxgl::ShaderType::Sampler2D)
-            continue;
-        found_sampler = true;
-
-        const uint8_t location = program.fragment_uniform_map[i];
-        if (location >= program.uniform_count)
-            return true;
-
-        const float unit_value = program.uniform_values[location].data[0];
-        if (!std::isfinite(unit_value) || unit_value < 0.0f ||
-            unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
-            std::floor(unit_value) != unit_value)
-            return true;
-
-        gfx::Texture2DView texture = {};
-        gfx::TextureSampler sampler = {};
-        if (!fxgl::get_texture_binding(
-                static_cast<size_t>(unit_value), texture, sampler) ||
-            gfx::sampler_requires_implicit_derivatives(sampler))
-            return true;
-    }
-
-    // Be conservative if a texture operation has no identifiable sampler
-    // uniform: preserve the full derivative path rather than guessing.
-    return !found_sampler;
-}
 
 static int find_passthrough_varying_offset(
     const fxgl::LinkedProgramView& program)
@@ -953,6 +914,77 @@ static int find_passthrough_varying_offset(
     return static_cast<int>(offset);
 }
 
+static void initialize_draw_invocation(
+    DrawInvocation& invocation,
+    const fxgl::LinkedProgramView& program)
+{
+    invocation = {};
+    invocation.program = program;
+    invocation.passthrough_varying_offset =
+        find_passthrough_varying_offset(program);
+
+    if (!program.fragment_shader)
+        return;
+
+    const fxgl::ShaderModule& module = *program.fragment_shader;
+    bool uses_texture = false;
+    for (size_t i = 0; i < module.instruction_count; ++i)
+    {
+        if (module.instructions[i].op == fxgl::ShaderOp::Texture2D)
+        {
+            uses_texture = true;
+            break;
+        }
+    }
+    if (!uses_texture)
+        return;
+
+    // A GL draw call cannot mutate texture bindings or sampler uniforms while
+    // its fragments execute. Resolve each supported unit once and reuse the
+    // validated non-owning views for every fragment and triangle in this draw.
+    for (size_t unit = 0; unit < FXGL_MAX_TEXTURE_UNITS; ++unit)
+    {
+        CachedTextureBinding& cached = invocation.textures[unit];
+        cached.valid = fxgl::get_texture_binding(
+            unit, cached.view, cached.sampler);
+        cached.requires_derivatives = !cached.valid ||
+            gfx::sampler_requires_implicit_derivatives(cached.sampler);
+    }
+
+    bool found_sampler = false;
+    for (size_t i = 0; i < module.uniform_count; ++i)
+    {
+        if (module.uniforms[i].type != fxgl::ShaderType::Sampler2D)
+            continue;
+        found_sampler = true;
+
+        const uint8_t location = program.fragment_uniform_map[i];
+        if (location >= program.uniform_count)
+        {
+            invocation.varying_derivatives = true;
+            continue;
+        }
+
+        const float unit_value = program.uniform_values[location].data[0];
+        if (!std::isfinite(unit_value) || unit_value < 0.0f ||
+            unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
+            std::floor(unit_value) != unit_value)
+        {
+            invocation.varying_derivatives = true;
+            continue;
+        }
+
+        const CachedTextureBinding& cached =
+            invocation.textures[static_cast<size_t>(unit_value)];
+        if (!cached.valid || cached.requires_derivatives)
+            invocation.varying_derivatives = true;
+    }
+
+    // An unaccounted-for texture opcode stays on the conservative path.
+    if (!found_sampler)
+        invocation.varying_derivatives = true;
+}
+
 static bool sample_bound_texture(
     int unit,
     float u,
@@ -962,20 +994,24 @@ static bool sample_bound_texture(
     float dudy,
     float dvdy,
     float rgba[4],
-    void *)
+    void *user_data)
 {
-    if (unit < 0 || !std::isfinite(u) || !std::isfinite(v) ||
+    if (unit < 0 || unit >= static_cast<int>(FXGL_MAX_TEXTURE_UNITS) ||
+        !std::isfinite(u) || !std::isfinite(v) ||
         !std::isfinite(dudx) || !std::isfinite(dvdx) ||
         !std::isfinite(dudy) || !std::isfinite(dvdy))
         return false;
 
-    gfx::Texture2DView texture = {};
-    gfx::TextureSampler sampler = {};
-    if (!fxgl::get_texture_binding(static_cast<size_t>(unit), texture, sampler))
+    DrawInvocation& invocation = *static_cast<DrawInvocation *>(user_data);
+    const CachedTextureBinding& cached =
+        invocation.textures[static_cast<size_t>(unit)];
+    if (!cached.valid)
         return false;
+    const gfx::Texture2DView& texture = cached.view;
+    const gfx::TextureSampler& sampler = cached.sampler;
 
     float lod = 0.0f;
-    if (gfx::sampler_requires_implicit_derivatives(sampler))
+    if (cached.requires_derivatives)
     {
         const float rho_x = std::sqrt(
             (dudx * texture.width) * (dudx * texture.width) +
@@ -1015,7 +1051,7 @@ static bool sample_bound_texture(
         scaled_v < minimum || scaled_v >= maximum)
         return false;
 
-    const uint16_t pixel = gfx::sample_texture(
+    const uint16_t pixel = gfx::sample_texture_validated(
         texture,
         static_cast<int64_t>(scaled_u),
         static_cast<int64_t>(scaled_v),
@@ -1090,7 +1126,7 @@ static bool execute_fragment(
         }
     }
 
-    if (!fxgl::execute_glsl(module, runtime, sample_bound_texture, nullptr) ||
+    if (!fxgl::execute_glsl(module, runtime, sample_bound_texture, &invocation) ||
         runtime.fragment_color.type != fxgl::ShaderType::Vec4)
     {
         invocation.fragment_failed = true;
@@ -1167,25 +1203,25 @@ static bool execute_vertex(
 }
 
 static bool draw_vertex_triangle(
-    const fxgl::LinkedProgramView& program,
+    DrawInvocation& invocation,
     uint32_t first,
     uint32_t second,
     uint32_t third)
 {
+    const fxgl::LinkedProgramView& program = invocation.program;
     fxgl::ClipVertex vertices[3] = {};
     if (!execute_vertex(program, first, vertices[0]) ||
         !execute_vertex(program, second, vertices[1]) ||
         !execute_vertex(program, third, vertices[2]))
         return false;
 
-    DrawInvocation invocation = {program, find_passthrough_varying_offset(program), false};
     fxgl::draw_clip_triangle(
         vertices,
         program.varying_scalar_count,
         execute_fragment,
         &invocation,
         nullptr,
-        fragment_shader_requires_texture_derivatives(program));
+        invocation.varying_derivatives);
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1195,21 +1231,21 @@ static bool draw_vertex_triangle(
 }
 
 static bool draw_vertex_point(
-    const fxgl::LinkedProgramView& program,
+    DrawInvocation& invocation,
     uint32_t index)
 {
+    const fxgl::LinkedProgramView& program = invocation.program;
     fxgl::ClipVertex vertex = {};
     if (!execute_vertex(program, index, vertex))
         return false;
 
-    DrawInvocation invocation = {program, find_passthrough_varying_offset(program), false};
     fxgl::draw_clip_point(
         vertex,
         program.varying_scalar_count,
         execute_fragment,
         &invocation,
         nullptr,
-        fragment_shader_requires_texture_derivatives(program));
+        invocation.varying_derivatives);
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1219,23 +1255,23 @@ static bool draw_vertex_point(
 }
 
 static bool draw_vertex_line(
-    const fxgl::LinkedProgramView& program,
+    DrawInvocation& invocation,
     uint32_t first,
     uint32_t second)
 {
+    const fxgl::LinkedProgramView& program = invocation.program;
     fxgl::ClipVertex vertices[2] = {};
     if (!execute_vertex(program, first, vertices[0]) ||
         !execute_vertex(program, second, vertices[1]))
         return false;
 
-    DrawInvocation invocation = {program, find_passthrough_varying_offset(program), false};
     fxgl::draw_clip_line(
         vertices,
         program.varying_scalar_count,
         execute_fragment,
         &invocation,
         nullptr,
-        fragment_shader_requires_texture_derivatives(program));
+        invocation.varying_derivatives);
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1669,17 +1705,20 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     }
     const uint32_t base = static_cast<uint32_t>(first);
 
+    DrawInvocation invocation = {};
+    initialize_draw_invocation(invocation, program);
+
     if (mode == GL_POINTS)
     {
         for (GLsizei i = 0; i < count; ++i)
-            if (!draw_vertex_point(program, base + static_cast<uint32_t>(i)))
+            if (!draw_vertex_point(invocation, base + static_cast<uint32_t>(i)))
                 return;
     }
     else if (mode == GL_LINES)
     {
         for (GLsizei i = 0; i < count - 1; i += 2)
         {
-            if (!draw_vertex_line(program,
+            if (!draw_vertex_line(invocation,
                     base + static_cast<uint32_t>(i),
                     base + static_cast<uint32_t>(i + 1)))
                 return;
@@ -1689,14 +1728,14 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     {
         for (GLsizei i = 0; i < count - 1; ++i)
         {
-            if (!draw_vertex_line(program,
+            if (!draw_vertex_line(invocation,
                     base + static_cast<uint32_t>(i),
                     base + static_cast<uint32_t>(i + 1)))
                 return;
         }
         if (mode == GL_LINE_LOOP && count > 1)
         {
-            if (!draw_vertex_line(program,
+            if (!draw_vertex_line(invocation,
                     base + static_cast<uint32_t>(count - 1), base))
                 return;
         }
@@ -1705,7 +1744,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     {
         for (GLsizei i = 0; i < count - 2; i += 3)
         {
-            if (!draw_vertex_triangle(program,
+            if (!draw_vertex_triangle(invocation,
                     base + static_cast<uint32_t>(i),
                     base + static_cast<uint32_t>(i + 1),
                     base + static_cast<uint32_t>(i + 2)))
@@ -1721,10 +1760,10 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
             const uint32_t d = base + static_cast<uint32_t>(i + 2);
             if ((i & 1) == 0)
             {
-                if (!draw_vertex_triangle(program, a, b, d))
+                if (!draw_vertex_triangle(invocation, a, b, d))
                     return;
             }
-            else if (!draw_vertex_triangle(program, b, a, d))
+            else if (!draw_vertex_triangle(invocation, b, a, d))
                 return;
         }
     }
@@ -1732,7 +1771,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
     {
         for (GLsizei i = 1; i < count - 1; ++i)
         {
-            if (!draw_vertex_triangle(program,
+            if (!draw_vertex_triangle(invocation,
                     base,
                     base + static_cast<uint32_t>(i),
                     base + static_cast<uint32_t>(i + 1)))
@@ -1822,27 +1861,30 @@ void glDrawElements(
         return value;
     };
 
+    DrawInvocation invocation = {};
+    initialize_draw_invocation(invocation, program);
+
     if (mode == GL_POINTS)
     {
         for (GLsizei i = 0; i < count; ++i)
-            if (!draw_vertex_point(program, get_index(i)))
+            if (!draw_vertex_point(invocation, get_index(i)))
                 return;
     }
     else if (mode == GL_LINES)
     {
         for (GLsizei i = 0; i < count - 1; i += 2)
         {
-            if (!draw_vertex_line(program, get_index(i), get_index(i + 1)))
+            if (!draw_vertex_line(invocation, get_index(i), get_index(i + 1)))
                 return;
         }
     }
     else if (mode == GL_LINE_STRIP || mode == GL_LINE_LOOP)
     {
         for (GLsizei i = 0; i < count - 1; ++i)
-            if (!draw_vertex_line(program, get_index(i), get_index(i + 1)))
+            if (!draw_vertex_line(invocation, get_index(i), get_index(i + 1)))
                 return;
         if (mode == GL_LINE_LOOP && count > 1)
-            if (!draw_vertex_line(program, get_index(count - 1), get_index(0)))
+            if (!draw_vertex_line(invocation, get_index(count - 1), get_index(0)))
                 return;
     }
     else if (mode == GL_TRIANGLES)
@@ -1863,10 +1905,10 @@ void glDrawElements(
             const uint32_t d = get_index(i + 2);
             if ((i & 1) == 0)
             {
-                if (!draw_vertex_triangle(program, a, b, d))
+                if (!draw_vertex_triangle(invocation, a, b, d))
                     return;
             }
-            else if (!draw_vertex_triangle(program, b, a, d))
+            else if (!draw_vertex_triangle(invocation, b, a, d))
                 return;
         }
     }
