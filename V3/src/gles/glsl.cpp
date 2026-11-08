@@ -1773,7 +1773,7 @@ private:
         {
             const size_t count = component_count(arguments[i]);
             if (count == 0 || arguments[i] == ShaderType::Sampler2D ||
-                is_matrix(arguments[i]))
+                (is_matrix(arguments[i]) && !is_matrix(destination)))
                 return false;
             supplied += count;
         }
