@@ -205,7 +205,7 @@ static void draw_menu()
         static_cast<unsigned long>(selected_count()),
         static_cast<unsigned long>(TEST_COUNT));
     dtext(8, 185, C_WHITE, selection);
-    dtext(8, 198, C_WHITE, "F5 RUN SELECTED    MENU exit");
+    dtext(8, 198, C_WHITE, "F5 RUN SELECTED    EXIT cancels run");
     dtext(8, 211, C_WHITE, g_status);
     dupdate();
 }
@@ -261,6 +261,53 @@ static void show_results(
         clearevents();
 }
 
+struct ProgressContext
+{
+    fxgl_surface_t *surface;
+    const char *label;
+    bool cancelled;
+    bool surface_error;
+};
+
+static bool present_benchmark_frame(
+    uint32_t frame_index,
+    uint32_t total_frames,
+    void *user_data)
+{
+    ProgressContext *progress = static_cast<ProgressContext *>(user_data);
+    if (!progress || !progress->surface)
+        return false;
+
+    clearevents();
+    const bool cancel = keydown(KEY_EXIT) != 0;
+
+    char line[64];
+    snprintf(line, sizeof(line), "Frame %lu / %lu",
+        static_cast<unsigned long>(frame_index + 1),
+        static_cast<unsigned long>(total_frames));
+
+    dtext(8, 4, C_WHITE, "fxGLMark2 running - EXIT cancels");
+    dtext(8, 17, C_WHITE, progress->label);
+    dtext(8, 30, C_WHITE, line);
+    if (cancel)
+    {
+        dtext(8, 43, C_WHITE, "Cancelling after this frame...");
+        progress->cancelled = true;
+    }
+
+    dupdate();
+
+    // Gint may switch the active VRAM pointer during dupdate(). Refresh only
+    // the default surface address; keep shader, buffer, texture and GL state.
+    progress->surface->color = gint_vram;
+    if (!fxglUpdateSurface(progress->surface))
+    {
+        progress->surface_error = true;
+        return false;
+    }
+    return !cancel;
+}
+
 static void run_selected_benchmarks()
 {
     const size_t total_selected = selected_count();
@@ -291,7 +338,7 @@ static void run_selected_benchmarks()
         return;
     }
 
-    const fxglmark2::RunConfig config = {2, 20, 2};
+    const fxglmark2::RunConfig config = {1, 12, 2};
     for (size_t i = 0; i < TEST_COUNT; ++i)
     {
         if (!g_selected[i])
@@ -304,10 +351,16 @@ static void run_selected_benchmarks()
 
         fxglmark2::BenchmarkRequest request = {};
         char error[160] = {};
-        if (fxglmark2::parse_benchmark(
-                TEST_DESCRIPTIONS[i], request, error, sizeof(error)) &&
-            fxglmark2::run_benchmark(
-                request, config, results[completed], error, sizeof(error)))
+        ProgressContext progress = {
+            &surface, TEST_LABELS[i], false, false
+        };
+        const bool parsed = fxglmark2::parse_benchmark(
+            TEST_DESCRIPTIONS[i], request, error, sizeof(error));
+        const bool ran = parsed && fxglmark2::run_benchmark(
+            request, config, results[completed], error, sizeof(error),
+            present_benchmark_frame, &progress);
+
+        if (ran)
         {
             valid[completed] = true;
             logged[completed] = append_result_csv(results[completed]);
@@ -315,11 +368,18 @@ static void run_selected_benchmarks()
         }
         else
         {
+            const char *failure = progress.surface_error
+                ? "VRAM surface refresh failed"
+                : progress.cancelled ? "Cancelled by user" : error;
             snprintf(results[completed].description,
-                sizeof(results[completed].description), "%s", TEST_LABELS[i]);
+                sizeof(results[completed].description), "%.95s",
+                progress.cancelled || progress.surface_error
+                    ? failure : TEST_LABELS[i]);
             valid[completed] = false;
             ++completed;
-            snprintf(g_status, sizeof(g_status), "Benchmark failed: %.40s", error);
+            snprintf(g_status, sizeof(g_status), "%.63s", failure);
+            if (progress.cancelled || progress.surface_error)
+                break;
         }
     }
 
@@ -355,7 +415,7 @@ static void show_pending_scenes()
 static void wait_for_key_release()
 {
     while (keydown(KEY_UP) || keydown(KEY_DOWN) ||
-           keydown(KEY_EXE) || keydown(KEY_F1) ||
+           keydown(KEY_EXE) || keydown(KEY_EXIT) || keydown(KEY_F1) ||
            keydown(KEY_F2) || keydown(KEY_F3) ||
            keydown(KEY_F5) || keydown(KEY_F6))
         clearevents();
