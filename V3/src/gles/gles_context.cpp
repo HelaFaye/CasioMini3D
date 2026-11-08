@@ -304,6 +304,11 @@ static void release_texture_mips(TextureObject& object)
     }
 }
 
+static size_t texture_level_bytes(uint16_t width, uint16_t height)
+{
+    return static_cast<size_t>(width) * height * sizeof(uint16_t);
+}
+
 static void destroy_textures(Context& context)
 {
     for (TextureObject& object : context.textures)
