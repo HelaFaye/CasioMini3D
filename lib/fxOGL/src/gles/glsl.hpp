@@ -171,12 +171,15 @@ using TextureSampleFunction = bool (*)(
     void *user_data);
 
 /* Compile the explicitly documented GLSL ES 1.00 subset. The bounded parser
-   supports typed user functions with up to four value parameters, prototypes
-   and forward definitions, typed returns, and bounded nested calls. A
-   prototype must precede each call; every prototype must have one matching
-   definition. Overloads, arrays, structs, out/inout parameters, do-while,
-   switch, preprocessor directives and precision qualifiers other than
-   ordinary precision statements remain unsupported. */
+   supports overloaded typed user functions with up to four value parameters,
+   prototypes and forward definitions, typed returns, and bounded nested
+   calls. User overload resolution requires an exact match for every argument
+   type; return type alone cannot distinguish signatures. A prototype must
+   precede each call and every prototype must have one matching definition.
+   Built-in function dispatch remains on its existing fixed-signature path.
+   Arrays, structs, out/inout parameters, do-while, switch, preprocessor
+   directives and precision qualifiers other than ordinary precision
+   statements remain unsupported. */
 bool compile_glsl(
     ShaderStage stage,
     const char *source,
