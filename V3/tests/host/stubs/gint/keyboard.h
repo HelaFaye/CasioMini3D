@@ -3,6 +3,7 @@
 #define KEY_DOWN 2
 #define KEY_EXE 3
 #define KEY_MENU 4
+#define KEY_EXIT 11
 #define KEY_F1 5
 #define KEY_F2 6
 #define KEY_F3 7
