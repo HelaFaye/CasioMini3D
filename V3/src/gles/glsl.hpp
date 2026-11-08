@@ -75,6 +75,7 @@ enum class ShaderOp : uint8_t
     Clamp,
     Minimum,
     Maximum,
+    Builtin,
     Equal,
     NotEqual,
     Less,
