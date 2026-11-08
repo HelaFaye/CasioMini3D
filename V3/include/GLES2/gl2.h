@@ -193,6 +193,12 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_UNSIGNED_SHORT 0x1403
 #define GL_INT 0x1404
 #define GL_BOOL 0x8B56
+#define GL_INT_VEC2 0x8B53
+#define GL_INT_VEC3 0x8B54
+#define GL_INT_VEC4 0x8B55
+#define GL_BOOL_VEC2 0x8B57
+#define GL_BOOL_VEC3 0x8B58
+#define GL_BOOL_VEC4 0x8B59
 #define GL_FLOAT_VEC2 0x8B50
 #define GL_FLOAT_VEC3 0x8B51
 #define GL_FLOAT_VEC4 0x8B52
