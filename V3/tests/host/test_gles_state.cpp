@@ -1284,6 +1284,97 @@ void test_mat2_mat3_uniform_api_and_introspection()
     fxglReleaseCurrent();
 }
 
+void test_integer_and_boolean_vector_uniform_api()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "#version 100\n"
+        "attribute vec4 a_position;\n"
+        "uniform ivec2 u_integer_pair;\n"
+        "uniform bvec3 u_boolean_triplet;\n"
+        "void main() {\n"
+        "  vec2 p = vec2(u_integer_pair);\n"
+        "  bvec2 b = greaterThan(p, vec2(0.0));\n"
+        "  gl_Position = vec4(p, float(any(b)), 1.0);\n"
+        "}\n";
+    static const GLchar fragment_source[] =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "uniform bvec3 u_boolean_triplet;\n"
+        "void main() { gl_FragColor = vec4(float(all(u_boolean_triplet))); }\n";
+
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *vs_source[] = {vertex_source};
+    const GLchar *fs_source[] = {fragment_source};
+    glShaderSource(vs, 1, vs_source, nullptr);
+    glShaderSource(fs, 1, fs_source, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+
+    GLint status = GL_FALSE;
+    glGetShaderiv(vs, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &status);
+    assert(status == GL_TRUE);
+    glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &status);
+    assert(status == 2);
+
+    bool saw_ivec2 = false;
+    bool saw_bvec3 = false;
+    for (GLuint i = 0; i < 2; ++i)
+    {
+        GLchar name[32] = {};
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveUniform(program, i, sizeof(name), &length,
+            &size, &type, name);
+        if (std::strcmp(name, "u_integer_pair") == 0)
+            saw_ivec2 = type == GL_INT_VEC2;
+        if (std::strcmp(name, "u_boolean_triplet") == 0)
+            saw_bvec3 = type == GL_BOOL_VEC3;
+    }
+    assert(saw_ivec2 && saw_bvec3);
+
+    const GLint ivec_location = glGetUniformLocation(program, "u_integer_pair");
+    const GLint bvec_location = glGetUniformLocation(program, "u_boolean_triplet");
+    assert(ivec_location >= 0 && bvec_location >= 0);
+    glUseProgram(program);
+
+    const GLint integer_values[2] = {4, -2};
+    const GLint boolean_values[3] = {0, 9, -1};
+    glUniform2iv(ivec_location, 1, integer_values);
+    glUniform3i(bvec_location, 0, 9, -1);
+
+    GLint retrieved_integer[2] = {};
+    GLint retrieved_boolean[3] = {};
+    glGetUniformiv(program, ivec_location, retrieved_integer);
+    glGetUniformiv(program, bvec_location, retrieved_boolean);
+    assert(retrieved_integer[0] == 4 && retrieved_integer[1] == -2);
+    assert(retrieved_boolean[0] == 0 &&
+           retrieved_boolean[1] == 1 &&
+           retrieved_boolean[2] == 1);
+
+    glUniform2iv(bvec_location, 1, integer_values);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    glDeleteProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    fxglReleaseCurrent();
+}
+
 int main()
 {
     test_surface_binding_and_default_state();
@@ -1298,6 +1389,7 @@ int main()
     test_gles_framebuffer_and_renderbuffer_objects();
     test_shader_and_program_object_lifecycle();
     test_mat2_mat3_uniform_api_and_introspection();
+    test_integer_and_boolean_vector_uniform_api();
     test_gles_draw_arrays_and_elements();
     test_shader_compile_and_program_link_failures();
     test_context_drives_software_pipeline();
