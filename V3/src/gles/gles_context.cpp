@@ -265,6 +265,9 @@ static gfx::TextureSampler make_sampler(const TextureObject& object)
         ? gfx::TextureFilter::Bilinear : gfx::TextureFilter::Nearest;
     switch (object.min_filter)
     {
+        case GL_NEAREST:
+            sampler.min_filter = gfx::TextureMinFilter::Nearest;
+            break;
         case GL_LINEAR:
             sampler.min_filter = gfx::TextureMinFilter::Linear;
             break;
@@ -876,6 +879,18 @@ struct DrawInvocation
     bool fragment_failed;
 };
 
+static bool fragment_shader_uses_texture(
+    const fxgl::LinkedProgramView& program)
+{
+    if (!program.fragment_shader)
+        return false;
+    const fxgl::ShaderModule& module = *program.fragment_shader;
+    for (size_t i = 0; i < module.instruction_count; ++i)
+        if (module.instructions[i].op == fxgl::ShaderOp::Texture2D)
+            return true;
+    return false;
+}
+
 static int find_passthrough_varying_offset(
     const fxgl::LinkedProgramView& program)
 {
@@ -1127,7 +1142,9 @@ static bool draw_vertex_triangle(
         vertices,
         program.varying_scalar_count,
         execute_fragment,
-        &invocation);
+        &invocation,
+        nullptr,
+        fragment_shader_uses_texture(program));
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1149,7 +1166,9 @@ static bool draw_vertex_point(
         vertex,
         program.varying_scalar_count,
         execute_fragment,
-        &invocation);
+        &invocation,
+        nullptr,
+        fragment_shader_uses_texture(program));
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1173,7 +1192,9 @@ static bool draw_vertex_line(
         vertices,
         program.varying_scalar_count,
         execute_fragment,
-        &invocation);
+        &invocation,
+        nullptr,
+        fragment_shader_uses_texture(program));
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -2542,26 +2563,29 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
     switch (pname)
     {
         case GL_TEXTURE_MIN_FILTER:
-        case GL_TEXTURE_MAG_FILTER:
-            if (param == GL_NEAREST || param == GL_LINEAR)
+            switch (param)
             {
-                if (pname == GL_TEXTURE_MIN_FILTER)
+                case GL_NEAREST:
+                case GL_LINEAR:
+                case GL_NEAREST_MIPMAP_NEAREST:
+                case GL_LINEAR_MIPMAP_NEAREST:
+                case GL_NEAREST_MIPMAP_LINEAR:
+                case GL_LINEAR_MIPMAP_LINEAR:
                     object->min_filter = static_cast<GLenum>(param);
-                else
-                    object->mag_filter = static_cast<GLenum>(param);
+                    break;
+                default:
+                    set_error(GL_INVALID_ENUM);
+                    break;
             }
-            else if (param == GL_NEAREST_MIPMAP_NEAREST ||
-                     param == GL_LINEAR_MIPMAP_NEAREST ||
-                     param == GL_NEAREST_MIPMAP_LINEAR ||
-                     param == GL_LINEAR_MIPMAP_LINEAR)
-            {
-                /* Valid GLES enums, but mip chains are not implemented yet. */
-                set_error(GL_INVALID_OPERATION);
-            }
-            else
+            break;
+
+        case GL_TEXTURE_MAG_FILTER:
+            if (param != GL_NEAREST && param != GL_LINEAR)
             {
                 set_error(GL_INVALID_ENUM);
+                return;
             }
+            object->mag_filter = static_cast<GLenum>(param);
             break;
 
         case GL_TEXTURE_WRAP_S:
@@ -3695,7 +3719,8 @@ static StencilFaceState convert_stencil_face(const StencilFace& face)
 
 static void build_pipeline_context(
     RenderSurface& surface,
-    PipelineState& state)
+    PipelineState& state,
+    bool varying_derivatives)
 {
     fxgl_surface_t resolved = {};
     if (!resolve_draw_surface(resolved))
@@ -3713,6 +3738,7 @@ static void build_pipeline_context(
     surface.stride = resolved.stride;
 
     pipeline_default_state(state, surface.width, surface.height);
+    state.varying_derivatives = varying_derivatives;
     for (int i = 0; i < 4; ++i)
     {
         state.viewport[i] = g_context.viewport[i];
@@ -3747,13 +3773,14 @@ bool draw_clip_point(
     size_t varying_count,
     FragmentShader fragment_shader,
     void *user_data,
-    RasterStats *stats)
+    RasterStats *stats,
+    bool varying_derivatives)
 {
     if (!g_context.current)
         return false;
     RenderSurface surface = {};
     PipelineState state = {};
-    build_pipeline_context(surface, state);
+    build_pipeline_context(surface, state, varying_derivatives);
     return fxgl::draw_point(surface, state, input, varying_count,
                             fragment_shader, user_data, stats);
 }
@@ -3763,13 +3790,14 @@ bool draw_clip_line(
     size_t varying_count,
     FragmentShader fragment_shader,
     void *user_data,
-    RasterStats *stats)
+    RasterStats *stats,
+    bool varying_derivatives)
 {
     if (!g_context.current)
         return false;
     RenderSurface surface = {};
     PipelineState state = {};
-    build_pipeline_context(surface, state);
+    build_pipeline_context(surface, state, varying_derivatives);
     return fxgl::draw_line(surface, state, input, varying_count,
                            fragment_shader, user_data, stats);
 }
@@ -3779,14 +3807,15 @@ bool draw_clip_triangle(
     size_t varying_count,
     FragmentShader fragment_shader,
     void *user_data,
-    RasterStats *stats)
+    RasterStats *stats,
+    bool varying_derivatives)
 {
     if (!g_context.current)
         return false;
 
     RenderSurface surface = {};
     PipelineState state = {};
-    build_pipeline_context(surface, state);
+    build_pipeline_context(surface, state, varying_derivatives);
     if (surface.width <= 0 || surface.height <= 0)
         return false;
 
