@@ -643,8 +643,8 @@ static void test_user_function_out_and_inout_parameters()
     // An in parameter is a writable local copy: modifications remain local
     // and do not escape to the argument supplied by the caller.
     static const char mutable_in_source[] =
-        "void mutate(in float value) { value = value + 5.0; }\\n"
-        "void main() { float x = 2.0; mutate(x); gl_FragColor = vec4(x); }\\n";
+        "void mutate(in float value) { value = value + 5.0; }\n"
+        "void main() { float x = 2.0; mutate(x); gl_FragColor = vec4(x); }\n";
     ShaderModule mutable_in_module = {};
     assert(fxgl::compile_glsl(
         ShaderStage::Fragment, mutable_in_source, mutable_in_module));
@@ -655,9 +655,9 @@ static void test_user_function_out_and_inout_parameters()
     // Input/output aliasing is valid with value-return semantics: the input
     // is copied before the function executes, then the output is copied back.
     static const char input_output_alias_source[] =
-        "void increment(in float original, out float result);\\n"
-        "void main() { float x = 4.0; increment(x, x); gl_FragColor = vec4(x); }\\n"
-        "void increment(float original, out float result) { result = original + 1.0; }\\n";
+        "void increment(in float original, out float result);\n"
+        "void main() { float x = 4.0; increment(x, x); gl_FragColor = vec4(x); }\n"
+        "void increment(float original, out float result) { result = original + 1.0; }\n";
     ShaderModule input_output_alias_module = {};
     assert(fxgl::compile_glsl(
         ShaderStage::Fragment, input_output_alias_source,
@@ -670,10 +670,10 @@ static void test_user_function_out_and_inout_parameters()
     // A mutable copy of an in parameter can itself be passed to an out call.
     // Copy-out updates the helper's local copy, not the original caller.
     static const char forward_input_source[] =
-        "void write_value(out float value);\\n"
-        "void relay(in float source) { write_value(source); }\\n"
-        "void main() { float x = 3.0; relay(x); gl_FragColor = vec4(x); }\\n"
-        "void write_value(out float value) { value = 8.0; }\\n";
+        "void write_value(out float value);\n"
+        "void relay(in float source) { write_value(source); }\n"
+        "void main() { float x = 3.0; relay(x); gl_FragColor = vec4(x); }\n"
+        "void write_value(out float value) { value = 8.0; }\n";
     ShaderModule forward_input_module = {};
     assert(fxgl::compile_glsl(
         ShaderStage::Fragment, forward_input_source, forward_input_module));
@@ -684,21 +684,21 @@ static void test_user_function_out_and_inout_parameters()
     // Swizzles are writable copy-out l-values. The selector order is retained
     // when values are copied back into the base vector.
     static const char swizzle_source[] =
-        "void transform(inout vec2 pair, out float extra);\\n"
-        "void main() {\\n"
-        "  vec4 color = vec4(10.0, 20.0, 30.0, 40.0);\\n"
-        "  transform(color.yx, color.z);\\n"
-        "  gl_FragColor = color;\\n"
-        "}\\n"
-        "void transform(inout vec2 pair, out float extra) {\\n"
-        "  pair = pair + vec2(1.0, 2.0);\\n"
-        "  extra = 99.0;\\n"
-        "}\\n";
+        "void transform(inout vec2 pair, out float extra);\n"
+        "void main() {\n"
+        "  vec4 color = vec4(10.0, 20.0, 30.0, 40.0);\n"
+        "  transform(color.yx, color.z);\n"
+        "  gl_FragColor = color;\n"
+        "}\n"
+        "void transform(inout vec2 pair, out float extra) {\n"
+        "  pair = pair + vec2(1.0, 2.0);\n"
+        "  extra = 99.0;\n"
+        "}\n";
     ShaderModule swizzle_module = {};
     const bool swizzle_compiled =
         fxgl::compile_glsl(ShaderStage::Fragment, swizzle_source, swizzle_module);
     if (!swizzle_compiled)
-        std::fprintf(stderr, "swizzle copy-out diagnostic: %s\\n",
+        std::fprintf(stderr, "swizzle copy-out diagnostic: %s\n",
                      swizzle_module.info_log);
     assert(swizzle_compiled);
     ShaderRuntime swizzle_runtime = {};
@@ -711,9 +711,9 @@ static void test_user_function_out_and_inout_parameters()
     // Disjoint output swizzles of the same vector are safe; only overlapping
     // output component masks are rejected.
     static const char disjoint_swizzle_source[] =
-        "void split(out vec2 first, out vec2 second);\\n"
-        "void main() { vec4 color = vec4(0.0); split(color.yx, color.wz); gl_FragColor = color; }\\n"
-        "void split(out vec2 first, out vec2 second) { first = vec2(1.0, 2.0); second = vec2(3.0, 4.0); }\\n";
+        "void split(out vec2 first, out vec2 second);\n"
+        "void main() { vec4 color = vec4(0.0); split(color.yx, color.wz); gl_FragColor = color; }\n"
+        "void split(out vec2 first, out vec2 second) { first = vec2(1.0, 2.0); second = vec2(3.0, 4.0); }\n";
     ShaderModule disjoint_swizzle_module = {};
     assert(fxgl::compile_glsl(
         ShaderStage::Fragment, disjoint_swizzle_source,
@@ -746,7 +746,7 @@ static void test_user_function_out_and_inout_parameters()
     const bool return_out_compiled = fxgl::compile_glsl(
         ShaderStage::Fragment, return_out_source, return_out_module);
     if (!return_out_compiled)
-        std::fprintf(stderr, "return/out diagnostic: %s\\n",
+        std::fprintf(stderr, "return/out diagnostic: %s\n",
                      return_out_module.info_log);
     assert(return_out_compiled);
     ShaderRuntime return_out_runtime = {};
