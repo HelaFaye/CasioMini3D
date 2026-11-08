@@ -46,6 +46,8 @@ struct ShaderValue
 {
     ShaderType type;
     float data[16];
+    float ddx[4];
+    float ddy[4];
 };
 
 struct ShaderVariable
@@ -129,6 +131,8 @@ struct ShaderRuntime
     ShaderValue uniforms[GLSL_MAX_UNIFORMS];
     ShaderValue varyings[GLSL_MAX_VARYINGS];
     ShaderValue locals[GLSL_MAX_LOCALS];
+    float varying_ddx[GLSL_MAX_VARYINGS];
+    float varying_ddy[GLSL_MAX_VARYINGS];
     ShaderValue position;
     ShaderValue fragment_color;
 };
@@ -137,6 +141,10 @@ using TextureSampleFunction = bool (*)(
     int texture_unit,
     float u,
     float v,
+    float dudx,
+    float dvdx,
+    float dudy,
+    float dvdy,
     float rgba[4],
     void *user_data);
 
