@@ -107,3 +107,13 @@ target_include_directories(glmark2_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
 )
 add_test(NAME fxglmark2_port COMMAND glmark2_tests)
+
+# Compile the real calculator entry point against small Gint/fxlibc stubs.
+# This catches menu/key/API integration errors in the host CI build.
+add_library(addin_main_compile OBJECT ../../src/main.cpp)
+target_compile_features(addin_main_compile PRIVATE cxx_std_20)
+target_compile_options(addin_main_compile PRIVATE -Wall -Wextra -Werror)
+target_include_directories(addin_main_compile PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+)
