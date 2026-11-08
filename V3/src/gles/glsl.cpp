@@ -224,6 +224,10 @@ static size_t component_count(ShaderType type)
             return 3;
         case ShaderType::Vec4:
             return 4;
+        case ShaderType::Mat2:
+            return 4;
+        case ShaderType::Mat3:
+            return 9;
         case ShaderType::Mat4:
             return 16;
         default:
@@ -249,10 +253,36 @@ static bool is_vector(ShaderType type)
            type == ShaderType::Vec4;
 }
 
+static size_t matrix_dimension(ShaderType type)
+{
+    switch (type)
+    {
+        case ShaderType::Mat2: return 2;
+        case ShaderType::Mat3: return 3;
+        case ShaderType::Mat4: return 4;
+        default: return 0;
+    }
+}
+
+static ShaderType matrix_type(size_t dimension)
+{
+    switch (dimension)
+    {
+        case 2: return ShaderType::Mat2;
+        case 3: return ShaderType::Mat3;
+        case 4: return ShaderType::Mat4;
+        default: return ShaderType::Invalid;
+    }
+}
+
+static bool is_matrix(ShaderType type)
+{
+    return matrix_dimension(type) != 0;
+}
+
 static bool is_numeric(ShaderType type)
 {
-    return type == ShaderType::Float || is_vector(type) ||
-           type == ShaderType::Mat4;
+    return type == ShaderType::Float || is_vector(type) || is_matrix(type);
 }
 
 class Parser
@@ -366,6 +396,10 @@ private:
             type = ShaderType::Vec3;
         else if (std::strcmp(current_.text, "vec4") == 0)
             type = ShaderType::Vec4;
+        else if (std::strcmp(current_.text, "mat2") == 0)
+            type = ShaderType::Mat2;
+        else if (std::strcmp(current_.text, "mat3") == 0)
+            type = ShaderType::Mat3;
         else if (std::strcmp(current_.text, "mat4") == 0)
             type = ShaderType::Mat4;
         else if (std::strcmp(current_.text, "sampler2D") == 0)
@@ -572,6 +606,8 @@ private:
                std::strcmp(current_.text, "vec2") == 0 ||
                std::strcmp(current_.text, "vec3") == 0 ||
                std::strcmp(current_.text, "vec4") == 0 ||
+               std::strcmp(current_.text, "mat2") == 0 ||
+               std::strcmp(current_.text, "mat3") == 0 ||
                std::strcmp(current_.text, "mat4") == 0 ||
                std::strcmp(current_.text, "sampler2D") == 0;
     }
@@ -698,9 +734,9 @@ private:
         if (accept_punctuation('-'))
         {
             parse_unary(result_type);
-            if (!is_numeric(result_type) || result_type == ShaderType::Mat4)
+            if (!is_numeric(result_type))
             {
-                fail("unary minus requires a scalar or vector");
+                fail("unary minus requires a numeric scalar, vector or matrix");
                 return;
             }
             emit_simple(ShaderOp::Negate, result_type);
@@ -764,24 +800,28 @@ private:
 
         if (operation == '+' || operation == '-')
         {
-            if (left == right && (left == ShaderType::Float ||
-                                  left == ShaderType::Vec2 ||
-                                  left == ShaderType::Vec3 ||
-                                  left == ShaderType::Vec4))
+            if (left == right &&
+                (left == ShaderType::Float || is_vector(left) || is_matrix(left)))
                 return left;
             return ShaderType::Invalid;
         }
 
         if (operation == '*')
         {
-            if (left == ShaderType::Mat4 && right == ShaderType::Vec4)
-                return ShaderType::Vec4;
-            if (left == ShaderType::Mat4 && right == ShaderType::Mat4)
-                return ShaderType::Mat4;
-            if (left == right && (left == ShaderType::Float ||
-                                  left == ShaderType::Vec2 ||
-                                  left == ShaderType::Vec3 ||
-                                  left == ShaderType::Vec4))
+            const size_t left_dimension = matrix_dimension(left);
+            const size_t right_dimension = matrix_dimension(right);
+            if (left_dimension != 0 && right == vector_type(left_dimension))
+                return right;
+            if (left == vector_type(right_dimension) && right_dimension != 0)
+                return left;
+            if (left_dimension != 0 && left_dimension == right_dimension)
+                return left;
+            if (left_dimension != 0 && right == ShaderType::Float)
+                return left;
+            if (left == ShaderType::Float && right_dimension != 0)
+                return right;
+            if (left == right &&
+                (left == ShaderType::Float || is_vector(left)))
                 return left;
             if (left == ShaderType::Float && is_vector(right))
                 return right;
@@ -792,13 +832,14 @@ private:
 
         if (operation == '/')
         {
-            if (left == right && (left == ShaderType::Float ||
-                                  left == ShaderType::Vec2 ||
-                                  left == ShaderType::Vec3 ||
-                                  left == ShaderType::Vec4))
+            if (left == right &&
+                (left == ShaderType::Float || is_vector(left) || is_matrix(left)))
                 return left;
-            if (is_vector(left) && right == ShaderType::Float)
+            if ((is_vector(left) || is_matrix(left)) &&
+                right == ShaderType::Float)
                 return left;
+            if (left == ShaderType::Float && is_matrix(right))
+                return right;
             return ShaderType::Invalid;
         }
 
@@ -1038,6 +1079,8 @@ private:
         if (std::strcmp(name, "vec2") == 0) return ShaderType::Vec2;
         if (std::strcmp(name, "vec3") == 0) return ShaderType::Vec3;
         if (std::strcmp(name, "vec4") == 0) return ShaderType::Vec4;
+        if (std::strcmp(name, "mat2") == 0) return ShaderType::Mat2;
+        if (std::strcmp(name, "mat3") == 0) return ShaderType::Mat3;
         if (std::strcmp(name, "mat4") == 0) return ShaderType::Mat4;
         return ShaderType::Invalid;
     }
@@ -1063,6 +1106,9 @@ private:
         if (argument_count == 1 && arguments[0] == ShaderType::Float)
             return true;
         if (argument_count == 1 && arguments[0] == destination)
+            return true;
+        if (argument_count == 1 && is_matrix(destination) &&
+            is_matrix(arguments[0]))
             return true;
         if (destination == ShaderType::Float || destination == ShaderType::Int ||
             destination == ShaderType::Bool)
@@ -1176,28 +1222,43 @@ static void apply_binary(
     result = zero_value(result_type);
     const size_t count = component_count(result_type);
 
+    const size_t left_dimension = matrix_dimension(left.type);
+    const size_t right_dimension = matrix_dimension(right.type);
+
     if (op == ShaderOp::Multiply &&
-        left.type == ShaderType::Mat4 && right.type == ShaderType::Vec4)
+        left_dimension != 0 && right.type == vector_type(left_dimension))
     {
-        result = zero_value(ShaderType::Vec4);
-        for (size_t row = 0; row < 4; ++row)
-            for (size_t column = 0; column < 4; ++column)
+        result = zero_value(right.type);
+        for (size_t row = 0; row < left_dimension; ++row)
+            for (size_t column = 0; column < left_dimension; ++column)
                 result.data[row] +=
-                    left.data[column * 4 + row] * right.data[column];
+                    left.data[column * left_dimension + row] * right.data[column];
         return;
     }
 
     if (op == ShaderOp::Multiply &&
-        left.type == ShaderType::Mat4 && right.type == ShaderType::Mat4)
+        left.type == vector_type(right_dimension) && right_dimension != 0)
     {
-        result = zero_value(ShaderType::Mat4);
-        for (size_t column = 0; column < 4; ++column)
+        result = zero_value(left.type);
+        for (size_t column = 0; column < right_dimension; ++column)
+            for (size_t row = 0; row < right_dimension; ++row)
+                result.data[column] +=
+                    left.data[row] * right.data[column * right_dimension + row];
+        return;
+    }
+
+    if (op == ShaderOp::Multiply &&
+        left_dimension != 0 && left_dimension == right_dimension)
+    {
+        result = zero_value(left.type);
+        for (size_t column = 0; column < left_dimension; ++column)
         {
-            for (size_t row = 0; row < 4; ++row)
+            for (size_t row = 0; row < left_dimension; ++row)
             {
-                for (size_t k = 0; k < 4; ++k)
-                    result.data[column * 4 + row] +=
-                        left.data[k * 4 + row] * right.data[column * 4 + k];
+                for (size_t k = 0; k < left_dimension; ++k)
+                    result.data[column * left_dimension + row] +=
+                        left.data[k * left_dimension + row] *
+                        right.data[column * right_dimension + k];
             }
         }
         return;
@@ -1373,21 +1434,40 @@ bool execute_glsl(
 
                 result = zero_value(instruction.type);
                 const size_t wanted = component_count(instruction.type);
+                const size_t destination_dimension =
+                    matrix_dimension(instruction.type);
+                const size_t source_dimension =
+                    instruction.argument_count == 1
+                        ? matrix_dimension(args[0].type) : 0;
                 if (instruction.argument_count == 1 &&
                     component_count(args[0].type) == 1)
                 {
                     const float scalar = args[0].data[0];
-                    if (instruction.type == ShaderType::Mat4)
+                    if (destination_dimension != 0)
                     {
-                        result.data[0] = scalar;
-                        result.data[5] = scalar;
-                        result.data[10] = scalar;
-                        result.data[15] = scalar;
+                        for (size_t i = 0; i < destination_dimension; ++i)
+                            result.data[i * destination_dimension + i] = scalar;
                     }
                     else
                     {
                         for (size_t i = 0; i < wanted; ++i)
                             result.data[i] = scalar;
+                    }
+                }
+                else if (destination_dimension != 0 && source_dimension != 0)
+                {
+                    const size_t overlap = std::min(
+                        destination_dimension, source_dimension);
+                    for (size_t row = 0; row < destination_dimension; ++row)
+                    {
+                        for (size_t column = 0; column < destination_dimension; ++column)
+                        {
+                            if (row < overlap && column < overlap)
+                                result.data[column * destination_dimension + row] =
+                                    args[0].data[column * source_dimension + row];
+                            else if (row == column)
+                                result.data[column * destination_dimension + row] = 1.0f;
+                        }
                     }
                 }
                 else
@@ -1447,15 +1527,24 @@ bool execute_glsl(
                     instruction.op == ShaderOp::Subtract)
                 {
                     if (a.type == b.type &&
-                        (a.type == ShaderType::Float || is_vector(a.type)))
+                        (a.type == ShaderType::Float || is_vector(a.type) ||
+                         is_matrix(a.type)))
                         expected_type = a.type;
                 }
                 else if (instruction.op == ShaderOp::Multiply)
                 {
-                    if (a.type == ShaderType::Mat4 && b.type == ShaderType::Vec4)
-                        expected_type = ShaderType::Vec4;
-                    else if (a.type == ShaderType::Mat4 && b.type == ShaderType::Mat4)
-                        expected_type = ShaderType::Mat4;
+                    const size_t a_dimension = matrix_dimension(a.type);
+                    const size_t b_dimension = matrix_dimension(b.type);
+                    if (a_dimension != 0 && b.type == vector_type(a_dimension))
+                        expected_type = b.type;
+                    else if (b_dimension != 0 && a.type == vector_type(b_dimension))
+                        expected_type = a.type;
+                    else if (a_dimension != 0 && a_dimension == b_dimension)
+                        expected_type = a.type;
+                    else if (a_dimension != 0 && b.type == ShaderType::Float)
+                        expected_type = a.type;
+                    else if (b_dimension != 0 && a.type == ShaderType::Float)
+                        expected_type = b.type;
                     else if (a.type == ShaderType::Float && is_vector(b.type))
                         expected_type = b.type;
                     else if (is_vector(a.type) && b.type == ShaderType::Float)
@@ -1466,10 +1555,16 @@ bool execute_glsl(
                 }
                 else if (instruction.op == ShaderOp::Divide)
                 {
-                    if (is_vector(a.type) && b.type == ShaderType::Float)
+                    if (is_matrix(a.type) && b.type == ShaderType::Float)
+                        expected_type = a.type;
+                    else if (a.type == ShaderType::Float && is_matrix(b.type))
+                        expected_type = b.type;
+                    else if ((is_vector(a.type) || is_matrix(a.type)) &&
+                             b.type == ShaderType::Float)
                         expected_type = a.type;
                     else if (a.type == b.type &&
-                             (a.type == ShaderType::Float || is_vector(a.type)))
+                             (a.type == ShaderType::Float || is_vector(a.type) ||
+                              is_matrix(a.type)))
                         expected_type = a.type;
                 }
 
