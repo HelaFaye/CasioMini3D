@@ -224,6 +224,19 @@ struct ResolvedVariable
     uint8_t index;
 };
 
+enum class BuiltinFunction : uint8_t
+{
+    Sin, Cos, Tan, Asin, Acos, Atan, Exp, Log, Exp2, Log2,
+    Sqrt, InverseSqrt, Abs, Sign, Floor, Ceil, Fract, Radians, Degrees,
+    Atan2, Pow, Mod, Step, Distance, Cross, FaceForward, Reflect,
+    Refract, SmoothStep, MatrixCompMult
+};
+
+static bool is_gen_type(ShaderType type)
+{
+    return type == ShaderType::Float || is_vector(type);
+}
+
 static size_t component_count(ShaderType type)
 {
     switch (type)
@@ -1284,6 +1297,199 @@ private:
             return ShaderType::Vec4;
         }
 
+        BuiltinFunction builtin = BuiltinFunction::Sin;
+        bool unary_builtin = true;
+        if (std::strcmp(name, "sin") == 0) builtin = BuiltinFunction::Sin;
+        else if (std::strcmp(name, "cos") == 0) builtin = BuiltinFunction::Cos;
+        else if (std::strcmp(name, "tan") == 0) builtin = BuiltinFunction::Tan;
+        else if (std::strcmp(name, "asin") == 0) builtin = BuiltinFunction::Asin;
+        else if (std::strcmp(name, "acos") == 0) builtin = BuiltinFunction::Acos;
+        else if (std::strcmp(name, "atan") == 0 && argument_count == 1)
+            builtin = BuiltinFunction::Atan;
+        else if (std::strcmp(name, "exp") == 0) builtin = BuiltinFunction::Exp;
+        else if (std::strcmp(name, "log") == 0) builtin = BuiltinFunction::Log;
+        else if (std::strcmp(name, "exp2") == 0) builtin = BuiltinFunction::Exp2;
+        else if (std::strcmp(name, "log2") == 0) builtin = BuiltinFunction::Log2;
+        else if (std::strcmp(name, "sqrt") == 0) builtin = BuiltinFunction::Sqrt;
+        else if (std::strcmp(name, "inversesqrt") == 0)
+            builtin = BuiltinFunction::InverseSqrt;
+        else if (std::strcmp(name, "abs") == 0) builtin = BuiltinFunction::Abs;
+        else if (std::strcmp(name, "sign") == 0) builtin = BuiltinFunction::Sign;
+        else if (std::strcmp(name, "floor") == 0) builtin = BuiltinFunction::Floor;
+        else if (std::strcmp(name, "ceil") == 0) builtin = BuiltinFunction::Ceil;
+        else if (std::strcmp(name, "fract") == 0) builtin = BuiltinFunction::Fract;
+        else if (std::strcmp(name, "radians") == 0) builtin = BuiltinFunction::Radians;
+        else if (std::strcmp(name, "degrees") == 0) builtin = BuiltinFunction::Degrees;
+        else unary_builtin = false;
+
+        if (unary_builtin)
+        {
+            if (argument_count != 1 || !is_gen_type(arguments[0]))
+            {
+                fail("built-in unary function requires one float or vector argument");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, arguments[0],
+                        static_cast<uint8_t>(builtin), 1);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "atan") == 0)
+        {
+            if (argument_count != 2 || !is_gen_type(arguments[0]) ||
+                arguments[0] != arguments[1])
+            {
+                fail("two-argument atan requires matching float/vector arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, arguments[0],
+                        static_cast<uint8_t>(BuiltinFunction::Atan2), 2);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "pow") == 0 || std::strcmp(name, "mod") == 0)
+        {
+            const bool same = argument_count == 2 &&
+                is_gen_type(arguments[0]) && arguments[0] == arguments[1];
+            const bool scalar_rhs = argument_count == 2 &&
+                is_vector(arguments[0]) && arguments[1] == ShaderType::Float;
+            if (!same && !(std::strcmp(name, "mod") == 0 && scalar_rhs))
+            {
+                fail("pow/mod requires matching values (mod also accepts a scalar divisor)");
+                return ShaderType::Invalid;
+            }
+            builtin = std::strcmp(name, "pow") == 0
+                ? BuiltinFunction::Pow : BuiltinFunction::Mod;
+            emit_simple(ShaderOp::Builtin, arguments[0],
+                        static_cast<uint8_t>(builtin), 2);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "min") == 0 || std::strcmp(name, "max") == 0)
+        {
+            const bool same = argument_count == 2 &&
+                is_gen_type(arguments[0]) && arguments[0] == arguments[1];
+            const bool scalar_rhs = argument_count == 2 &&
+                is_vector(arguments[0]) && arguments[1] == ShaderType::Float;
+            if (!same && !scalar_rhs)
+            {
+                fail("min/max requires matching scalar/vector values or vector-scalar arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(std::strcmp(name, "min") == 0
+                ? ShaderOp::Minimum : ShaderOp::Maximum,
+                arguments[0], 0, 2);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "step") == 0)
+        {
+            const bool same = argument_count == 2 &&
+                is_gen_type(arguments[1]) && arguments[0] == arguments[1];
+            const bool scalar_edge = argument_count == 2 &&
+                is_vector(arguments[1]) && arguments[0] == ShaderType::Float;
+            if (!same && !scalar_edge)
+            {
+                fail("step requires matching edge/value types or a scalar edge");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, arguments[1],
+                        static_cast<uint8_t>(BuiltinFunction::Step), 2);
+            return arguments[1];
+        }
+
+        if (std::strcmp(name, "smoothstep") == 0)
+        {
+            const bool same = argument_count == 3 &&
+                is_gen_type(arguments[2]) &&
+                arguments[0] == arguments[1] &&
+                arguments[1] == arguments[2];
+            const bool scalar_edges = argument_count == 3 &&
+                is_vector(arguments[2]) &&
+                arguments[0] == ShaderType::Float &&
+                arguments[1] == ShaderType::Float;
+            if (!same && !scalar_edges)
+            {
+                fail("smoothstep requires matching types or scalar edges with a vector value");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, arguments[2],
+                        static_cast<uint8_t>(BuiltinFunction::SmoothStep), 3);
+            return arguments[2];
+        }
+
+        if (std::strcmp(name, "distance") == 0)
+        {
+            if (argument_count != 2 || !is_vector(arguments[0]) ||
+                arguments[0] != arguments[1])
+            {
+                fail("distance requires matching vector arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, ShaderType::Float,
+                        static_cast<uint8_t>(BuiltinFunction::Distance), 2);
+            return ShaderType::Float;
+        }
+
+        if (std::strcmp(name, "cross") == 0)
+        {
+            if (argument_count != 2 || arguments[0] != ShaderType::Vec3 ||
+                arguments[1] != ShaderType::Vec3)
+            {
+                fail("cross requires two vec3 arguments");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, ShaderType::Vec3,
+                        static_cast<uint8_t>(BuiltinFunction::Cross), 2);
+            return ShaderType::Vec3;
+        }
+
+        if (std::strcmp(name, "faceforward") == 0 ||
+            std::strcmp(name, "reflect") == 0)
+        {
+            const bool is_reflect = std::strcmp(name, "reflect") == 0;
+            if (argument_count != (is_reflect ? 2u : 3u) ||
+                !is_vector(arguments[0]) || arguments[0] != arguments[1] ||
+                (!is_reflect && arguments[0] != arguments[2]))
+            {
+                fail("geometric function requires matching vector arguments");
+                return ShaderType::Invalid;
+            }
+            builtin = is_reflect
+                ? BuiltinFunction::Reflect : BuiltinFunction::FaceForward;
+            emit_simple(ShaderOp::Builtin, arguments[0],
+                        static_cast<uint8_t>(builtin),
+                        static_cast<uint8_t>(argument_count));
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "refract") == 0)
+        {
+            if (argument_count != 3 || !is_vector(arguments[0]) ||
+                arguments[0] != arguments[1] ||
+                arguments[2] != ShaderType::Float)
+            {
+                fail("refract requires matching vectors and a scalar eta");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, arguments[0],
+                        static_cast<uint8_t>(BuiltinFunction::Refract), 3);
+            return arguments[0];
+        }
+
+        if (std::strcmp(name, "matrixCompMult") == 0)
+        {
+            if (argument_count != 2 || !is_matrix(arguments[0]) ||
+                arguments[0] != arguments[1])
+            {
+                fail("matrixCompMult requires two matching matrices");
+                return ShaderType::Invalid;
+            }
+            emit_simple(ShaderOp::Builtin, arguments[0],
+                        static_cast<uint8_t>(BuiltinFunction::MatrixCompMult), 2);
+            return arguments[0];
+        }
+
         if (std::strcmp(name, "dot") == 0)
         {
             if (argument_count != 2 || !is_vector(arguments[0]) ||
@@ -1320,11 +1526,16 @@ private:
 
         if (std::strcmp(name, "mix") == 0)
         {
-            if (argument_count != 3 || arguments[0] != arguments[1] ||
-                (arguments[0] != ShaderType::Float && !is_vector(arguments[0])) ||
-                arguments[2] != ShaderType::Float)
+            const bool scalar_factor = argument_count == 3 &&
+                arguments[0] == arguments[1] &&
+                (arguments[0] == ShaderType::Float || is_vector(arguments[0])) &&
+                arguments[2] == ShaderType::Float;
+            const bool vector_factor = argument_count == 3 &&
+                is_vector(arguments[0]) && arguments[0] == arguments[1] &&
+                arguments[2] == arguments[0];
+            if (!scalar_factor && !vector_factor)
             {
-                fail("mix requires matching values and a scalar interpolation factor");
+                fail("mix requires matching values and scalar or vector factor");
                 return ShaderType::Invalid;
             }
             emit_simple(ShaderOp::Mix, arguments[0], 0, 3);
@@ -1351,20 +1562,6 @@ private:
                 return ShaderType::Invalid;
             }
             emit_simple(ShaderOp::Clamp, arguments[0], 0, 3);
-            return arguments[0];
-        }
-
-        if (std::strcmp(name, "min") == 0 || std::strcmp(name, "max") == 0)
-        {
-            if (argument_count != 2 || arguments[0] != arguments[1] ||
-                (arguments[0] != ShaderType::Float && !is_vector(arguments[0])))
-            {
-                fail("min/max require matching scalar or vector arguments");
-                return ShaderType::Invalid;
-            }
-            emit_simple(std::strcmp(name, "min") == 0
-                ? ShaderOp::Minimum : ShaderOp::Maximum,
-                arguments[0], 0, 2);
             return arguments[0];
         }
 
