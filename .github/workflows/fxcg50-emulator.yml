@@ -28,17 +28,16 @@ jobs:
 
           dockerfile = Path(".cache/fxsdk-source/tools/fxsdk-docker/Dockerfile")
           source = dockerfile.read_text()
-          libc_step = "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc"
-          gint_step = "RUN giteapc install -y Lephenixnoir/gint"
-          if source.count(libc_step) != 1 or source.count(gint_step) != 1:
+          combined_step = "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc Lephenixnoir/gint"
+          if source.count(combined_step) != 1:
               raise SystemExit("Unexpected fxSDK Dockerfile layout; refusing to patch it")
-          if source.index(libc_step) > source.index(gint_step):
-              raise SystemExit("fxlibc must be installed before gint")
-          gcc_cpp_step = "RUN giteapc install -y Lephenixnoir/sh-elf-gcc\n"
-          if gcc_cpp_step.strip() not in source:
-              source = source.replace(gint_step, gcc_cpp_step + gint_step)
-          dockerfile.write_text(source)
-          print("Inserted the post-fxlibc GCC pass for libstdc++-v3")
+          ordered_steps = "\n".join((
+              "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc",
+              "RUN giteapc install -y Lephenixnoir/sh-elf-gcc",
+              "RUN giteapc install -y Lephenixnoir/gint",
+          ))
+          dockerfile.write_text(source.replace(combined_step, ordered_steps))
+          print("Split the library install and added the post-fxlibc GCC pass for libstdc++-v3")
           PY
 
       - name: Build fxSDK and SH-4A toolchain image
