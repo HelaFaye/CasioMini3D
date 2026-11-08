@@ -1374,6 +1374,89 @@ void test_integer_and_boolean_vector_uniform_api()
     fxglReleaseCurrent();
 }
 
+void test_gles_mipmap_generation_and_level_uploads()
+{
+    uint16_t color[16] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    const uint16_t base_pixels[16] = {
+        0xf800, 0xf800, 0x07e0, 0x07e0,
+        0xf800, 0xf800, 0x07e0, 0x07e0,
+        0x001f, 0x001f, 0xffff, 0xffff,
+        0x001f, 0x001f, 0xffff, 0xffff
+    };
+
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, base_pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+        GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    gfx::Texture2DView view = {};
+    gfx::TextureSampler sampler = {};
+    assert(!fxgl::get_texture_binding(0, view, sampler));
+    assert(glGetError() == GL_NO_ERROR);
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.mip_level_count == 2);
+    assert(view.mip_levels[0].width == 2 &&
+           view.mip_levels[0].height == 2);
+    assert(view.mip_levels[1].width == 1 &&
+           view.mip_levels[1].height == 1);
+    assert(sampler.min_filter == gfx::TextureMinFilter::LinearMipmapLinear);
+
+    // The four 2x2 base-image quadrants are solid colors, so the first mip
+    // level preserves each quadrant's RGB565 value exactly.
+    assert(view.mip_levels[0].pixels[0] == 0xf800);
+    assert(view.mip_levels[0].pixels[1] == 0x07e0);
+    assert(view.mip_levels[0].pixels[2] == 0x001f);
+    assert(view.mip_levels[0].pixels[3] == 0xffff);
+
+    // Updating an explicit mip level must address that level, not level zero.
+    const uint16_t green = 0x07e0;
+    glTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 1, 1,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &green);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.mip_levels[0].pixels[0] == green);
+
+    // Replacing level zero invalidates the lower mip chain.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, base_pixels);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(!fxgl::get_texture_binding(0, view, sampler));
+
+    // An explicit mip level with the wrong expected dimensions is rejected.
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 1, 1, 0,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &green);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    // Correct explicit mip dimensions restore completeness when all levels
+    // are supplied.
+    const uint16_t level1[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
+    const uint16_t level2 = 0x8410;
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 2, 2, 0,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, level1);
+    glTexImage2D(GL_TEXTURE_2D, 2, GL_RGB, 1, 1, 0,
+        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &level2);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.mip_level_count == 2);
+    assert(view.mip_levels[1].pixels[0] == level2);
+
+    GLint filter = 0;
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+    assert(filter == GL_LINEAR_MIPMAP_LINEAR);
+    glDeleteTextures(1, &texture);
+    fxglReleaseCurrent();
+}
+
 int main()
 {
     test_surface_binding_and_default_state();
@@ -1389,6 +1472,7 @@ int main()
     test_shader_and_program_object_lifecycle();
     test_mat2_mat3_uniform_api_and_introspection();
     test_integer_and_boolean_vector_uniform_api();
+    test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_shader_compile_and_program_link_failures();
     test_context_drives_software_pipeline();
