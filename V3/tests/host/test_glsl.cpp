@@ -249,10 +249,70 @@ static void test_matrix_construction_and_dimension_conversion()
     assert(near(runtime.position.data[3], 1.0f));
 }
 
+static void test_if_else_comparisons_and_logical_operators()
+{
+    static const char source[] =
+        "#version 100\n"
+        "uniform float u_value;\n"
+        "void main() {\n"
+        "  float red = 0.0;\n"
+        "  if (u_value > 0.5 && u_value < 2.0) {\n"
+        "    red = 1.0;\n"
+        "  } else {\n"
+        "    red = 0.25;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(red, 0.0, 0.0, 1.0);\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Float, 1.0f);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 1.0f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+
+    runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Float, 3.0f);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.25f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+}
+
+static void test_nested_if_else_and_boolean_not()
+{
+    static const char source[] =
+        "uniform bool u_flag;\n"
+        "void main() {\n"
+        "  float channel = 0.0;\n"
+        "  if (!u_flag) {\n"
+        "    channel = 0.2;\n"
+        "  } else {\n"
+        "    if (2.0 >= 1.0) channel = 0.8;\n"
+        "    else channel = 0.4;\n"
+        "  }\n"
+        "  gl_FragColor = vec4(channel);\n"
+        "}\n";
+
+    ShaderModule module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Fragment, source, module));
+
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Bool, 0.0f);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.2f));
+
+    runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Bool, 1.0f);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 0.8f));
+}
+
 static void test_compiler_rejects_unsupported_or_invalid_source()
 {
     const char *unsupported[] = {
-        "void main() { if (true) { gl_Position = vec4(0.0); } }",
+        "void main() { while (true) { gl_FragColor = vec4(1.0); } }",
         "attribute vec4 a_position[4]; void main() { gl_Position = a_position[0]; }",
         "void main() { gl_FragColor = unknown_name; }",
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
@@ -295,6 +355,8 @@ int main()
     test_vector_builtins_and_functions();
     test_mat2_mat3_uniforms_and_matrix_vector_multiplication();
     test_matrix_construction_and_dimension_conversion();
+    test_if_else_comparisons_and_logical_operators();
+    test_nested_if_else_and_boolean_not();
     test_compiler_rejects_unsupported_or_invalid_source();
     test_instruction_budget_and_stack_safety();
 
