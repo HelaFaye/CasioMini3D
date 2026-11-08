@@ -20,3 +20,8 @@ typedef struct bopti_image_t
 
 void dclear(int color);
 void dupdate(void);
+
+#define DWIDTH 396
+#define DHEIGHT 224
+extern uint16_t *gint_vram;
+void dtext(int x, int y, int color, const char *text);

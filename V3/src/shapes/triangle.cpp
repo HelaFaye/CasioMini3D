@@ -53,8 +53,16 @@ static void ProcessScanline(
     int y,
     RasterEdge<Textured> a,
     RasterEdge<Textured> b,
-    int solid_color)
+    int solid_color,
+    const gfx::Texture2DView* texture,
+    const gfx::TextureSampler* sampler)
 {
+    if constexpr (!Textured)
+    {
+        (void)texture;
+        (void)sampler;
+    }
+
     if (a.x == b.x)
         return;
 
@@ -91,7 +99,10 @@ static void ProcessScanline(
 
         for (int x = start_x; x <= end_x; ++x)
         {
-            DrawPixel(x, y, get_uv_map(TO_INT(u), TO_INT(v)));
+            const int color = (texture && sampler)
+                ? gfx::sample_texture(*texture, u, v, *sampler)
+                : get_uv_map(TO_INT(u), TO_INT(v));
+            DrawPixel(x, y, color);
             u += du;
             v += dv;
         }
@@ -109,7 +120,9 @@ static void RasterizeTriangle(
     VertexLocal v0,
     VertexLocal v1,
     VertexLocal v2,
-    int solid_color)
+    int solid_color,
+    const gfx::Texture2DView* texture,
+    const gfx::TextureSampler* sampler)
 {
     if (v1.y < v0.y) std::swap(v0, v1);
     if (v2.y < v0.y) std::swap(v0, v2);
@@ -132,16 +145,28 @@ static void RasterizeTriangle(
             ? CalcEdge<Textured>(v1, v2, y)
             : CalcEdge<Textured>(v0, v1, y);
 
-        ProcessScanline<Textured>(y, a, b, solid_color);
+        ProcessScanline<Textured>(y, a, b, solid_color, texture, sampler);
     }
 }
 
 void DrawTriangle(VertexLocal v0, VertexLocal v1, VertexLocal v2)
 {
-    RasterizeTriangle<true>(v0, v1, v2, C_WHITE);
+    RasterizeTriangle<true>(v0, v1, v2, C_WHITE, nullptr, nullptr);
+}
+
+void DrawTriangleTextured(
+    VertexLocal v0,
+    VertexLocal v1,
+    VertexLocal v2,
+    const gfx::Texture2DView& texture,
+    const gfx::TextureSampler& sampler)
+{
+    if (!gfx::texture_valid(texture) || !gfx::sampler_valid(sampler))
+        return;
+    RasterizeTriangle<true>(v0, v1, v2, C_WHITE, &texture, &sampler);
 }
 
 void DrawTriangleSolid(VertexLocal v0, VertexLocal v1, VertexLocal v2, int color)
 {
-    RasterizeTriangle<false>(v0, v1, v2, color);
+    RasterizeTriangle<false>(v0, v1, v2, color, nullptr, nullptr);
 }

@@ -1,5 +1,8 @@
 # fxmark: benchmark design, current implementation, and roadmap
 
+> **Historical scope note (2026-11-08):** This document describes the earlier four-workload fxmark hardware microbenchmark and its validation history. The active V3 app entry point has since been changed to the selectable fxGLMark2 benchmark browser. The earlier fxmark source and `/benchmarks-v2.csv` dataset are retained separately; the new app uses `/glmark2-fx-cg50-v1.csv`. For the current menu, selectable workloads, suite presets, and pending scene families, see [fxglmark2-port.md](fxglmark2-port.md). Do not use the historical menu/run instructions below as the current app controls.
+
+
 **Status reviewed:** 2026-11-07
 **Active application:** `V3/`
 **Target:** Casio fx-CG family using Gint and fxSDK

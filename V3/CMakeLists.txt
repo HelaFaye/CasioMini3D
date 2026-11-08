@@ -17,6 +17,13 @@ set(SOURCES
     src/bench.cpp
     src/world.cpp
     src/display.cpp
+    src/gfx/texture.cpp
+    src/gles/gles_context.cpp
+    src/gles/math.cpp
+    src/gles/pipeline.cpp
+    src/gles/glsl.cpp
+    src/gles/program.cpp
+    src/glmark2/glmark2.cpp
     src/shapes/parallelogram.cpp
     src/shapes/rectangle.cpp
     src/shapes/triangle.cpp
@@ -37,6 +44,7 @@ fxconv_declare_assets(${ASSETS} ${ASSETS_fx} ${ASSETS_cg} WITH_METADATA)
 
 add_executable(myaddin ${SOURCES} ${ASSETS} ${ASSETS_${FXSDK_PLATFORM}})
 target_compile_options(myaddin PRIVATE -Wall -Wextra -Os)
+target_include_directories(myaddin PRIVATE include)
 target_link_libraries(myaddin PRIVATE Gint::Gint LibProf::LibProf stdc++)
 
 set(NAME_APP "3D")
