@@ -28,6 +28,38 @@ static TextureSampler nearest_repeat()
             TextureAddressMode::Repeat};
 }
 
+static void test_sampler_derivative_requirements()
+{
+    TextureSampler sampler = nearest_clamp();
+    assert(!gfx::sampler_requires_implicit_derivatives(sampler));
+
+    sampler.min_filter = gfx::TextureMinFilter::Linear;
+    sampler.filter = TextureFilter::Bilinear;
+    assert(!gfx::sampler_requires_implicit_derivatives(sampler));
+
+    // Different minification/magnification filters need LOD selection.
+    sampler.filter = TextureFilter::Nearest;
+    assert(gfx::sampler_requires_implicit_derivatives(sampler));
+
+    sampler.min_filter = gfx::TextureMinFilter::Nearest;
+    sampler.filter = TextureFilter::Bilinear;
+    assert(gfx::sampler_requires_implicit_derivatives(sampler));
+
+    // Every mipmapped minification mode requires implicit LOD.
+    sampler.filter = TextureFilter::Nearest;
+    sampler.min_filter = gfx::TextureMinFilter::NearestMipmapNearest;
+    assert(gfx::sampler_requires_implicit_derivatives(sampler));
+    sampler.min_filter = gfx::TextureMinFilter::LinearMipmapNearest;
+    assert(gfx::sampler_requires_implicit_derivatives(sampler));
+    sampler.min_filter = gfx::TextureMinFilter::NearestMipmapLinear;
+    assert(gfx::sampler_requires_implicit_derivatives(sampler));
+    sampler.min_filter = gfx::TextureMinFilter::LinearMipmapLinear;
+    assert(gfx::sampler_requires_implicit_derivatives(sampler));
+
+    sampler.min_filter = static_cast<gfx::TextureMinFilter>(99);
+    assert(gfx::sampler_requires_implicit_derivatives(sampler));
+}
+
 static void test_view_and_sampler_validation()
 {
     const uint16_t pixels[4] = {0xf800, 0x07e0, 0x001f, 0xffff};
@@ -215,6 +247,7 @@ static void test_invalid_inputs_fail_closed()
 
 int main()
 {
+    test_sampler_derivative_requirements();
     test_view_and_sampler_validation();
     test_nearest_texel_centres_and_stride();
     test_clamp_and_repeat_addressing();
