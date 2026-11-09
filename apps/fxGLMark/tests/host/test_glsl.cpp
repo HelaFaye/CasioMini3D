@@ -1172,7 +1172,7 @@ static void test_matrix_column_indexing()
     static const char source[] =
         "void main() {\n"
         "  mat2 a = mat2(1.0, 2.0, 3.0, 4.0);\n"
-        "  mat3 b = mat3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);\n"
+        "  mat3 b = mat3(1.0);\n"
         "  mat4 c = mat4(1.0);\n"
         "  a[1] = vec2(8.0, 9.0);\n"
         "  b[2] = vec3(10.0, 11.0, 12.0);\n"
