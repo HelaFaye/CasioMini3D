@@ -18,6 +18,7 @@ constexpr uint16_t kTextureGreen = 0x07e0;
 constexpr uint16_t kTextureWhite = 0xffff;
 constexpr uint16_t kTriangleCyan = 0x07ff;
 constexpr uint16_t kIndexedTriangleMagenta = 0xf81f;
+constexpr uint16_t kArrayYellow = 0xffe0;
 static uint16_t depth_pixels[DWIDTH * DHEIGHT];
 static uint8_t stencil_pixels[DWIDTH * DHEIGHT];
 
@@ -68,6 +69,62 @@ static const GLchar kFragmentSource[] =
     "varying vec4 v_color;\n"
     "varying vec2 v_uv;\n"
     "void main() { gl_FragColor = v_color * texture2D(u_texture, v_uv); }\n";
+
+/* A second program for GLSL local arrays. gate[] = {-1, 0, 1} is written
+   through a loop (dynamic) index; k = gate[2] - gate[0] - 1 is 1 only when
+   dynamic writes, the dynamic read and constant reads all address their own
+   slots. palette[0] is subtracted, so constant indices that alias the same
+   slot cancel to black. Every mis-addressed variant clamps to black. */
+static const GLchar kArrayVertexSource[] =
+    "attribute vec4 a_position;\n"
+    "void main() {\n"
+    "  gl_Position = vec4(a_position.x, a_position.y, a_position.w, 1.0);\n"
+    "  gl_PointSize = a_position.z;\n"
+    "}\n";
+
+static const GLchar kArrayFragmentSource[] =
+    "precision mediump float;\n"
+    "void main() {\n"
+    "  vec4 palette[2];\n"
+    "  float gate[3];\n"
+    "  palette[0] = vec4(0.0, 0.0, 1.0, 0.0);\n"
+    "  palette[1] = vec4(0.0);\n"
+    "  palette[1].rg = vec2(1.0, 1.0);\n"
+    "  palette[1].a = 1.0;\n"
+    "  for (int i = 0; i < 3; i++) { gate[i] = float(i) - 1.0; }\n"
+    "  int pick = 2;\n"
+    "  float k = gate[pick] - gate[0] - 1.0;\n"
+    "  gl_FragColor = palette[1] * k - palette[0];\n"
+    "}\n";
+
+GLuint build_program(const GLchar *vertex_source,
+                     const GLchar *fragment_source)
+{
+    const GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+    if (vertex_shader == 0 || fragment_shader == 0)
+        return 0;
+    glShaderSource(vertex_shader, 1, &vertex_source, nullptr);
+    glShaderSource(fragment_shader, 1, &fragment_source, nullptr);
+    glCompileShader(vertex_shader);
+    glCompileShader(fragment_shader);
+    GLint vertex_compiled = GL_FALSE;
+    GLint fragment_compiled = GL_FALSE;
+    glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &vertex_compiled);
+    glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &fragment_compiled);
+    if (vertex_compiled != GL_TRUE || fragment_compiled != GL_TRUE)
+        return 0;
+
+    const GLuint program = glCreateProgram();
+    if (program == 0)
+        return 0;
+    glAttachShader(program, vertex_shader);
+    glAttachShader(program, fragment_shader);
+    glLinkProgram(program);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    return linked == GL_TRUE ? program : 0;
+}
 
 float clip_coordinate_for_pixel(int pixel, int extent)
 {
@@ -143,7 +200,8 @@ bool framebuffer_matches_expected(const uint16_t *pixels)
            pixels[static_cast<size_t>(190) * DWIDTH + 260] == 0 &&
            pixels[static_cast<size_t>(190) * DWIDTH + 280] == kTriangleCyan &&
            pixels[static_cast<size_t>(190) * DWIDTH + 320] ==
-               kIndexedTriangleMagenta;
+               kIndexedTriangleMagenta &&
+           pixels[static_cast<size_t>(190) * DWIDTH + 360] == kArrayYellow;
 }
 
 void publish_result(bool passed)
@@ -538,6 +596,30 @@ int main()
         if (index_buffer != 0)
             glDeleteBuffers(1, &index_buffer);
         passed = passed && glGetError() == GL_NO_ERROR;
+    }
+
+    if (passed)
+    {
+        /* Switch to the array program and draw one point at (360,190). The
+           indexed draw above deleted its buffers, which also unbinds them,
+           so the position pointer below is client memory again. */
+        const GLuint array_program =
+            build_program(kArrayVertexSource, kArrayFragmentSource);
+        passed = array_program != 0;
+        GLint array_position = -1;
+        if (passed)
+        {
+            glUseProgram(array_program);
+            array_position = glGetAttribLocation(array_program, "a_position");
+            passed = array_position >= 0 && glGetError() == GL_NO_ERROR;
+        }
+        if (passed)
+        {
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glEnableVertexAttribArray(static_cast<GLuint>(array_position));
+            passed = draw_point_at_pixel(
+                static_cast<GLuint>(array_position), 360, 190, 1.0f);
+        }
     }
 
     if (passed)
