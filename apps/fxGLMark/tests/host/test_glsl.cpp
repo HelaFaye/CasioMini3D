@@ -1191,8 +1191,8 @@ static void test_swizzle_assignments()
     fragment_runtime.uniforms[0] = value(ShaderType::Vec4, 0.1f, 0.2f, 0.3f, 0.4f);
     assert(fxgl::execute_glsl(fragment_module, fragment_runtime));
     assert(near(fragment_runtime.fragment_color.data[0], 0.1f));
-    assert(near(fragment_runtime.fragment_color.data[1], 0.3f));
-    assert(near(fragment_runtime.fragment_color.data[2], 0.2f));
+    assert(near(fragment_runtime.fragment_color.data[1], 0.2f));
+    assert(near(fragment_runtime.fragment_color.data[2], 0.3f));
     assert(near(fragment_runtime.fragment_color.data[3], 0.25f));
 
     static const char vertex_source[] =
