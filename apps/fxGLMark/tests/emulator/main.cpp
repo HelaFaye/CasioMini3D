@@ -102,18 +102,26 @@ uint16_t expected_pixel_color(int x, int y)
 
 bool framebuffer_matches_expected(const uint16_t *pixels)
 {
-    for (int y = 0; y < DHEIGHT; ++y)
+    /* Check only the pixels this add-in draws. The independent host-side
+       emulator oracle scans the complete LCD framebuffer and rejects any
+       unexpected non-black pixel, so duplicating that 88,704-pixel scan on
+       the SH-4 only burns emulation time without adding coverage. */
+    for (const ExpectedRect& rect : kExpectedRedRects)
     {
-        for (int x = 0; x < DWIDTH; ++x)
+        for (int y = rect.y; y < rect.y + rect.height; ++y)
         {
-            const uint16_t expected = expected_pixel_color(x, y);
-            const uint16_t actual =
-                pixels[static_cast<size_t>(y) * DWIDTH + x];
-            if (actual != expected)
-                return false;
+            for (int x = rect.x; x < rect.x + rect.width; ++x)
+            {
+                if (pixels[static_cast<size_t>(y) * DWIDTH + x] != kRed)
+                    return false;
+            }
         }
     }
-    return true;
+
+    return pixels[static_cast<size_t>(150) * DWIDTH + 240] == kBlue &&
+           pixels[static_cast<size_t>(150) * DWIDTH + 280] ==
+               kBlendedRedBlue &&
+           pixels[static_cast<size_t>(150) * DWIDTH + 310] == kGreenOnBlue;
 }
 
 void publish_result(bool passed)
