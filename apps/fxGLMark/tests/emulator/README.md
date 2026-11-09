@@ -14,9 +14,10 @@ recipe from [hexbinoct/casio-cg50](https://github.com/hexbinoct/casio-cg50),
 builds the add-in, builds the headless emulator, and runs the test. It follows
 the documented GiteaPC order: install fxSDK and the SH-4 compiler, install
 OpenLibm and fxlibc, invoke the SH-4 compiler package again to build
-`libstdc++-v3` with the target C library available, then install Gint. A
-separate probe verifies that both compiler executables and the C++ static
-library exist, and that the `<algorithm>` and `<vector>` headers compile.
+`libstdc++-v3` with the target C library available, then install Gint. The preflight reports the compiler's `libstdc++.a` and `libsupc++.a` paths,
+then compiles `<algorithm>` and the target C `<math.h>` interface in
+freestanding mode. The add-in build itself exercises the actual C++ runtime
+link required by the smoke-test executable.
 
 **Scope:** this is a startup, shader, rasterization, and display-transfer smoke
 test. `casio-emu` is a work-in-progress emulator; it does not emulate the
