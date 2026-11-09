@@ -132,7 +132,7 @@ jobs:
             fi
             echo "FXSDK_ELF=$ELF"
             echo "=== Main and observed PC symbols ==="
-            sh-elf-nm -n -C "$ELF" | grep -E '0030015c|003006b6|00300750|00300768|00300798|003007e8'
+            sh-elf-nm -n -C "$ELF" | grep -E "0030015c|003006b6|00300750|00300768|00300798|003007e8"
             echo "=== Address-to-line lookup at observed SH-4 PCs ==="
             sh-elf-addr2line -f -C -e "$ELF" 0x003006b6 0x00300750 0x00300768 0x00300798
             echo "=== SH-4 disassembly of main() tail and observed PC window ==="
