@@ -1166,6 +1166,45 @@ static void test_reused_runtime_resets_locals_and_outputs()
     assert(near(runtime.fragment_color.data[2], 0.5f));
     assert(near(runtime.fragment_color.data[3], 0.5f));
 }
+
+static void test_matrix_column_indexing()
+{
+    static const char source[] =
+        "void main() {\n"
+        "  mat2 a = mat2(1.0, 2.0, 3.0, 4.0);\n"
+        "  mat3 b = mat3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);\n"
+        "  mat4 c = mat4(1.0);\n"
+        "  a[1] = vec2(8.0, 9.0);\n"
+        "  b[2] = vec3(10.0, 11.0, 12.0);\n"
+        "  c[3] = vec4(13.0, 14.0, 15.0, 16.0);\n"
+        "  gl_FragColor = vec4(a[1].x, a[1].y, b[2].z, c[3].w);\n"
+        "}\n";
+    ShaderModule module = {};
+    const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, source, module);
+    if (!compiled)
+        std::fprintf(stderr, "matrix column diagnostic: %s\\n", module.info_log);
+    assert(compiled);
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 8.0f));
+    assert(near(runtime.fragment_color.data[1], 9.0f));
+    assert(near(runtime.fragment_color.data[2], 12.0f));
+    assert(near(runtime.fragment_color.data[3], 16.0f));
+
+    const char *invalid[] = {
+        "void main() { mat2 m = mat2(1.0); gl_FragColor = vec4(m[2], 0.0, 1.0); }",
+        "void main() { mat3 m = mat3(1.0); gl_FragColor = vec4(m[-1], 1.0); }",
+        "void main() { mat4 m = mat4(1.0); gl_FragColor = vec4(m[1.5], 1.0); }",
+        "void main() { mat2 m = mat2(1.0); m[0] = vec3(1.0); gl_FragColor = vec4(1.0); }",
+        "uniform mat2 m; void main() { m[0] = vec2(1.0); gl_FragColor = vec4(1.0); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        assert(!fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected));
+    }
+}
+
 static void test_swizzle_assignments()
 {
     static const char fragment_source[] =
@@ -1247,6 +1286,7 @@ int main()
     test_user_function_overload_errors();
     test_user_function_out_and_inout_parameters();
     test_user_function_stage_output_copyout();
+    test_matrix_column_indexing();
     test_swizzle_assignments();
     test_user_function_out_inout_rejections();
     test_user_function_call_depth_is_bounded();
