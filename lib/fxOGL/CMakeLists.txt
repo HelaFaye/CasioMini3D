@@ -22,6 +22,13 @@ set_target_properties(fxogl PROPERTIES EXPORT_NAME fxOGL)
 target_compile_features(fxogl PUBLIC cxx_std_20)
 target_compile_options(fxogl PRIVATE -Wall -Wextra -Os)
 
+# GCC's libstdc++ <math.h> compatibility wrapper normally redirects C++ users
+# to <cmath>, which is hosted-only in freestanding GCC 14. fxOGL intentionally
+# uses the C math API; ask that wrapper to include_next the target C header.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_definitions(fxogl PRIVATE _GLIBCXX_INCLUDE_NEXT_C_HEADERS)
+endif()
+
 # In freestanding SH builds, GCC's C++ include path can put libstdc++'s
 # <math.h> compatibility wrapper ahead of the target C library header. Ask
 # fxSDK for its canonical target include directory rather than reconstructing
