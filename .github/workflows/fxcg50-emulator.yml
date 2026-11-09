@@ -46,7 +46,7 @@ jobs:
       - name: Verify SH-4A freestanding C++ and math headers
         run: |
           docker run --rm fxsdk-ci sh -c 'set -eu; command -v sh-elf-gcc; command -v sh-elf-g++; libstdcxx="$(sh-elf-g++ -print-file-name=libstdc++.a)"; test "$libstdcxx" != libstdc++.a; test -f "$libstdcxx"'
-          printf '%s\\n' '#include <algorithm>' '#include <math.h>' 'int main() { float x = sqrtf(2.0f); return isfinite(floorf(x) + log2f(x)) ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh-elf-g++ -std=gnu++20 -ffreestanding -fno-exceptions -x c++ -fsyntax-only -
+          printf '%s\n' '#include <algorithm>' '#include <math.h>' 'int main() { float x = sqrtf(2.0f); return isfinite(floorf(x) + log2f(x)) ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh-elf-g++ -std=gnu++20 -ffreestanding -fno-exceptions -x c++ -fsyntax-only -
 
       - name: Build point-size smoke add-in
         run: |
