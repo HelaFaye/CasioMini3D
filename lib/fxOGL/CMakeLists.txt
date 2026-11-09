@@ -22,34 +22,53 @@ set_target_properties(fxogl PROPERTIES EXPORT_NAME fxOGL)
 target_compile_features(fxogl PUBLIC cxx_std_20)
 target_compile_options(fxogl PRIVATE -Wall -Wextra -Os)
 
-# In freestanding SH builds, GCC's C++ include path can place libstdc++'s
+# In freestanding SH builds, GCC's C++ include path can put libstdc++'s
 # <math.h> compatibility wrapper ahead of the target C library header. That
-# wrapper includes hosted-only <cmath>. Put the active target sysroot's C
-# headers first for this target so <math.h> resolves to fxlibc/OpenLibm.
-set(FXOGL_TARGET_SYSROOT "${CMAKE_SYSROOT}")
-if(NOT FXOGL_TARGET_SYSROOT)
-    execute_process(
-        COMMAND "${CMAKE_CXX_COMPILER}" -print-sysroot
-        OUTPUT_VARIABLE FXOGL_TARGET_SYSROOT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        RESULT_VARIABLE FXOGL_SYSROOT_QUERY_RESULT
-    )
-    if(NOT FXOGL_SYSROOT_QUERY_RESULT EQUAL 0)
-        set(FXOGL_TARGET_SYSROOT "")
+# wrapper includes hosted-only <cmath>. Select the actual target C include
+# directory using GCC's reported sysroot and target triple.
+set(FXOGL_TARGET_C_INCLUDE_DIR "")
+
+if(CMAKE_SYSROOT AND EXISTS "${CMAKE_SYSROOT}/include/math.h")
+    set(FXOGL_TARGET_C_INCLUDE_DIR "${CMAKE_SYSROOT}/include")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_CXX_COMPILER}" -print-sysroot
+    OUTPUT_VARIABLE FXOGL_COMPILER_SYSROOT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE FXOGL_SYSROOT_QUERY_RESULT
+)
+execute_process(
+    COMMAND "${CMAKE_CXX_COMPILER}" -dumpmachine
+    OUTPUT_VARIABLE FXOGL_TARGET_TRIPLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE FXOGL_TRIPLE_QUERY_RESULT
+)
+
+if(FXOGL_SYSROOT_QUERY_RESULT EQUAL 0 AND
+   FXOGL_TRIPLE_QUERY_RESULT EQUAL 0 AND
+   FXOGL_COMPILER_SYSROOT AND FXOGL_TARGET_TRIPLE)
+    set(FXOGL_TRIPLE_C_INCLUDE_DIR
+        "${FXOGL_COMPILER_SYSROOT}/${FXOGL_TARGET_TRIPLE}/include")
+    if(EXISTS "${FXOGL_TRIPLE_C_INCLUDE_DIR}/math.h")
+        set(FXOGL_TARGET_C_INCLUDE_DIR "${FXOGL_TRIPLE_C_INCLUDE_DIR}")
+    elseif(NOT FXOGL_TARGET_C_INCLUDE_DIR AND
+           EXISTS "${FXOGL_COMPILER_SYSROOT}/include/math.h")
+        set(FXOGL_TARGET_C_INCLUDE_DIR
+            "${FXOGL_COMPILER_SYSROOT}/include")
     endif()
 endif()
 
-if(FXOGL_TARGET_SYSROOT AND
-   EXISTS "${FXOGL_TARGET_SYSROOT}/include/math.h")
+if(FXOGL_TARGET_C_INCLUDE_DIR)
     target_include_directories(fxogl BEFORE PRIVATE
-        "${FXOGL_TARGET_SYSROOT}/include"
+        "${FXOGL_TARGET_C_INCLUDE_DIR}"
     )
     message(STATUS
-        "fxOGL target C headers: ${FXOGL_TARGET_SYSROOT}/include")
+        "fxOGL target C headers: ${FXOGL_TARGET_C_INCLUDE_DIR}")
 elseif(CMAKE_CROSSCOMPILING)
     message(FATAL_ERROR
-        "fxOGL cross-build could not locate target C math header "
-        "at '${FXOGL_TARGET_SYSROOT}/include/math.h'")
+        "fxOGL cross-build could not locate the target C math header "
+        "using the compiler sysroot and target triple")
 endif()
 
 target_include_directories(fxogl
