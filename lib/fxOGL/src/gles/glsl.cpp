@@ -1310,7 +1310,30 @@ private:
         }
 
         ResolvedVariable target = base;
-        const bool swizzle_assignment = is_punctuation('.');
+        bool matrix_column_assignment = false;
+        uint8_t matrix_column = 0;
+        if (accept_punctuation('['))
+        {
+            const size_t dimension = matrix_dimension(base.type);
+            if (dimension == 0 || base.storage != Storage::Local || !base.writable)
+            {
+                fail("matrix column assignment requires a writable local matrix");
+                return;
+            }
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 0.0f || current_.number >= dimension)
+            {
+                fail("matrix column index must be a constant in range");
+                return;
+            }
+            matrix_column = static_cast<uint8_t>(current_.number);
+            advance();
+            expect_punctuation(']');
+            matrix_column_assignment = true;
+            target.type = vector_type(dimension);
+            emit_simple(ShaderOp::LoadLocal, base.type, base.index);
+        }
+        const bool swizzle_assignment = !matrix_column_assignment && is_punctuation('.');
         if (swizzle_assignment)
         {
             if (!is_any_vector(base.type))
@@ -1354,6 +1377,17 @@ private:
         }
         if (consume_semicolon)
             expect_punctuation(';');
+
+        if (matrix_column_assignment)
+        {
+            ShaderInstruction instruction = {};
+            instruction.op = ShaderOp::StoreMatrixColumn;
+            instruction.type = base.type;
+            instruction.index = base.index;
+            instruction.argument_count = matrix_column;
+            emit(instruction);
+            return;
+        }
 
         if (!swizzle_assignment)
         {
@@ -1923,6 +1957,34 @@ private:
         }
         emit_simple(op, variable.type, variable.index);
         result_type = variable.type;
+        if (is_punctuation('['))
+        {
+            const size_t dimension = matrix_dimension(variable.type);
+            if (dimension == 0)
+            {
+                fail("indexing is currently supported only for matrices");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            advance();
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 0.0f || current_.number >= dimension)
+            {
+                fail("matrix column index must be a constant in range");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            const uint8_t column = static_cast<uint8_t>(current_.number);
+            advance();
+            expect_punctuation(']');
+            ShaderInstruction instruction = {};
+            instruction.op = ShaderOp::LoadMatrixColumn;
+            instruction.type = vector_type(dimension);
+            instruction.index = column;
+            emit(instruction);
+            result_type = instruction.type;
+            expression_lvalue_ = {};
+        }
         parse_swizzle(result_type);
     }
 
@@ -3069,6 +3131,41 @@ bool execute_glsl(
                     return false;
                 copy_shader_value(runtime.fragment_color, a);
                 break;
+
+            case ShaderOp::LoadMatrixColumn:
+            {
+                if (!pop_value(stack, stack_size, a))
+                    return false;
+                const size_t dimension = matrix_dimension(a.type);
+                if (dimension == 0 || instruction.index >= dimension ||
+                    instruction.type != vector_type(dimension))
+                    return false;
+                set_zero_value(result, instruction.type);
+                const size_t offset = static_cast<size_t>(instruction.index) * dimension;
+                for (size_t row = 0; row < dimension; ++row)
+                    result.data[row] = a.data[offset + row];
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+            }
+
+            case ShaderOp::StoreMatrixColumn:
+            {
+                if (!pop_value(stack, stack_size, a) ||
+                    !pop_value(stack, stack_size, b) ||
+                    instruction.index >= GLSL_MAX_LOCALS)
+                    return false;
+                const size_t dimension = matrix_dimension(instruction.type);
+                if (dimension == 0 || instruction.argument_count >= dimension ||
+                    b.type != instruction.type ||
+                    a.type != vector_type(dimension))
+                    return false;
+                const size_t offset = static_cast<size_t>(instruction.argument_count) * dimension;
+                for (size_t row = 0; row < dimension; ++row)
+                    b.data[offset + row] = a.data[row];
+                copy_shader_value(locals[instruction.index], b);
+                break;
+            }
 
             case ShaderOp::StoreSwizzle:
             {
