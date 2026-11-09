@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <math.h>
 #include <cstdint>
-#include <cstdlib>
+#include <stdlib.h>
 #include <limits>
 #include <cstring>
 #include <limits>
@@ -304,7 +304,7 @@ static void release_texture_mips(TextureObject& object)
 {
     for (TextureMipObject& level : object.mip_levels)
     {
-        std::free(level.pixels);
+        ::free(level.pixels);
         level = {};
     }
 }
@@ -330,7 +330,7 @@ static void destroy_textures(Context& context)
 {
     for (TextureObject& object : context.textures)
     {
-        std::free(object.pixels);
+        ::free(object.pixels);
         release_texture_mips(object);
         object = {};
     }
@@ -564,7 +564,7 @@ static void destroy_framebuffer_resources(Context& context)
 {
     for (RenderbufferObject& renderbuffer : context.renderbuffers)
     {
-        std::free(renderbuffer.storage);
+        ::free(renderbuffer.storage);
         renderbuffer = {};
     }
     for (FramebufferObject& framebuffer : context.framebuffers)
@@ -590,7 +590,7 @@ static void destroy_buffers(Context& context)
 {
     for (BufferObject& object : context.buffers)
     {
-        std::free(object.data);
+        ::free(object.data);
         object = {};
     }
     context.buffer_bytes = 0;
@@ -1619,7 +1619,7 @@ void glDeleteBuffers(GLsizei n, const GLuint *buffers)
         if (object->alive)
         {
             g_context.buffer_bytes -= object->size;
-            std::free(object->data);
+            ::free(object->data);
         }
         *object = {};
     }
@@ -1680,7 +1680,7 @@ void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usa
     uint8_t *new_data = nullptr;
     if (new_size > 0)
     {
-        new_data = static_cast<uint8_t *>(std::malloc(new_size));
+        new_data = static_cast<uint8_t *>(::malloc(new_size));
         if (!new_data)
         {
             set_error(GL_OUT_OF_MEMORY);
@@ -1692,7 +1692,7 @@ void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usa
             std::memset(new_data, 0, new_size);
     }
 
-    std::free(object->data);
+    ::free(object->data);
     object->data = new_data;
     object->size = new_size;
     object->usage = usage;
@@ -2289,7 +2289,7 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
         if (object->alive)
         {
             g_context.texture_bytes -= object->bytes;
-            std::free(object->pixels);
+            ::free(object->pixels);
             release_texture_mips(*object);
         }
         *object = {};
@@ -2598,7 +2598,7 @@ void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers)
         if (object->alive)
         {
             g_context.renderbuffer_bytes -= object->bytes;
-            std::free(object->storage);
+            ::free(object->storage);
         }
         *object = {};
     }
@@ -2678,7 +2678,7 @@ void glRenderbufferStorage(
     uint8_t *storage = nullptr;
     if (new_bytes > 0)
     {
-        storage = static_cast<uint8_t *>(std::malloc(new_bytes));
+        storage = static_cast<uint8_t *>(::malloc(new_bytes));
         if (!storage)
         {
             set_error(GL_OUT_OF_MEMORY);
@@ -2687,7 +2687,7 @@ void glRenderbufferStorage(
         std::memset(storage, 0, new_bytes);
     }
 
-    std::free(object->storage);
+    ::free(object->storage);
     object->storage = storage;
     object->bytes = new_bytes;
     object->width = width;
@@ -2955,7 +2955,7 @@ void glTexImage2D(
     uint16_t *new_pixels = nullptr;
     if (new_bytes > 0)
     {
-        new_pixels = static_cast<uint16_t *>(std::malloc(new_bytes));
+        new_pixels = static_cast<uint16_t *>(::malloc(new_bytes));
         if (!new_pixels)
         {
             set_error(GL_OUT_OF_MEMORY);
@@ -2982,7 +2982,7 @@ void glTexImage2D(
     if (level == 0)
     {
         // Replacing the base image invalidates the entire lower mip chain.
-        std::free(object->pixels);
+        ::free(object->pixels);
         release_texture_mips(*object);
         object->pixels = new_pixels;
         object->width = static_cast<uint16_t>(width);
@@ -2992,7 +2992,7 @@ void glTexImage2D(
     }
     else
     {
-        std::free(mip->pixels);
+        ::free(mip->pixels);
         mip->pixels = new_pixels;
         mip->width = static_cast<uint16_t>(width);
         mip->height = static_cast<uint16_t>(height);
@@ -3104,16 +3104,16 @@ void glGenerateMipmap(GLenum target)
         if (bytes > FXGL_MAX_TEXTURE_BYTES - retained - generated_bytes)
         {
             for (TextureMipObject& mip : generated)
-                std::free(mip.pixels);
+                ::free(mip.pixels);
             set_error(GL_OUT_OF_MEMORY);
             return;
         }
 
-        uint16_t *destination = static_cast<uint16_t *>(std::malloc(bytes));
+        uint16_t *destination = static_cast<uint16_t *>(::malloc(bytes));
         if (!destination)
         {
             for (TextureMipObject& mip : generated)
-                std::free(mip.pixels);
+                ::free(mip.pixels);
             set_error(GL_OUT_OF_MEMORY);
             return;
         }
