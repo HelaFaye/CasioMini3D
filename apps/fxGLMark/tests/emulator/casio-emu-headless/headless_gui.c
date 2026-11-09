@@ -10,10 +10,12 @@
 #define EXPECTED_POINT_SIZE_MARKER 0x07e0
 #define EXPECTED_POINT_RED 0xf800
 #define EXPECTED_POINT_SIZE_RED_PIXELS 600
-#define EXPECTED_AUXILIARY_PIXELS 3
+#define EXPECTED_AUXILIARY_PIXELS 11
 #define EXPECTED_DEPTH_PIXEL 0x001f
 #define EXPECTED_BLEND_PIXEL 0x8010
 #define EXPECTED_COLOR_MASK_PIXEL 0x07ff
+#define EXPECTED_TEXTURE_GREEN 0x07e0
+#define EXPECTED_TEXTURE_WHITE 0xffff
 
 struct ExpectedRect
 {
@@ -76,7 +78,7 @@ static void save_ppm(void)
     fclose(file);
 }
 
-static u16 expected_pixel_color(int x, int y)
+static int expected_point_red_pixel(int x, int y)
 {
     for (size_t i = 0;
          i < sizeof(expected_red_rects) / sizeof(expected_red_rects[0]);
@@ -85,11 +87,34 @@ static u16 expected_pixel_color(int x, int y)
         const struct ExpectedRect *rect = &expected_red_rects[i];
         if (x >= rect->x && x < rect->x + rect->width &&
             y >= rect->y && y < rect->y + rect->height)
-            return EXPECTED_POINT_RED;
+            return 1;
     }
+    return 0;
+}
+
+static u16 expected_pixel_color(int x, int y)
+{
+    if (expected_point_red_pixel(x, y))
+        return EXPECTED_POINT_RED;
     if (x == 240 && y == 150) return EXPECTED_DEPTH_PIXEL;
     if (x == 280 && y == 150) return EXPECTED_BLEND_PIXEL;
     if (x == 310 && y == 150) return EXPECTED_COLOR_MASK_PIXEL;
+
+    if (y == 170)
+    {
+        switch (x)
+        {
+            case 240:
+            case 320:
+            case 380: return EXPECTED_POINT_RED;
+            case 260:
+            case 340:
+            case 360: return EXPECTED_TEXTURE_GREEN;
+            case 280: return EXPECTED_DEPTH_PIXEL;
+            case 300: return EXPECTED_TEXTURE_WHITE;
+            default: break;
+        }
+    }
     return 0;
 }
 
@@ -108,7 +133,7 @@ static int validate_framebuffer(int *red_pixel_count, int *auxiliary_pixel_count
                 continue;
 
             const u16 expected = expected_pixel_color(x, y);
-            if (pixel == EXPECTED_POINT_RED)
+            if (expected_point_red_pixel(x, y))
                 ++red_pixels;
             else if (expected != 0)
                 ++auxiliary_pixels;
@@ -141,7 +166,7 @@ void runMainLoop(void (*callback)(void))
     printf("CASIO_EMU_GLES_MARKER=0x%04x\n", marker);
     printf("CASIO_EMU_GLES_RED_PIXELS=%d\n", red_pixels);
     printf("CASIO_EMU_GLES_AUXILIARY_PIXELS=%d\n", auxiliary_pixels);
-    printf("CASIO_EMU_GLES_CASES=13\n");
+    printf("CASIO_EMU_GLES_CASES=21\n");
     printf("CASIO_EMU_DISPLAY_CAPTURED=%s\n", have_frame ? "yes" : "no");
 
     if (!have_frame || marker != EXPECTED_POINT_SIZE_MARKER ||
