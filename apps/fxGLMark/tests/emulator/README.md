@@ -23,9 +23,10 @@ It adds public GLES2 regressions for:
 - **Stencil testing:** `GL_ALWAYS` with `GL_REPLACE` writes a reference value;
   a subsequent `GL_EQUAL` draw overwrites the marked pixel and rejects a
   neighboring pixel whose stencil value remains zero.
-- **Triangle primitive:** a small `GL_TRIANGLES` draw exercises three-vertex
-  attribute fetch, coverage, varying interpolation, and fragment-stage
-  texturing while covering exactly one known sample.
+- **Triangle primitives:** one-pixel `GL_TRIANGLES` draws exercise both
+  client-memory vertex arrays with `glDrawArrays` and indexed VBO/EBO data
+  with `glDrawElements`, including coverage, varying interpolation, and
+  fragment-stage texturing.
 - **Texture sampling:** a `sampler2D` uniform and GLSL `texture2D` sample all
   four texels of a 2x2 RGB565 image using nearest filtering.
 - **Texture addressing:** out-of-range positive and negative S coordinates
@@ -33,14 +34,14 @@ It adds public GLES2 regressions for:
 
 ## Independent framebuffer oracle
 
-To keep execution bounded on the emulated SH-4, the add-in checks the 613
-expected non-black pixels: 600 red point pixels, five depth/blend/color-mask/
-stencil/triangle pixels, and eight texture-sampling pixels. It also asserts
-that the stencil-rejected neighbor remains black. The independent host-side
-emulator oracle scans the entire 396x224 transferred RGB565 framebuffer
-against the exact expected pattern, rejects any unexpected non-black pixel,
-and checks the green pass marker. CI uploads `emulated-screen.ppm` as a visual
-artifact.
+To keep execution bounded on the emulated SH-4, the add-in checks the 614
+expected non-black pixels: 600 red point pixels, four depth/blend/color-mask/
+stencil pixels, two triangle pixels, and eight texture-sampling pixels. It
+also asserts that the stencil-rejected neighbor remains black. The independent
+host-side emulator oracle scans the entire 396x224 transferred RGB565
+framebuffer against the exact expected pattern, rejects any unexpected
+non-black pixel, and checks the green pass marker. CI uploads
+`emulated-screen.ppm` as a visual artifact.
 
 ## Toolchain and limitations
 
@@ -53,8 +54,8 @@ paths used by the add-in.
 **Scope:** this is a focused software GLES regression suite, not a performance
 benchmark or full Khronos GLES conformance test. It currently validates point
 rasterization, depth testing, blending, channel write masks, and basic
-texture sampling/addressing, stencil compare/replace behavior, and a basic
-triangle draw. It does
+texture sampling/addressing, stencil compare/replace behavior, and direct plus
+indexed triangle draws. It does
 cover the complete GLES2 API. `casio-emu` is work in progress, does not emulate
 the calculator OS or syscalls, and has known hardware-model inaccuracies.
 Passing emulation is not physical fx-CG50 validation.
