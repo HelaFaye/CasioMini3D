@@ -14,6 +14,8 @@ constexpr uint16_t kFailMarker = 0xf800;
 constexpr uint16_t kBlue = 0x001f;
 constexpr uint16_t kBlendedRedBlue = 0x8010;
 constexpr uint16_t kGreenOnBlue = 0x07ff;
+constexpr uint16_t kTextureGreen = 0x07e0;
+constexpr uint16_t kTextureWhite = 0xffff;
 static uint16_t depth_pixels[DWIDTH * DHEIGHT];
 
 struct ExpectedRect
@@ -42,12 +44,15 @@ constexpr ExpectedRect kExpectedRedRects[] = {
 static const GLchar kVertexSource[] =
     "attribute vec4 a_position;\n"
     "attribute vec4 a_color;\n"
+    "attribute vec2 a_uv;\n"
     "varying vec4 v_color;\n"
+    "varying vec2 v_uv;\n"
     "void set_size(out float size, float requested);\n"
     "void preserve_size(inout float size);\n"
     "void main() {\n"
     "  gl_Position = vec4(a_position.x, a_position.y, a_position.w, 1.0);\n"
     "  v_color = a_color;\n"
+    "  v_uv = a_uv;\n"
     "  set_size(gl_PointSize, a_position.z);\n"
     "  preserve_size(gl_PointSize);\n"
     "}\n"
@@ -56,8 +61,10 @@ static const GLchar kVertexSource[] =
 
 static const GLchar kFragmentSource[] =
     "precision mediump float;\n"
+    "uniform sampler2D u_texture;\n"
     "varying vec4 v_color;\n"
-    "void main() { gl_FragColor = v_color; }\n";
+    "varying vec2 v_uv;\n"
+    "void main() { gl_FragColor = v_color * texture2D(u_texture, v_uv); }\n";
 
 float clip_coordinate_for_pixel(int pixel, int extent)
 {
@@ -86,6 +93,14 @@ bool draw_point_at_pixel(GLuint position_location,
         point_size);
 }
 
+bool draw_textured_point_at_pixel(
+    GLuint position_location, GLuint uv_location,
+    int x, int y, GLfloat u, GLfloat v)
+{
+    glVertexAttrib2f(uv_location, u, v);
+    return draw_point_at_pixel(position_location, x, y, 1.0f);
+}
+
 bool framebuffer_matches_expected(const uint16_t *pixels)
 {
     /* Check only the pixels this add-in draws. The independent host-side
@@ -107,7 +122,15 @@ bool framebuffer_matches_expected(const uint16_t *pixels)
     return pixels[static_cast<size_t>(150) * DWIDTH + 240] == kBlue &&
            pixels[static_cast<size_t>(150) * DWIDTH + 280] ==
                kBlendedRedBlue &&
-           pixels[static_cast<size_t>(150) * DWIDTH + 310] == kGreenOnBlue;
+           pixels[static_cast<size_t>(150) * DWIDTH + 310] == kGreenOnBlue &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 240] == kRed &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 260] == kTextureGreen &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 280] == kBlue &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 300] == kTextureWhite &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 320] == kRed &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 340] == kTextureGreen &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 360] == kTextureGreen &&
+           pixels[static_cast<size_t>(170) * DWIDTH + 380] == kRed;
 }
 
 void publish_result(bool passed)
@@ -133,6 +156,7 @@ int main()
     GLuint vertex_shader = 0;
     GLuint fragment_shader = 0;
     GLuint program = 0;
+    GLuint texture = 0;
     if (passed)
     {
         vertex_shader = glCreateShader(GL_VERTEX_SHADER);
@@ -173,12 +197,17 @@ int main()
 
     GLint position_location = -1;
     GLint color_location = -1;
+    GLint uv_location = -1;
+    GLint texture_location = -1;
     if (passed)
     {
         glUseProgram(program);
         position_location = glGetAttribLocation(program, "a_position");
         color_location = glGetAttribLocation(program, "a_color");
-        passed = position_location >= 0 && color_location >= 0;
+        uv_location = glGetAttribLocation(program, "a_uv");
+        texture_location = glGetUniformLocation(program, "u_texture");
+        passed = position_location >= 0 && color_location >= 0 &&
+                 uv_location >= 0 && texture_location >= 0;
     }
 
     if (passed)
@@ -191,7 +220,23 @@ int main()
         glDisable(GL_DITHER);
         glVertexAttrib4f(static_cast<GLuint>(color_location),
                          1.0f, 0.0f, 0.0f, 1.0f);
-        passed = glGetError() == GL_NO_ERROR;
+
+        /* Bind a white 1x1 texture so the existing color/depth/blend tests
+           exercise the same public texture2D shader path without changing
+           their expected output. */
+        const uint16_t white_pixel = kTextureWhite;
+        glGenTextures(1, &texture);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0,
+                     GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &white_pixel);
+        glUniform1i(texture_location, 0);
+        glVertexAttrib2f(static_cast<GLuint>(uv_location), 0.5f, 0.5f);
+        passed = texture != 0 && glGetError() == GL_NO_ERROR;
     }
 
     if (passed)
@@ -320,6 +365,54 @@ int main()
         passed = draw_point_at_pixel(
             static_cast<GLuint>(position_location), 310, 150, 1.0f);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        passed = passed && glGetError() == GL_NO_ERROR;
+    }
+
+    if (passed)
+    {
+        /* Exercise nearest texture sampling at all four texels of a 2x2
+           RGB565 image, then repeat and clamp behavior on the S axis. */
+        const uint16_t texture_pixels[4] = {
+            kRed, kTextureGreen,
+            kBlue, kTextureWhite
+        };
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         1.0f, 1.0f, 1.0f, 1.0f);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0,
+                     GL_RGB, GL_UNSIGNED_SHORT_5_6_5, texture_pixels);
+        passed = glGetError() == GL_NO_ERROR;
+
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 240, 170, 0.25f, 0.25f);
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 260, 170, 0.75f, 0.25f);
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 280, 170, 0.25f, 0.75f);
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 300, 170, 0.75f, 0.75f);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        passed = passed && glGetError() == GL_NO_ERROR;
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 320, 170, 1.25f, 0.25f);
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 340, 170, -0.25f, 0.25f);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        passed = passed && glGetError() == GL_NO_ERROR;
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 360, 170, 1.25f, 0.25f);
+        passed = passed && draw_textured_point_at_pixel(
+            static_cast<GLuint>(position_location),
+            static_cast<GLuint>(uv_location), 380, 170, -0.25f, 0.25f);
         passed = passed && glGetError() == GL_NO_ERROR;
     }
 
