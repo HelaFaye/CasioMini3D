@@ -86,20 +86,6 @@ bool draw_point_at_pixel(GLuint position_location,
         point_size);
 }
 
-uint16_t expected_pixel_color(int x, int y)
-{
-    for (const ExpectedRect& rect : kExpectedRedRects)
-    {
-        if (x >= rect.x && x < rect.x + rect.width &&
-            y >= rect.y && y < rect.y + rect.height)
-            return kRed;
-    }
-    if (x == 240 && y == 150) return kBlue;
-    if (x == 280 && y == 150) return kBlendedRedBlue;
-    if (x == 310 && y == 150) return kGreenOnBlue;
-    return 0;
-}
-
 bool framebuffer_matches_expected(const uint16_t *pixels)
 {
     /* Check only the pixels this add-in draws. The independent host-side
