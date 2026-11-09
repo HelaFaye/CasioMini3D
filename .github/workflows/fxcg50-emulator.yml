@@ -131,9 +131,12 @@ jobs:
               exit 1
             fi
             echo "FXSDK_ELF=$ELF"
-            sh-elf-nm -n -C "$ELF" | grep -E '^00300[6-9][[:xdigit:]]{2} '
-            sh-elf-addr2line -f -C -e "$ELF" 0x003006b6 0x00300750 0x00300768 0x00300798
-            sh-elf-objdump -d -C --start-address=0x00300600 --stop-address=0x00300900 "$ELF"
+            echo "=== Earliest linked symbols ==="
+            sh-elf-nm -n -C "$ELF" | head -100
+            echo "=== Address-to-line lookup ==="
+            sh-elf-addr2line -f -C -e "$ELF" 0x00300000 0x003006b6 0x00300750 0x00300768 0x00300798
+            echo "=== SH-4 disassembly around startup and observed loop ==="
+            sh-elf-objdump -D -C --start-address=0x00300000 --stop-address=0x00300800 "$ELF"
           '
 
       - name: Check out Casio CG50 emulator
