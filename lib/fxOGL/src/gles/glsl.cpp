@@ -3274,15 +3274,6 @@ bool execute_glsl(
                     !push_value(stack, stack_size, runtime.uniforms[instruction.index]))
                     return false;
                 break;
-            case ShaderOp::LoadUniformIndexed:
-            {
-                size_t slot = 0;
-                if (!pop_value(stack, stack_size, a) ||
-                    !array_element_slot(instruction, a, slot, GLSL_MAX_UNIFORMS) ||
-                    !push_value(stack, stack_size, runtime.uniforms[slot]))
-                    return false;
-                break;
-            }
             case ShaderOp::LoadVarying:
                 if (instruction.index >= GLSL_MAX_VARYINGS)
                     return false;
@@ -3334,16 +3325,6 @@ bool execute_glsl(
                     !push_value(stack, stack_size, locals[instruction.index]))
                     return false;
                 break;
-            case ShaderOp::LoadLocalIndexed:
-            {
-                size_t slot = 0;
-                if (!pop_value(stack, stack_size, a) ||
-                    !array_element_slot(instruction, a, slot) ||
-                    locals[slot].type != instruction.type ||
-                    !push_value(stack, stack_size, locals[slot]))
-                    return false;
-                break;
-            }
 
             case ShaderOp::StoreVarying:
                 if (!pop_value(stack, stack_size, a) ||
@@ -3359,17 +3340,6 @@ bool execute_glsl(
                     return false;
                 copy_shader_value(locals[instruction.index], a);
                 break;
-            case ShaderOp::StoreLocalIndexed:
-            {
-                size_t slot = 0;
-                if (!pop_value(stack, stack_size, a) ||
-                    !pop_value(stack, stack_size, b) ||
-                    a.type != instruction.type ||
-                    !array_element_slot(instruction, b, slot))
-                    return false;
-                copy_shader_value(locals[slot], a);
-                break;
-            }
             case ShaderOp::StorePosition:
                 if (!pop_value(stack, stack_size, a) ||
                     a.type != ShaderType::Vec4)
@@ -4430,6 +4400,39 @@ bool execute_glsl(
                     sampler_value.ddy[i] = 0.0f;
                 }
                 --stack_size;
+                break;
+            }
+
+            case ShaderOp::LoadLocalIndexed:
+            {
+                size_t slot = 0;
+                if (!pop_value(stack, stack_size, a) ||
+                    !array_element_slot(instruction, a, slot) ||
+                    locals[slot].type != instruction.type ||
+                    !push_value(stack, stack_size, locals[slot]))
+                    return false;
+                break;
+            }
+
+            case ShaderOp::StoreLocalIndexed:
+            {
+                size_t slot = 0;
+                if (!pop_value(stack, stack_size, a) ||
+                    !pop_value(stack, stack_size, b) ||
+                    a.type != instruction.type ||
+                    !array_element_slot(instruction, b, slot))
+                    return false;
+                copy_shader_value(locals[slot], a);
+                break;
+            }
+
+            case ShaderOp::LoadUniformIndexed:
+            {
+                size_t slot = 0;
+                if (!pop_value(stack, stack_size, a) ||
+                    !array_element_slot(instruction, a, slot, GLSL_MAX_UNIFORMS) ||
+                    !push_value(stack, stack_size, runtime.uniforms[slot]))
+                    return false;
                 break;
             }
         }

@@ -92,20 +92,13 @@ enum class ShaderOp : uint8_t
     PushInt,
     LoadAttribute,
     LoadUniform,
-    /* Dynamic uniform-array read; operands as for LoadLocalIndexed. */
-    LoadUniformIndexed,
     LoadVarying,
     LoadLocal,
-    /* Pops an int index; index is the array's first slot, argument_count
-       its element count. Out-of-range indices fail the invocation. */
-    LoadLocalIndexed,
     LoadPosition,
     LoadPointSize,
     LoadFragmentColor,
     StoreVarying,
     StoreLocal,
-    /* Pops the value, then the int index pushed before it. */
-    StoreLocalIndexed,
     StorePosition,
     StorePointSize,
     StoreFragmentColor,
@@ -140,7 +133,16 @@ enum class ShaderOp : uint8_t
     Jump,
     Call,
     Return,
-    Texture2D
+    Texture2D,
+    /* Array opcodes are appended so earlier opcodes keep their values and
+       the interpreter's existing dispatch layout (measured on hardware). */
+    /* Pops an int index; index is the array's first slot, argument_count
+       its element count. Out-of-range indices fail the invocation. */
+    LoadLocalIndexed,
+    /* Pops the value, then the int index pushed before it. */
+    StoreLocalIndexed,
+    /* Dynamic uniform-array read; operands as for LoadLocalIndexed. */
+    LoadUniformIndexed
 };
 
 struct ShaderInstruction

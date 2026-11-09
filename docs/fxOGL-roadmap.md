@@ -100,8 +100,10 @@ Relative to the preceding overloaded-shader run (3.206439 s VBO build,
 nearest-texture scene by -0.41%/-0.35%, within the observed run-to-run
 variation of up to about 0.4%. The shader VM microbenchmark rose 1.03% from
 122.535 µs with a 0.09% within-run spread, so it is treated as a real but
-scene-invisible cost of the array opcodes. The
-linear, Gouraud, client-array, clear and remaining microbenchmark figures
+scene-invisible cost of the array opcodes. As an experiment, the array
+opcodes were then appended to the end of the opcode enum and interpreter
+switch, restoring the original opcode values and dispatch source for every
+pre-array opcode; this build awaits remeasurement. The linear, Gouraud, client-array, clear and remaining microbenchmark figures
 are first recorded baselines. These device measurements are
 configuration-specific and not directly comparable to desktop/mobile glmark2.
 
