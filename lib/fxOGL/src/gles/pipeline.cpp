@@ -1,6 +1,7 @@
 #include "pipeline.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <math.h>
 #include <cstring>
 
