@@ -1291,21 +1291,58 @@ private:
         char name[GLSL_NAME_BYTES];
         std::snprintf(name, sizeof(name), "%s", current_.text);
         advance();
-        const ResolvedVariable target = lookup(name);
-        if (target.type == ShaderType::Invalid)
+        const ResolvedVariable base = lookup(name);
+        if (base.type == ShaderType::Invalid)
         {
             fail("assignment target is not declared");
             return;
         }
-        if ((target.storage == Storage::Local && !target.writable) ||
-            target.storage == Storage::Attribute ||
-            target.storage == Storage::Uniform ||
-            (target.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex) ||
-            (target.storage == Storage::Position && stage_ == ShaderStage::Fragment) ||
-            (target.storage == Storage::Varying && stage_ == ShaderStage::Fragment))
+        if ((base.storage == Storage::Local && !base.writable) ||
+            base.storage == Storage::Attribute ||
+            base.storage == Storage::Uniform ||
+            (base.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex) ||
+            (base.storage == Storage::Position && stage_ == ShaderStage::Fragment) ||
+            (base.storage == Storage::PointSize && stage_ != ShaderStage::Vertex) ||
+            (base.storage == Storage::Varying && stage_ == ShaderStage::Fragment))
         {
             fail("assignment target is read-only or unavailable in this shader stage");
             return;
+        }
+
+        ResolvedVariable target = base;
+        const bool swizzle_assignment = is_punctuation('.');
+        if (swizzle_assignment)
+        {
+            if (!is_any_vector(base.type))
+            {
+                fail("swizzle assignment requires a vector target");
+                return;
+            }
+            const size_t instruction_start = module_.instruction_count;
+            ShaderType swizzle_type = base.type;
+            expression_lvalue_ = base;
+            parse_swizzle(swizzle_type);
+            target = expression_lvalue_;
+            module_.instruction_count = instruction_start;
+            expression_lvalue_ = {};
+            if (failed_)
+                return;
+            if (!target.is_swizzle || target.type != swizzle_type)
+            {
+                fail("swizzle assignment target is not writable");
+                return;
+            }
+            for (size_t i = 0; i < component_count(swizzle_type); ++i)
+            {
+                for (size_t j = i + 1; j < component_count(swizzle_type); ++j)
+                {
+                    if (target.components[i] == target.components[j])
+                    {
+                        fail("swizzle assignment cannot write a component more than once");
+                        return;
+                    }
+                }
+            }
         }
 
         expect_punctuation('=');
@@ -1317,7 +1354,22 @@ private:
         }
         if (consume_semicolon)
             expect_punctuation(';');
-        emit_assignment_store(target);
+
+        if (!swizzle_assignment)
+        {
+            emit_assignment_store(base);
+            return;
+        }
+
+        ShaderInstruction instruction = {};
+        instruction.op = ShaderOp::StoreSwizzle;
+        instruction.type = base.type;
+        instruction.index = base.index;
+        instruction.argument_count = static_cast<uint8_t>(component_count(target.type));
+        instruction.literal = static_cast<float>(base.storage);
+        for (size_t i = 0; i < instruction.argument_count; ++i)
+            instruction.swizzle[i] = target.components[i];
+        emit(instruction);
     }
 
     void parse_for_increment()
@@ -3017,6 +3069,63 @@ bool execute_glsl(
                     return false;
                 copy_shader_value(runtime.fragment_color, a);
                 break;
+
+            case ShaderOp::StoreSwizzle:
+            {
+                if (!pop_value(stack, stack_size, a) ||
+                    !is_any_vector(instruction.type) ||
+                    instruction.argument_count == 0 ||
+                    instruction.argument_count > 4 ||
+                    a.type != vector_type_for(
+                        instruction.argument_count,
+                        vector_base_type(instruction.type)))
+                    return false;
+
+                ShaderValue *destination = nullptr;
+                const Storage storage = static_cast<Storage>(
+                    static_cast<uint8_t>(instruction.literal));
+                switch (storage)
+                {
+                    case Storage::Local:
+                        if (instruction.index >= GLSL_MAX_LOCALS)
+                            return false;
+                        destination = &locals[instruction.index];
+                        break;
+                    case Storage::Varying:
+                        if (instruction.index >= GLSL_MAX_VARYINGS)
+                            return false;
+                        destination = &runtime.varyings[instruction.index];
+                        break;
+                    case Storage::Position:
+                        destination = &runtime.position;
+                        break;
+                    case Storage::FragmentColor:
+                        destination = &runtime.fragment_color;
+                        break;
+                    default:
+                        return false;
+                }
+                if (destination->type != instruction.type)
+                    return false;
+                for (size_t i = 0; i < instruction.argument_count; ++i)
+                {
+                    const size_t component = instruction.swizzle[i];
+                    if (component >= component_count(instruction.type))
+                        return false;
+                    for (size_t j = 0; j < i; ++j)
+                    {
+                        if (instruction.swizzle[j] == component)
+                            return false;
+                    }
+                    destination->data[component] = a.data[i];
+                    if (component < 4 && i < 4)
+                    {
+                        destination->ddx[component] = a.ddx[i];
+                        destination->ddy[component] = a.ddy[i];
+                    }
+                }
+                break;
+            }
 
             case ShaderOp::BranchIfFalse:
                 if (!pop_value(stack, stack_size, a) ||
