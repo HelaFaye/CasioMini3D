@@ -33,19 +33,19 @@ jobs:
               raise SystemExit("Unexpected fxSDK Dockerfile layout; refusing to patch it")
           ordered_steps = "\n".join((
               "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc",
-              "RUN giteapc uninstall -k Lephenixnoir/sh-elf-gcc",
               "RUN giteapc install -y Lephenixnoir/sh-elf-gcc",
               "RUN giteapc install -y Lephenixnoir/gint",
           ))
           dockerfile.write_text(source.replace(combined_step, ordered_steps))
-          print("Reinstalled SH-4 GCC after fxlibc so libstdc++-v3 is built with target libc available")
+          print("Applied the documented second GCC install after fxlibc")
           PY
 
       - name: Build fxSDK and SH-4A toolchain image
         run: docker build --tag fxsdk-ci .cache/fxsdk-source/tools/fxsdk-docker
 
-      - name: Verify SH-4A C++ standard-library headers
+      - name: Verify SH-4A C++ toolchain and standard library
         run: |
+          docker run --rm fxsdk-ci sh -c 'set -eu; command -v sh-elf-gcc; command -v sh-elf-g++; libstdcxx="$(sh-elf-g++ -print-file-name=libstdc++.a)"; test "$libstdcxx" != libstdc++.a; test -f "$libstdcxx"'
           printf '%s\n' '#include <algorithm>' '#include <vector>' 'int main() { std::vector<int> v{2, 1}; std::sort(v.begin(), v.end()); return v[0]; }' | docker run --rm -i fxsdk-ci sh-elf-g++ -std=gnu++20 -x c++ -fsyntax-only -
 
       - name: Build point-size smoke add-in
