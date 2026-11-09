@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <math.h>
 #include <cstdio>
-#include <cstdlib>
+#include <stdlib.h>
 #include <cstring>
 
 namespace fxgl
@@ -112,7 +112,7 @@ public:
             std::memcpy(token.text, source_ + start, length);
             token.text[length] = '\0';
             char *end = nullptr;
-            token.number = std::strtof(token.text, &end);
+            token.number = ::strtof(token.text, &end);
             if (!end || *end != '\0' || !isfinite(token.number))
             {
                 token.kind = TokenKind::Invalid;
