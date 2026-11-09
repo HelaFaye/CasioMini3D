@@ -23,11 +23,12 @@ It adds public GLES2 regressions for:
 
 ## Independent framebuffer oracle
 
-The add-in compares the complete RGB565 framebuffer against an exact expected
-pattern: 600 red point pixels plus three separately colored state-test pixels.
-The headless emulator independently checks every transferred pixel, including
-that all unlisted pixels remain black, and checks the green pass marker.
-CI uploads `emulated-screen.ppm` as a visual artifact.
+To keep execution bounded on the emulated SH-4, the add-in checks the 603
+pixels it intentionally draws: 600 red point pixels plus three separately
+colored state-test pixels. The independent host-side emulator oracle scans the
+entire 396x224 transferred RGB565 framebuffer against the exact expected
+pattern, rejects any unexpected non-black pixel, and checks the green pass
+marker. CI uploads `emulated-screen.ppm` as a visual artifact.
 
 ## Toolchain and limitations
 
