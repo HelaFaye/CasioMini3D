@@ -20,15 +20,19 @@ It adds public GLES2 regressions for:
   `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`; expected RGB565 result `0x8010`.
 - **Color write masks:** a green-only write preserves destination blue,
   producing RGB565 `0x07ff`.
+- **Texture sampling:** a `sampler2D` uniform and GLSL `texture2D` sample all
+  four texels of a 2x2 RGB565 image using nearest filtering.
+- **Texture addressing:** out-of-range positive and negative S coordinates
+  verify both `GL_REPEAT` and `GL_CLAMP_TO_EDGE`.
 
 ## Independent framebuffer oracle
 
-To keep execution bounded on the emulated SH-4, the add-in checks the 603
-pixels it intentionally draws: 600 red point pixels plus three separately
-colored state-test pixels. The independent host-side emulator oracle scans the
-entire 396x224 transferred RGB565 framebuffer against the exact expected
-pattern, rejects any unexpected non-black pixel, and checks the green pass
-marker. CI uploads `emulated-screen.ppm` as a visual artifact.
+To keep execution bounded on the emulated SH-4, the add-in checks the 611
+pixels it intentionally draws: 600 red point pixels, three state-test pixels,
+and eight texture-sampling pixels. The independent host-side emulator oracle
+scans the entire 396x224 transferred RGB565 framebuffer against the exact
+expected pattern, rejects any unexpected non-black pixel, and checks the
+green pass marker. CI uploads `emulated-screen.ppm` as a visual artifact.
 
 ## Toolchain and limitations
 
@@ -40,7 +44,8 @@ paths used by the add-in.
 
 **Scope:** this is a focused software GLES regression suite, not a performance
 benchmark or full Khronos GLES conformance test. It currently validates point
-rasterization, depth testing, blending, and channel write masks. It does not
+rasterization, depth testing, blending, channel write masks, and basic
+texture sampling/addressing. It does not
 cover the complete GLES2 API. `casio-emu` is work in progress, does not emulate
 the calculator OS or syscalls, and has known hardware-model inaccuracies.
 Passing emulation is not physical fx-CG50 validation.
