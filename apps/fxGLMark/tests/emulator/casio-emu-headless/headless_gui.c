@@ -1,4 +1,5 @@
 #include "gui/gui.h"
+#include "cpu.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +7,9 @@
 
 #define SCREEN_WIDTH 396
 #define SCREEN_HEIGHT 224
+
+extern CpuState cpu;
+extern u64 iterations;
 #define EXPECTED_POINT_SIZE_MARKER 0x07e0
 #define EXPECTED_POINT_RED 0xf800
 #define EXPECTED_POINT_SIZE_RED_PIXELS 600
@@ -127,8 +131,17 @@ void runMainLoop(void (*callback)(void))
 {
     /* The application is non-interactive. Advance a bounded number of frames
        so display/DMA writes have time to reach the emulator's LCD callback. */
+    printf("CASIO_EMU_CPU_START PC=%08x SP=%08x PR=%08x SR=%08x\\n",
+           cpu.reg.PC, cpu.reg.r15, cpu.reg.PR, cpu.reg.SR);
     for (int frame = 0; frame < 12; ++frame)
+    {
         callback();
+        printf("CASIO_EMU_CPU_FRAME=%d PC=%08x SP=%08x PR=%08x SR=%08x "
+               "sleep=%d TEA=%08x EXPEVT=%08x iterations=%llu\\n",
+               frame + 1, cpu.reg.PC, cpu.reg.r15, cpu.reg.PR, cpu.reg.SR,
+               cpu.isSleeping ? 1 : 0, cpu.reg.TEA, cpu.reg.EXPEVT,
+               (unsigned long long)iterations);
+    }
 
     save_ppm();
     const unsigned marker = have_frame ? last_frame[0] : 0;
