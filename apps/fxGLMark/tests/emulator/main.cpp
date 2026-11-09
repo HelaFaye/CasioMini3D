@@ -17,6 +17,7 @@ constexpr uint16_t kGreenOnBlue = 0x07ff;
 constexpr uint16_t kTextureGreen = 0x07e0;
 constexpr uint16_t kTextureWhite = 0xffff;
 static uint16_t depth_pixels[DWIDTH * DHEIGHT];
+static uint8_t stencil_pixels[DWIDTH * DHEIGHT];
 
 struct ExpectedRect
 {
@@ -130,7 +131,9 @@ bool framebuffer_matches_expected(const uint16_t *pixels)
            pixels[static_cast<size_t>(170) * DWIDTH + 320] == kRed &&
            pixels[static_cast<size_t>(170) * DWIDTH + 340] == kTextureGreen &&
            pixels[static_cast<size_t>(170) * DWIDTH + 360] == kTextureGreen &&
-           pixels[static_cast<size_t>(170) * DWIDTH + 380] == kRed;
+           pixels[static_cast<size_t>(170) * DWIDTH + 380] == kRed &&
+           pixels[static_cast<size_t>(190) * DWIDTH + 240] == kTextureGreen &&
+           pixels[static_cast<size_t>(190) * DWIDTH + 260] == 0;
 }
 
 void publish_result(bool passed)
@@ -149,7 +152,7 @@ int main()
         pixels[i] = 0;
 
     const fxgl_surface_t surface = {
-        pixels, depth_pixels, nullptr, DWIDTH, DHEIGHT, DWIDTH
+        pixels, depth_pixels, stencil_pixels, DWIDTH, DHEIGHT, DWIDTH
     };
     bool passed = fxglMakeCurrent(&surface) == GL_TRUE;
 
@@ -413,6 +416,38 @@ int main()
         passed = passed && draw_textured_point_at_pixel(
             static_cast<GLuint>(position_location),
             static_cast<GLuint>(uv_location), 380, 170, -0.25f, 0.25f);
+        passed = passed && glGetError() == GL_NO_ERROR;
+    }
+
+    if (passed)
+    {
+        /* Stencil replace writes reference 1 at the first pixel. GL_EQUAL
+           then permits an overwrite there but rejects a draw at the untouched
+           neighboring pixel, which must remain black. */
+        glVertexAttrib2f(static_cast<GLuint>(uv_location), 0.75f, 0.75f);
+        glClearStencil(0);
+        glStencilMask(0xff);
+        glClear(GL_STENCIL_BUFFER_BIT);
+        glEnable(GL_STENCIL_TEST);
+        glStencilFunc(GL_ALWAYS, 1, 0xff);
+        glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         1.0f, 0.0f, 0.0f, 1.0f);
+        passed = draw_point_at_pixel(
+            static_cast<GLuint>(position_location), 240, 190, 1.0f);
+
+        glStencilFunc(GL_EQUAL, 1, 0xff);
+        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         0.0f, 1.0f, 0.0f, 1.0f);
+        passed = passed && draw_point_at_pixel(
+            static_cast<GLuint>(position_location), 240, 190, 1.0f);
+
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         0.0f, 0.0f, 1.0f, 1.0f);
+        passed = passed && draw_point_at_pixel(
+            static_cast<GLuint>(position_location), 260, 190, 1.0f);
+        glDisable(GL_STENCIL_TEST);
         passed = passed && glGetError() == GL_NO_ERROR;
     }
 
