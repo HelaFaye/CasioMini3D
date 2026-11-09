@@ -72,19 +72,42 @@ Recent measured optimizations include:
   `gl_FragColor = texture2D(u_texture, v_uv);` shader form, while retaining
   the normal sampler callback.
 
-The latest user-supplied physical fx-CG50 run exercised the overloaded
-Gouraud and textured vertex shaders through fxGLMark Quick Smoke. The
-24-frame VBO build scene averaged 3.206439 seconds; the paired nearest-filter
-texture scene averaged 3.180418 seconds (144 triangles per frame). Relative
-to the immediately preceding prototype/forward-definition run, the scene
-means differed by +0.25% and +0.42%, respectively; this is treated as
-run-to-run variation, not a performance claim. The shader VM microbenchmark
-remained at 122.535 microseconds per iteration. These device measurements are
+The latest user-supplied physical fx-CG50 run used the GLSL array build
+(commit `11d1320`; local and uniform arrays, no array use in the measured
+scenes). Each scene is 24 frames of 144 triangles, except the clear scene.
+
+| fxGLMark scene | Mean frame time |
+|---|---|
+| `build:use-vbo=true` (two runs) | 3.205132 s, 3.204416 s |
+| `build:use-vbo=false` | 3.204427 s |
+| `texture:texture-filter=nearest` (two runs) | 3.167329 s, 3.169339 s |
+| `texture:texture-filter=linear` | 4.621749 s |
+| `shading:shading=gouraud` | 3.203591 s |
+| `clear` (no triangles) | 38.253 ms |
+
+| F4 microbenchmark stage | Mean per iteration |
+|---|---|
+| `texture-sample-fixed` | 8.214 µs |
+| `texture-nearest-clamp` | 17.953 µs |
+| `texture-nearest-repeat` | 10.833 µs |
+| `triangle-raster` | 263.791 ms |
+| `shader-vm` | 123.791 µs |
+| `texture2d-vm` | 34.781 µs |
+| `framebuffer-present` | 10.997 ms |
+
+Relative to the preceding overloaded-shader run (3.206439 s VBO build,
+3.180418 s nearest texture), the VBO scene moved by -0.04%/-0.06% and the
+nearest-texture scene by -0.41%/-0.35%, within the observed run-to-run
+variation of up to about 0.4%. The shader VM microbenchmark rose 1.03% from
+122.535 µs with a 0.09% within-run spread, so it is treated as a real but
+scene-invisible cost of the array opcodes. The
+linear, Gouraud, client-array, clear and remaining microbenchmark figures
+are first recorded baselines. These device measurements are
 configuration-specific and not directly comparable to desktop/mobile glmark2.
 
-Previous prototype/forward-definition hardware baseline: 3.198292 seconds
-for the VBO build scene and 3.167104 seconds for the nearest-filter texture
-scene, each measured over 24 frames of 144 triangles per frame.
+Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
+3.180418 s nearest texture; prototype/forward-definition run, 3.198292 s and
+3.167104 s.
 
 ## Priorities
 
