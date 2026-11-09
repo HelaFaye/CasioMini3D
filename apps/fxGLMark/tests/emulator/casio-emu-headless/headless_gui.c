@@ -10,12 +10,13 @@
 #define EXPECTED_POINT_SIZE_MARKER 0x07e0
 #define EXPECTED_POINT_RED 0xf800
 #define EXPECTED_POINT_SIZE_RED_PIXELS 600
-#define EXPECTED_AUXILIARY_PIXELS 12
+#define EXPECTED_AUXILIARY_PIXELS 13
 #define EXPECTED_DEPTH_PIXEL 0x001f
 #define EXPECTED_BLEND_PIXEL 0x8010
 #define EXPECTED_COLOR_MASK_PIXEL 0x07ff
 #define EXPECTED_TEXTURE_GREEN 0x07e0
 #define EXPECTED_TEXTURE_WHITE 0xffff
+#define EXPECTED_TRIANGLE_PIXEL 0x07ff
 
 struct ExpectedRect
 {
@@ -100,6 +101,7 @@ static u16 expected_pixel_color(int x, int y)
     if (x == 280 && y == 150) return EXPECTED_BLEND_PIXEL;
     if (x == 310 && y == 150) return EXPECTED_COLOR_MASK_PIXEL;
     if (x == 240 && y == 190) return EXPECTED_TEXTURE_GREEN;
+    if (x == 280 && y == 190) return EXPECTED_TRIANGLE_PIXEL;
 
     if (y == 170)
     {
@@ -167,7 +169,7 @@ void runMainLoop(void (*callback)(void))
     printf("CASIO_EMU_GLES_MARKER=0x%04x\n", marker);
     printf("CASIO_EMU_GLES_RED_PIXELS=%d\n", red_pixels);
     printf("CASIO_EMU_GLES_AUXILIARY_PIXELS=%d\n", auxiliary_pixels);
-    printf("CASIO_EMU_GLES_CASES=23\n");
+    printf("CASIO_EMU_GLES_CASES=24\n");
     printf("CASIO_EMU_DISPLAY_CAPTURED=%s\n", have_frame ? "yes" : "no");
 
     if (!have_frame || marker != EXPECTED_POINT_SIZE_MARKER ||
