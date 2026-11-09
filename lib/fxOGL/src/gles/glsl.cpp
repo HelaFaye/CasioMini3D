@@ -139,7 +139,7 @@ public:
             return token;
         }
 
-        if (std::strchr("{}();,=.+-*/.", c))
+        if (std::strchr("{}();,[]=.+-*/.", c))
         {
             token.kind = TokenKind::Punctuation;
             token.text[0] = c;
