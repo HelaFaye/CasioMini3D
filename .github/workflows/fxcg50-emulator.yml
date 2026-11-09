@@ -121,24 +121,6 @@ jobs:
           G3A="$(find apps/fxGLMark/tests/emulator -type f -name 'fxogl-emulator-regression.g3a' -print -quit)"
           test -n "$G3A"
           printf 'FXSDK_G3A=%s\n' "$G3A" >> "$GITHUB_ENV"
-      - name: Inspect target ELF symbols around observed SH-4 PC
-        run: |
-          docker run --rm --volume "$GITHUB_WORKSPACE:/work" --workdir /work fxsdk-ci sh -c '
-            ELF="$(find apps/fxGLMark/tests/emulator/build-cg -type f -name 'fxogl_emulator_regression*' ! -name '*.g3a' -print -quit)"
-            if [ -z "$ELF" ]; then
-              echo "No target executable found"
-              find apps/fxGLMark/tests/emulator/build-cg -maxdepth 3 -type f -print
-              exit 1
-            fi
-            echo "FXSDK_ELF=$ELF"
-            echo "=== Main and observed PC symbols ==="
-            sh-elf-nm -n -C "$ELF" | grep -E "0030015c|003006b6|00300750|00300768|00300798|003007e8"
-            echo "=== Address-to-line lookup at observed SH-4 PCs ==="
-            sh-elf-addr2line -f -C -e "$ELF" 0x003006b6 0x00300750 0x00300768 0x00300798
-            echo "=== SH-4 disassembly of main() tail and observed PC window ==="
-            sh-elf-objdump -D -C --start-address=0x00300680 --stop-address=0x003007e8 "$ELF"
-          '
-
       - name: Check out Casio CG50 emulator
         uses: actions/checkout@v4
         with:
