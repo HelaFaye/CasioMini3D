@@ -71,10 +71,49 @@ jobs:
 
       - name: Verify SH-4A freestanding C++ and math headers
         run: |
-          docker run --rm fxsdk-ci sh -c 'set -eu; command -v sh-elf-gcc; command -v sh-elf-g++; printf "libstdc++ archive: "; sh-elf-g++ -print-file-name=libstdc++.a; printf "libsupc++ archive: "; sh-elf-g++ -print-file-name=libsupc++.a'
-          printf '%s\n' '#include <algorithm>' 'int main() { int values[2] = {2, 1}; return values[0] > values[1] ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh-elf-g++ -std=gnu++20 -ffreestanding -fno-exceptions -x c++ -fsyntax-only -
-          printf '%s\n' '#include <math.h>' 'int main() { float x = sqrtf(2.0f); return isfinite(floorf(x) + log2f(x)) ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh -c 'set -eu; sysroot="$(sh-elf-g++ -print-sysroot)"; triple="$(sh-elf-g++ -dumpmachine)"; target_include="$sysroot/$triple/include"; test -f "$target_include/math.h"; printf "Target triple: %s\nTarget C headers: %s\n" "$triple" "$target_include"; sh-elf-g++ -I"$target_include" -std=gnu++20 -ffreestanding -fno-exceptions -x c++ -fsyntax-only -'
-          printf '%s\n' '#include <math.h>' 'int main(void) { float x = sqrtf(2.0f); return isfinite(floorf(x) + log2f(x)) ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh-elf-gcc -std=c11 -ffreestanding -x c -fsyntax-only -
+          docker run --rm -i fxsdk-ci sh -s <<'TOOLCHAIN_PROBE'
+          set -eu
+          command -v sh-elf-gcc
+          command -v sh-elf-g++
+          printf 'libstdc++ archive: '
+          sh-elf-g++ -print-file-name=libstdc++.a
+          printf 'libsupc++ archive: '
+          sh-elf-g++ -print-file-name=libsupc++.a
+
+          # fxSDK owns the canonical target include path. Do not guess it from
+          # -print-sysroot: the package's sysroot/include layout is versioned.
+          target_include="$(fxsdk path include)"
+          printf 'Target triple: %s\\n' "$(sh-elf-g++ -dumpmachine)"
+          printf 'fxSDK target C headers: %s\\n' "$target_include"
+          test -f "$target_include/math.h"
+
+          cat > /tmp/fxogl-cxx-probe.cpp <<'CPP'
+          #include <algorithm>
+          int main() {
+              int values[2] = {2, 1};
+              return values[0] > values[1] ? 0 : 1;
+          }
+          CPP
+          sh-elf-g++ -I"$target_include" -std=gnu++20 -ffreestanding -fno-exceptions -fsyntax-only /tmp/fxogl-cxx-probe.cpp
+
+          cat > /tmp/fxogl-cxx-math-probe.cpp <<'CPP'
+          #include <math.h>
+          int main() {
+              float x = sqrtf(2.0f);
+              return isfinite(floorf(x) + log2f(x)) ? 0 : 1;
+          }
+          CPP
+          sh-elf-g++ -I"$target_include" -std=gnu++20 -ffreestanding -fno-exceptions -fsyntax-only /tmp/fxogl-cxx-math-probe.cpp
+
+          cat > /tmp/fxogl-c-math-probe.c <<'C'
+          #include <math.h>
+          int main(void) {
+              float x = sqrtf(2.0f);
+              return isfinite(floorf(x) + log2f(x)) ? 0 : 1;
+          }
+          C
+          sh-elf-gcc -I"$target_include" -std=c11 -ffreestanding -fsyntax-only /tmp/fxogl-c-math-probe.c
+          TOOLCHAIN_PROBE
 
       - name: Build point-size smoke add-in
         run: |
