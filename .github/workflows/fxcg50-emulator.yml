@@ -83,8 +83,8 @@ jobs:
           # fxSDK owns the canonical target include path. Do not guess it from
           # -print-sysroot: the package's sysroot/include layout is versioned.
           target_include="$(fxsdk path include)"
-          printf 'Target triple: %s\\n' "$(sh-elf-g++ -dumpmachine)"
-          printf 'fxSDK target C headers: %s\\n' "$target_include"
+          printf 'Target triple: %s\n' "$(sh-elf-g++ -dumpmachine)"
+          printf 'fxSDK target C headers: %s\n' "$target_include"
           test -f "$target_include/math.h"
 
           cat > /tmp/fxogl-cxx-probe.cpp <<'CPP'
@@ -103,7 +103,7 @@ jobs:
               return isfinite(floorf(x) + log2f(x)) ? 0 : 1;
           }
           CPP
-          sh-elf-g++ -I"$target_include" -std=gnu++20 -ffreestanding -fno-exceptions -fsyntax-only /tmp/fxogl-cxx-math-probe.cpp
+          sh-elf-g++ -I"$target_include" -D_GLIBCXX_INCLUDE_NEXT_C_HEADERS -std=gnu++20 -ffreestanding -fno-exceptions -fsyntax-only /tmp/fxogl-cxx-math-probe.cpp
 
           cat > /tmp/fxogl-c-math-probe.c <<'C'
           #include <math.h>
