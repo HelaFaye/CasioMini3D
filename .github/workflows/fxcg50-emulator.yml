@@ -1,9 +1,20 @@
 name: FX-CG50 emulator GLES regression
 
+# Run on every change that can affect the add-in or the emulator harness,
+# both for pull requests and after merging to main.
 on:
   push:
     branches:
-      - feature/emulator-gles-regression
+      - main
+    paths:
+      - "lib/fxOGL/**"
+      - "apps/fxGLMark/tests/emulator/**"
+      - ".github/workflows/fxcg50-emulator.yml"
+  pull_request:
+    paths:
+      - "lib/fxOGL/**"
+      - "apps/fxGLMark/tests/emulator/**"
+      - ".github/workflows/fxcg50-emulator.yml"
   workflow_dispatch:
     inputs:
       refresh_toolchain:
@@ -125,7 +136,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Heath123/casio-emu
-          ref: master
+          # Pinned for reproducible results; this is master as of 2023-10-23,
+          # which every passing run of this suite has used. Bump deliberately.
+          ref: 5d34e298b94be65f7ab0505d3c0f9b9ed802ac4b
           path: .cache/casio-emu
 
       - name: Build headless Casio emulator

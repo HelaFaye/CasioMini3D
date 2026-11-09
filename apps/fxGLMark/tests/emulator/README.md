@@ -53,9 +53,11 @@ non-black pixel, and checks the green pass marker. CI uploads
 
 The GitHub Actions workflow builds the fxSDK/Gint toolchain using the pinned
 recipe from [hexbinoct/casio-cg50](https://github.com/hexbinoct/casio-cg50),
-builds the add-in, builds the headless emulator, and runs the test. The
-freestanding compiler preflight checks the C++ standard-library and math-header
-paths used by the add-in.
+builds the add-in, builds the headless emulator from a pinned `casio-emu`
+commit, and runs the test. The freestanding compiler preflight checks the C++
+standard-library and math-header paths used by the add-in. The workflow runs on
+pull requests and on pushes to `main` that touch `lib/fxOGL/`, this directory,
+or the workflow itself.
 
 **Scope:** this is a focused software GLES regression suite, not a performance
 benchmark or full Khronos GLES conformance test. It currently validates point
