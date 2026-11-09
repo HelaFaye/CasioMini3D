@@ -131,12 +131,12 @@ jobs:
               exit 1
             fi
             echo "FXSDK_ELF=$ELF"
-            echo "=== Target text symbols (ELF VMA; emulator adds 0x00300000) ==="
-            sh-elf-nm -n -C "$ELF" | grep -E '^[0-9a-f]{8} [Tt] ' | head -100
-            echo "=== Address-to-line lookup (ELF VMA) ==="
-            sh-elf-addr2line -f -C -e "$ELF" 0x00000000 0x000006b6 0x00000750 0x00000768 0x00000798
-            echo "=== SH-4 disassembly (ELF VMA; CPU PC minus 0x00300000) ==="
-            sh-elf-objdump -D -C --start-address=0x00000000 --stop-address=0x00000800 "$ELF"
+            echo "=== Main and observed PC symbols ==="
+            sh-elf-nm -n -C "$ELF" | grep -E '0030015c|003006b6|00300750|00300768|00300798|003007e8'
+            echo "=== Address-to-line lookup at observed SH-4 PCs ==="
+            sh-elf-addr2line -f -C -e "$ELF" 0x003006b6 0x00300750 0x00300768 0x00300798
+            echo "=== SH-4 disassembly of main() tail and observed PC window ==="
+            sh-elf-objdump -D -C --start-address=0x00300680 --stop-address=0x003007e8 "$ELF"
           '
 
       - name: Check out Casio CG50 emulator
