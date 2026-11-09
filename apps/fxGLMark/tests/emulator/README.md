@@ -55,7 +55,6 @@ paths used by the add-in.
 benchmark or full Khronos GLES conformance test. It currently validates point
 rasterization, depth testing, blending, channel write masks, and basic
 texture sampling/addressing, stencil compare/replace behavior, and direct plus
-indexed triangle draws. It does
-cover the complete GLES2 API. `casio-emu` is work in progress, does not emulate
+indexed triangle draws. It does not attempt to cover the complete GLES2 API. `casio-emu` is work in progress, does not emulate
 the calculator OS or syscalls, and has known hardware-model inaccuracies.
 Passing emulation is not physical fx-CG50 validation.
