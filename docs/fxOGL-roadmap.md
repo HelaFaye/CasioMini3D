@@ -72,39 +72,43 @@ Recent measured optimizations include:
   `gl_FragColor = texture2D(u_texture, v_uv);` shader form, while retaining
   the normal sampler callback.
 
-The latest user-supplied physical fx-CG50 run used the GLSL array build
-(commit `11d1320`; local and uniform arrays, no array use in the measured
-scenes). Each scene is 24 frames of 144 triangles, except the clear scene.
+The latest user-supplied physical fx-CG50 runs measured two builds of the
+GLSL array work: commit `11d1320` (array opcodes inserted mid-enum) and commit
+`52798af` (the same opcodes appended to the end of the enum and interpreter
+switch). No measured scene uses arrays. Each scene is 24 frames of 144
+triangles, except the clear scene; `52798af` microbenchmarks are the mean of
+three runs.
 
-| fxGLMark scene | Mean frame time |
-|---|---|
-| `build:use-vbo=true` (two runs) | 3.205132 s, 3.204416 s |
-| `build:use-vbo=false` | 3.204427 s |
-| `texture:texture-filter=nearest` (two runs) | 3.167329 s, 3.169339 s |
-| `texture:texture-filter=linear` | 4.621749 s |
-| `shading:shading=gouraud` | 3.203591 s |
-| `clear` (no triangles) | 38.253 ms |
+| fxGLMark scene | `11d1320` | `52798af` | Change |
+|---|---|---|---|
+| `build:use-vbo=true` (two runs each) | 3.205132, 3.204416 s | 3.194901, 3.194657 s | -0.31% |
+| `build:use-vbo=false` | 3.204427 s | 3.188029 s | -0.51% |
+| `texture:texture-filter=nearest` (two runs each) | 3.167329, 3.169339 s | 3.164077, 3.162841 s | -0.15% |
+| `texture:texture-filter=linear` | 4.621749 s | 4.616741 s | -0.11% |
+| `shading:shading=gouraud` | 3.203591 s | 3.194158 s | -0.29% |
+| `clear` (no triangles) | 38.253 ms | 38.242 ms | -0.03% |
 
-| F4 microbenchmark stage | Mean per iteration |
-|---|---|
-| `texture-sample-fixed` | 8.214 µs |
-| `texture-nearest-clamp` | 17.953 µs |
-| `texture-nearest-repeat` | 10.833 µs |
-| `triangle-raster` | 263.791 ms |
-| `shader-vm` | 123.791 µs |
-| `texture2d-vm` | 34.781 µs |
-| `framebuffer-present` | 10.997 ms |
+| F4 microbenchmark stage | `11d1320` | `52798af` | Change |
+|---|---|---|---|
+| `texture-sample-fixed` | 8.214 µs | 8.215 µs | +0.01% |
+| `texture-nearest-clamp` | 17.953 µs | 18.011 µs | +0.32% |
+| `texture-nearest-repeat` | 10.833 µs | 10.992 µs | +1.47% |
+| `triangle-raster` | 263.791 ms | 264.724 ms | +0.35% |
+| `shader-vm` | 123.791 µs | 124.059 µs | +0.22% |
+| `texture2d-vm` | 34.781 µs | 34.812 µs | +0.09% |
+| `framebuffer-present` | 10.997 ms | 10.997 ms | +0.00% |
 
 Relative to the preceding overloaded-shader run (3.206439 s VBO build,
-3.180418 s nearest texture), the VBO scene moved by -0.04%/-0.06% and the
-nearest-texture scene by -0.41%/-0.35%, within the observed run-to-run
-variation of up to about 0.4%. The shader VM microbenchmark rose 1.03% from
-122.535 µs with a 0.09% within-run spread, so it is treated as a real but
-scene-invisible cost of the array opcodes. As an experiment, the array
-opcodes were then appended to the end of the opcode enum and interpreter
-switch, restoring the original opcode values and dispatch source for every
-pre-array opcode; this build awaits remeasurement. The linear, Gouraud, client-array, clear and remaining microbenchmark figures
-are first recorded baselines. These device measurements are
+3.180418 s nearest texture, 122.535 µs shader VM), every scene is equal or
+faster, while the shader VM microbenchmark is 1.03% (`11d1320`) and 1.24%
+(`52798af`) slower. Appending the opcodes did not recover the shader VM cost.
+Within-build spread is at most 0.15%, but builds that differ only in GLSL
+interpreter source moved `texture-nearest-repeat`, whose code is unchanged,
+by 1.47%. Microbenchmark differences of about 1.5% between builds are
+therefore dominated by code placement in the binary, and the shader VM change
+is not attributed to the array opcodes. Cross-build microbenchmark comparisons
+below that level should not be treated as performance claims. Scene results
+remain the primary hardware measure. These device measurements are
 configuration-specific and not directly comparable to desktop/mobile glmark2.
 
 Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
