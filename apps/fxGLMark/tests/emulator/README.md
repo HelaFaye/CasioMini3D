@@ -31,12 +31,18 @@ It adds public GLES2 regressions for:
   four texels of a 2x2 RGB565 image using nearest filtering.
 - **Texture addressing:** out-of-range positive and negative S coordinates
   verify both `GL_REPEAT` and `GL_CLAMP_TO_EDGE`.
+- **GLSL local arrays:** a second linked program writes a `float[3]` through
+  a loop index and reads it back through dynamic and constant indices,
+  alongside a constant-index `vec4[2]` element swizzle write. The fragment
+  is yellow (RGB565 `0xffe0`) only if every access addresses its own slot;
+  aliased or off-by-one indexing clamps to black.
 
 ## Independent framebuffer oracle
 
-To keep execution bounded on the emulated SH-4, the add-in checks the 614
+To keep execution bounded on the emulated SH-4, the add-in checks the 615
 expected non-black pixels: 600 red point pixels, four depth/blend/color-mask/
-stencil pixels, two triangle pixels, and eight texture-sampling pixels. It
+stencil pixels, two triangle pixels, eight texture-sampling pixels, and one
+local-array pixel. It
 also asserts that the stencil-rejected neighbor remains black. The independent
 host-side emulator oracle scans the entire 396x224 transferred RGB565
 framebuffer against the exact expected pattern, rejects any unexpected
@@ -54,7 +60,7 @@ paths used by the add-in.
 **Scope:** this is a focused software GLES regression suite, not a performance
 benchmark or full Khronos GLES conformance test. It currently validates point
 rasterization, depth testing, blending, channel write masks, and basic
-texture sampling/addressing, stencil compare/replace behavior, and direct plus
-indexed triangle draws. It does not attempt to cover the complete GLES2 API. `casio-emu` is work in progress, does not emulate
+texture sampling/addressing, stencil compare/replace behavior, direct plus
+indexed triangle draws, program switching, and GLSL local-array indexing. It does not attempt to cover the complete GLES2 API. `casio-emu` is work in progress, does not emulate
 the calculator OS or syscalls, and has known hardware-model inaccuracies.
 Passing emulation is not physical fx-CG50 validation.
