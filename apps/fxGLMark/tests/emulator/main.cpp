@@ -17,6 +17,7 @@ constexpr uint16_t kGreenOnBlue = 0x07ff;
 constexpr uint16_t kTextureGreen = 0x07e0;
 constexpr uint16_t kTextureWhite = 0xffff;
 constexpr uint16_t kTriangleCyan = 0x07ff;
+constexpr uint16_t kIndexedTriangleMagenta = 0xf81f;
 static uint16_t depth_pixels[DWIDTH * DHEIGHT];
 static uint8_t stencil_pixels[DWIDTH * DHEIGHT];
 
@@ -140,7 +141,9 @@ bool framebuffer_matches_expected(const uint16_t *pixels)
            pixels[static_cast<size_t>(170) * DWIDTH + 380] == kRed &&
            pixels[static_cast<size_t>(190) * DWIDTH + 240] == kTextureGreen &&
            pixels[static_cast<size_t>(190) * DWIDTH + 260] == 0 &&
-           pixels[static_cast<size_t>(190) * DWIDTH + 280] == kTriangleCyan;
+           pixels[static_cast<size_t>(190) * DWIDTH + 280] == kTriangleCyan &&
+           pixels[static_cast<size_t>(190) * DWIDTH + 320] ==
+               kIndexedTriangleMagenta;
 }
 
 void publish_result(bool passed)
@@ -479,6 +482,62 @@ int main()
         glVertexAttrib2f(static_cast<GLuint>(uv_location), 0.75f, 0.75f);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         passed = glGetError() == GL_NO_ERROR;
+    }
+
+    if (passed)
+    {
+        /* Repeat the one-pixel triangle through GL_ARRAY_BUFFER,
+           GL_ELEMENT_ARRAY_BUFFER, and glDrawElements. The two buffer stores
+           are copied before drawing; the null pointer arguments are offsets
+           into their respective bound buffers. */
+        const GLfloat indexed_triangle_positions[12] = {
+            clip_coordinate_for_screen(320.1f, DWIDTH),
+            clip_coordinate_for_screen(190.1f, DHEIGHT), 1.0f, 0.0f,
+            clip_coordinate_for_screen(320.9f, DWIDTH),
+            clip_coordinate_for_screen(190.1f, DHEIGHT), 1.0f, 0.0f,
+            clip_coordinate_for_screen(320.5f, DWIDTH),
+            clip_coordinate_for_screen(190.9f, DHEIGHT), 1.0f, 0.0f
+        };
+        const GLushort indices[3] = {0, 1, 2};
+        GLuint vertex_buffer = 0;
+        GLuint index_buffer = 0;
+        glGenBuffers(1, &vertex_buffer);
+        glGenBuffers(1, &index_buffer);
+        passed = vertex_buffer != 0 && index_buffer != 0 &&
+                 glGetError() == GL_NO_ERROR;
+
+        if (passed)
+        {
+            glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
+            glBufferData(GL_ARRAY_BUFFER,
+                         static_cast<GLsizeiptr>(
+                             sizeof(indexed_triangle_positions)),
+                         indexed_triangle_positions, GL_STATIC_DRAW);
+            glVertexAttribPointer(
+                static_cast<GLuint>(position_location),
+                4, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                         static_cast<GLsizeiptr>(sizeof(indices)),
+                         indices, GL_STATIC_DRAW);
+            glVertexAttrib4f(static_cast<GLuint>(color_location),
+                             1.0f, 0.0f, 1.0f, 1.0f);
+            glVertexAttrib2f(static_cast<GLuint>(uv_location), 0.75f, 0.75f);
+            passed = glGetError() == GL_NO_ERROR;
+        }
+
+        if (passed)
+        {
+            glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, nullptr);
+            passed = glGetError() == GL_NO_ERROR;
+        }
+
+        if (vertex_buffer != 0)
+            glDeleteBuffers(1, &vertex_buffer);
+        if (index_buffer != 0)
+            glDeleteBuffers(1, &index_buffer);
+        passed = passed && glGetError() == GL_NO_ERROR;
     }
 
     if (passed)
