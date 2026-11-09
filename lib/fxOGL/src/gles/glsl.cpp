@@ -646,10 +646,30 @@ private:
         std::snprintf(name, sizeof(name), "%s", current_.text);
         advance();
 
+        size_t array_size = 0;
         if (accept_punctuation('['))
         {
-            fail("arrays are not supported yet");
-            return;
+            if (storage != Storage::Uniform)
+            {
+                fail("only uniform and local arrays are supported");
+                return;
+            }
+            if (type == ShaderType::Sampler2D)
+            {
+                fail("sampler arrays are not supported");
+                return;
+            }
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 1.0f ||
+                current_.number > static_cast<float>(GLSL_MAX_UNIFORMS))
+            {
+                fail("array size must be a positive integer constant");
+                return;
+            }
+            array_size = static_cast<size_t>(current_.number);
+            advance();
+            if (!expect_punctuation(']'))
+                return;
         }
         expect_punctuation(';');
         if (failed_)
@@ -689,17 +709,28 @@ private:
             capacity = GLSL_MAX_VARYINGS;
         }
 
-        if (*count >= capacity)
+        const size_t slots = array_size == 0 ? 1 : array_size;
+        if (*count + slots > capacity)
         {
             fail("shader variable limit exceeded");
             return;
         }
 
-        ShaderVariable& variable = variables[*count];
-        std::snprintf(variable.name, sizeof(variable.name), "%s", name);
-        variable.type = type;
-        variable.index = static_cast<uint8_t>(*count);
-        ++(*count);
+        // Uniform arrays use consecutive slots like local arrays: the first
+        // entry carries the name and size, later elements are unnamed.
+        for (size_t slot = 0; slot < slots; ++slot)
+        {
+            ShaderVariable& variable = variables[*count];
+            variable = {};
+            if (slot == 0)
+            {
+                std::snprintf(variable.name, sizeof(variable.name), "%s", name);
+                variable.array_size = static_cast<uint8_t>(array_size);
+            }
+            variable.type = type;
+            variable.index = static_cast<uint8_t>(*count);
+            ++(*count);
+        }
     }
 
     ResolvedVariable lookup(const char *name) const
@@ -737,7 +768,12 @@ private:
         variable = find_variable(
             module_.uniforms, module_.uniform_count, name);
         if (variable)
-            return {Storage::Uniform, variable->type, variable->index};
+        {
+            ResolvedVariable resolved = {
+                Storage::Uniform, variable->type, variable->index};
+            resolved.array_size = variable->array_size;
+            return resolved;
+        }
 
         variable = find_variable(
             module_.varyings, module_.varying_count, name);
@@ -894,7 +930,7 @@ private:
         if (!expect_punctuation('['))
             return false;
         element = {};
-        element.storage = Storage::Local;
+        element.storage = array.storage;
         element.type = array.type;
         element.index = array.index;
         dynamic = false;
@@ -2093,11 +2129,14 @@ private:
                 result_type = ShaderType::Invalid;
                 return;
             }
+            const bool uniform = variable.storage == Storage::Uniform;
             if (dynamic)
-                emit_simple(ShaderOp::LoadLocalIndexed, variable.type,
-                            variable.index, variable.array_size);
+                emit_simple(uniform ? ShaderOp::LoadUniformIndexed
+                                    : ShaderOp::LoadLocalIndexed,
+                            variable.type, variable.index, variable.array_size);
             else
-                emit_simple(ShaderOp::LoadLocal, element.type, element.index);
+                emit_simple(uniform ? ShaderOp::LoadUniform : ShaderOp::LoadLocal,
+                            element.type, element.index);
             result_type = element.type;
             expression_lvalue_ = dynamic ? ResolvedVariable{} : element;
             parse_matrix_column_read(result_type);
@@ -3077,7 +3116,8 @@ static void apply_binary(
 static bool array_element_slot(
     const ShaderInstruction& instruction,
     const ShaderValue& index,
-    size_t& slot)
+    size_t& slot,
+    size_t slot_limit = GLSL_MAX_LOCALS)
 {
     if (index.type != ShaderType::Int)
         return false;
@@ -3087,7 +3127,7 @@ static bool array_element_slot(
         return false;
     slot = static_cast<size_t>(instruction.index) +
            static_cast<size_t>(element);
-    return slot < GLSL_MAX_LOCALS;
+    return slot < slot_limit;
 }
 
 static bool finite_value(const ShaderValue& value)
@@ -3234,6 +3274,15 @@ bool execute_glsl(
                     !push_value(stack, stack_size, runtime.uniforms[instruction.index]))
                     return false;
                 break;
+            case ShaderOp::LoadUniformIndexed:
+            {
+                size_t slot = 0;
+                if (!pop_value(stack, stack_size, a) ||
+                    !array_element_slot(instruction, a, slot, GLSL_MAX_UNIFORMS) ||
+                    !push_value(stack, stack_size, runtime.uniforms[slot]))
+                    return false;
+                break;
+            }
             case ShaderOp::LoadVarying:
                 if (instruction.index >= GLSL_MAX_VARYINGS)
                     return false;

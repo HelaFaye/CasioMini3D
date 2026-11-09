@@ -67,9 +67,9 @@ struct ShaderVariable
     uint8_t index;
     /* Used only for function parameters. In is the default qualifier. */
     ShaderParameterQualifier qualifier;
-    /* Local arrays only: element count, zero for non-arrays. An array of N
-       elements occupies N consecutive local slots starting at index; the
-       slots after the first are recorded as unnamed element entries. */
+    /* Local and uniform arrays: element count, zero for non-arrays. An
+       array of N elements occupies N consecutive slots starting at index;
+       the slots after the first are recorded as unnamed element entries. */
     uint8_t array_size;
 };
 
@@ -92,6 +92,8 @@ enum class ShaderOp : uint8_t
     PushInt,
     LoadAttribute,
     LoadUniform,
+    /* Dynamic uniform-array read; operands as for LoadLocalIndexed. */
+    LoadUniformIndexed,
     LoadVarying,
     LoadLocal,
     /* Pops an int index; index is the array's first slot, argument_count
@@ -219,10 +221,11 @@ using TextureSampleFunction = bool (*)(
    out/inout arguments, or with int index expressions for whole-element
    reads and writes. Dynamic indices are bounds-checked at run time and an
    out-of-range access fails the invocation. Each element uses one local
-   slot. Arrays as function parameters or return values, whole-array
-   assignment, uniform/attribute/varying arrays, structs, do-while, switch,
-   preprocessor directives and precision qualifiers other than ordinary
-   precision statements remain unsupported. */
+   slot. Uniform arrays (`uniform vec4 u[3];`, non-sampler) follow the same
+   read rules and use one uniform slot per element. Arrays as function
+   parameters or return values, whole-array assignment, attribute/varying
+   arrays, structs, do-while, switch, preprocessor directives and precision
+   qualifiers other than ordinary precision statements remain unsupported. */
 bool compile_glsl(
     ShaderStage stage,
     const char *source,
