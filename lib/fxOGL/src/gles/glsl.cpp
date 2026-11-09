@@ -1,7 +1,7 @@
 #include "glsl.hpp"
 
 #include <algorithm>
-#include <cmath>
+#include <math.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -113,7 +113,7 @@ public:
             token.text[length] = '\0';
             char *end = nullptr;
             token.number = std::strtof(token.text, &end);
-            if (!end || *end != '\0' || !std::isfinite(token.number))
+            if (!end || *end != '\0' || !isfinite(token.number))
             {
                 token.kind = TokenKind::Invalid;
                 copy_error_text(token.text, sizeof(token.text), "invalid number");
@@ -2793,7 +2793,7 @@ static bool finite_value(const ShaderValue& value)
 {
     const size_t count = component_count(value.type);
     for (size_t i = 0; i < count; ++i)
-        if (!std::isfinite(value.data[i]))
+        if (!isfinite(value.data[i]))
             return false;
     return true;
 }
@@ -3528,7 +3528,7 @@ bool execute_glsl(
                 set_zero_value(result, ShaderType::Float);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                     result.data[0] += a.data[i] * a.data[i];
-                result.data[0] = std::sqrt(result.data[0]);
+                result.data[0] = sqrtf(result.data[0]);
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -3542,7 +3542,7 @@ bool execute_glsl(
                     for (size_t i = 0; i < component_count(a.type); ++i)
                         length_squared += a.data[i] * a.data[i];
                     const float inverse_length = length_squared > 0.0f
-                        ? 1.0f / std::sqrt(length_squared) : 0.0f;
+                        ? 1.0f / sqrtf(length_squared) : 0.0f;
                     for (size_t i = 0; i < component_count(a.type); ++i)
                         result.data[i] *= inverse_length;
                 }
@@ -3672,27 +3672,27 @@ bool execute_glsl(
                             float output = 0.0f;
                             switch (function)
                             {
-                                case BuiltinFunction::Sin: output = std::sin(value); break;
-                                case BuiltinFunction::Cos: output = std::cos(value); break;
-                                case BuiltinFunction::Tan: output = std::tan(value); break;
-                                case BuiltinFunction::Asin: output = std::asin(value); break;
-                                case BuiltinFunction::Acos: output = std::acos(value); break;
-                                case BuiltinFunction::Atan: output = std::atan(value); break;
-                                case BuiltinFunction::Exp: output = std::exp(value); break;
-                                case BuiltinFunction::Log: output = std::log(value); break;
-                                case BuiltinFunction::Exp2: output = std::exp2(value); break;
-                                case BuiltinFunction::Log2: output = std::log2(value); break;
-                                case BuiltinFunction::Sqrt: output = std::sqrt(value); break;
+                                case BuiltinFunction::Sin: output = sinf(value); break;
+                                case BuiltinFunction::Cos: output = cosf(value); break;
+                                case BuiltinFunction::Tan: output = tanf(value); break;
+                                case BuiltinFunction::Asin: output = asinf(value); break;
+                                case BuiltinFunction::Acos: output = acosf(value); break;
+                                case BuiltinFunction::Atan: output = atanf(value); break;
+                                case BuiltinFunction::Exp: output = expf(value); break;
+                                case BuiltinFunction::Log: output = logf(value); break;
+                                case BuiltinFunction::Exp2: output = exp2f(value); break;
+                                case BuiltinFunction::Log2: output = log2f(value); break;
+                                case BuiltinFunction::Sqrt: output = sqrtf(value); break;
                                 case BuiltinFunction::InverseSqrt:
-                                    output = value > 0.0f ? 1.0f / std::sqrt(value) : 0.0f;
+                                    output = value > 0.0f ? 1.0f / sqrtf(value) : 0.0f;
                                     break;
-                                case BuiltinFunction::Abs: output = std::fabs(value); break;
+                                case BuiltinFunction::Abs: output = fabsf(value); break;
                                 case BuiltinFunction::Sign:
                                     output = value > 0.0f ? 1.0f : value < 0.0f ? -1.0f : 0.0f;
                                     break;
-                                case BuiltinFunction::Floor: output = std::floor(value); break;
-                                case BuiltinFunction::Ceil: output = std::ceil(value); break;
-                                case BuiltinFunction::Fract: output = value - std::floor(value); break;
+                                case BuiltinFunction::Floor: output = floorf(value); break;
+                                case BuiltinFunction::Ceil: output = ceilf(value); break;
+                                case BuiltinFunction::Fract: output = value - floorf(value); break;
                                 case BuiltinFunction::Radians:
                                     output = value * 0.01745329251994329577f;
                                     break;
@@ -3737,11 +3737,11 @@ bool execute_glsl(
                             float output = 0.0f;
                             switch (function)
                             {
-                                case BuiltinFunction::Atan2: output = std::atan2(x, y); break;
-                                case BuiltinFunction::Pow: output = std::pow(x, y); break;
+                                case BuiltinFunction::Atan2: output = atan2f(x, y); break;
+                                case BuiltinFunction::Pow: output = powf(x, y); break;
                                 case BuiltinFunction::Mod:
                                     output = y == 0.0f ? 0.0f :
-                                        x - y * std::floor(x / y);
+                                        x - y * floorf(x / y);
                                     break;
                                 case BuiltinFunction::Step: output = x < y ? 0.0f : 1.0f; break;
                                 default: return false;
@@ -3762,7 +3762,7 @@ bool execute_glsl(
                             const float delta = args[0].data[i] - args[1].data[i];
                             result.data[0] += delta * delta;
                         }
-                        result.data[0] = std::sqrt(result.data[0]);
+                        result.data[0] = sqrtf(result.data[0]);
                         break;
 
                     case BuiltinFunction::Cross:
@@ -3831,7 +3831,7 @@ bool execute_glsl(
                             }
                             else
                             {
-                                const float factor = eta * dot + std::sqrt(k);
+                                const float factor = eta * dot + sqrtf(k);
                                 for (size_t i = 0; i < component_count(args[0].type); ++i)
                                     result.data[i] = eta * args[0].data[i] -
                                         factor * args[1].data[i];

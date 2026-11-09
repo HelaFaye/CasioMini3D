@@ -4,7 +4,7 @@
 #include "context_internal.hpp"
 
 #include <algorithm>
-#include <cmath>
+#include <math.h>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -683,7 +683,7 @@ static bool *capability(GLenum cap)
 
 static GLfloat clamp01(GLfloat value)
 {
-    if (!std::isfinite(value))
+    if (!isfinite(value))
         return 0.0f;
     return std::max(0.0f, std::min(1.0f, value));
 }
@@ -866,7 +866,7 @@ static bool fetch_vertex_attribute(
             element + i * component_bytes,
             attribute.type,
             attribute.normalized);
-        if (!std::isfinite(value.data[i]))
+        if (!isfinite(value.data[i]))
             return false;
     }
     return true;
@@ -964,9 +964,9 @@ static bool find_texture_passthrough(
 
     const float unit_value =
         program.uniform_values[uniform_location].data[0];
-    if (!std::isfinite(unit_value) || unit_value < 0.0f ||
+    if (!isfinite(unit_value) || unit_value < 0.0f ||
         unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
-        std::floor(unit_value) != unit_value)
+        floorf(unit_value) != unit_value)
         return false;
 
     const size_t offset =
@@ -1056,9 +1056,9 @@ static void initialize_draw_invocation(
         }
 
         const float unit_value = program.uniform_values[location].data[0];
-        if (!std::isfinite(unit_value) || unit_value < 0.0f ||
+        if (!isfinite(unit_value) || unit_value < 0.0f ||
             unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
-            std::floor(unit_value) != unit_value)
+            floorf(unit_value) != unit_value)
         {
             invocation.varying_derivatives = true;
             continue;
@@ -1114,13 +1114,13 @@ static bool sample_bound_texture(
         }
     }
 
-    if (!std::isfinite(u) || !std::isfinite(v))
+    if (!isfinite(u) || !isfinite(v))
         return false;
     // Non-mipmapped nearest/linear filtering does not consume derivatives.
     // Avoid four finite checks on the common nearest-texture path.
     if (cached.requires_derivatives &&
-        (!std::isfinite(dudx) || !std::isfinite(dvdx) ||
-         !std::isfinite(dudy) || !std::isfinite(dvdy)))
+        (!isfinite(dudx) || !isfinite(dvdx) ||
+         !isfinite(dudy) || !isfinite(dvdy)))
         return false;
 
     if (sampler.filter == gfx::TextureFilter::Nearest &&
@@ -1140,14 +1140,14 @@ static bool sample_bound_texture(
     float lod = 0.0f;
     if (cached.requires_derivatives)
     {
-        const float rho_x = std::sqrt(
+        const float rho_x = sqrtf(
             (dudx * texture.width) * (dudx * texture.width) +
             (dvdx * texture.height) * (dvdx * texture.height));
-        const float rho_y = std::sqrt(
+        const float rho_y = sqrtf(
             (dudy * texture.width) * (dudy * texture.width) +
             (dvdy * texture.height) * (dvdy * texture.height));
         const float rho = std::max(rho_x, rho_y);
-        lod = rho > 0.0f ? std::log2(rho) : 0.0f;
+        lod = rho > 0.0f ? log2f(rho) : 0.0f;
     }
 
     const bool minifying = lod > 0.0f;
@@ -1168,8 +1168,8 @@ static bool sample_bound_texture(
     }
 
     const double scale = 65536.0;
-    const double scaled_u = std::floor(texel_u * scale);
-    const double scaled_v = std::floor(texel_v * scale);
+    const double scaled_u = floor(texel_u * scale);
+    const double scaled_v = floor(texel_v * scale);
     const double minimum = static_cast<double>(
         std::numeric_limits<int64_t>::min());
     const double maximum = static_cast<double>(
