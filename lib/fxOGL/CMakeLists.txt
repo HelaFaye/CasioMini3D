@@ -23,12 +23,27 @@ target_compile_features(fxogl PUBLIC cxx_std_20)
 target_compile_options(fxogl PRIVATE -Wall -Wextra -Os)
 
 # In freestanding SH builds, GCC's C++ include path can put libstdc++'s
-# <math.h> compatibility wrapper ahead of the target C library header. That
-# wrapper includes hosted-only <cmath>. Select the actual target C include
-# directory using GCC's reported sysroot and target triple.
+# <math.h> compatibility wrapper ahead of the target C library header. Ask
+# fxSDK for its canonical target include directory rather than reconstructing
+# it from GCC's sysroot layout (which differs between toolchain releases).
 set(FXOGL_TARGET_C_INCLUDE_DIR "")
 
-if(CMAKE_SYSROOT AND EXISTS "${CMAKE_SYSROOT}/include/math.h")
+execute_process(
+    COMMAND fxsdk path include
+    OUTPUT_VARIABLE FXOGL_FXSDK_INCLUDE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE FXOGL_FXSDK_INCLUDE_RESULT
+)
+
+if(FXOGL_FXSDK_INCLUDE_RESULT EQUAL 0 AND
+   FXOGL_FXSDK_INCLUDE_DIR AND
+   EXISTS "${FXOGL_FXSDK_INCLUDE_DIR}/math.h")
+    set(FXOGL_TARGET_C_INCLUDE_DIR "${FXOGL_FXSDK_INCLUDE_DIR}")
+endif()
+
+# Fall back to compiler-reported locations for non-fxSDK SH toolchains.
+if(NOT FXOGL_TARGET_C_INCLUDE_DIR AND
+   CMAKE_SYSROOT AND EXISTS "${CMAKE_SYSROOT}/include/math.h")
     set(FXOGL_TARGET_C_INCLUDE_DIR "${CMAKE_SYSROOT}/include")
 endif()
 
@@ -45,17 +60,16 @@ execute_process(
     RESULT_VARIABLE FXOGL_TRIPLE_QUERY_RESULT
 )
 
-if(FXOGL_SYSROOT_QUERY_RESULT EQUAL 0 AND
+if(NOT FXOGL_TARGET_C_INCLUDE_DIR AND
+   FXOGL_SYSROOT_QUERY_RESULT EQUAL 0 AND
    FXOGL_TRIPLE_QUERY_RESULT EQUAL 0 AND
    FXOGL_COMPILER_SYSROOT AND FXOGL_TARGET_TRIPLE)
     set(FXOGL_TRIPLE_C_INCLUDE_DIR
         "${FXOGL_COMPILER_SYSROOT}/${FXOGL_TARGET_TRIPLE}/include")
     if(EXISTS "${FXOGL_TRIPLE_C_INCLUDE_DIR}/math.h")
         set(FXOGL_TARGET_C_INCLUDE_DIR "${FXOGL_TRIPLE_C_INCLUDE_DIR}")
-    elseif(NOT FXOGL_TARGET_C_INCLUDE_DIR AND
-           EXISTS "${FXOGL_COMPILER_SYSROOT}/include/math.h")
-        set(FXOGL_TARGET_C_INCLUDE_DIR
-            "${FXOGL_COMPILER_SYSROOT}/include")
+    elseif(EXISTS "${FXOGL_COMPILER_SYSROOT}/include/math.h")
+        set(FXOGL_TARGET_C_INCLUDE_DIR "${FXOGL_COMPILER_SYSROOT}/include")
     endif()
 endif()
 
@@ -67,8 +81,9 @@ if(FXOGL_TARGET_C_INCLUDE_DIR)
         "fxOGL target C headers: ${FXOGL_TARGET_C_INCLUDE_DIR}")
 elseif(CMAKE_CROSSCOMPILING)
     message(FATAL_ERROR
-        "fxOGL cross-build could not locate the target C math header "
-        "using the compiler sysroot and target triple")
+        "fxOGL cross-build could not locate the target C math header. "
+        "On fxSDK builds, verify that 'fxsdk path include' resolves to "
+        "the target's include directory.")
 endif()
 
 target_include_directories(fxogl
