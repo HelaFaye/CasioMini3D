@@ -11,6 +11,10 @@ namespace
 constexpr uint16_t kRed = 0xf800;
 constexpr uint16_t kPassMarker = 0x07e0;
 constexpr uint16_t kFailMarker = 0xf800;
+constexpr uint16_t kBlue = 0x001f;
+constexpr uint16_t kBlendedRedBlue = 0x8010;
+constexpr uint16_t kGreenOnBlue = 0x07ff;
+static uint16_t depth_pixels[DWIDTH * DHEIGHT];
 
 struct ExpectedRect
 {
@@ -37,10 +41,13 @@ constexpr ExpectedRect kExpectedRedRects[] = {
 
 static const GLchar kVertexSource[] =
     "attribute vec4 a_position;\n"
+    "attribute vec4 a_color;\n"
+    "varying vec4 v_color;\n"
     "void set_size(out float size, float requested);\n"
     "void preserve_size(inout float size);\n"
     "void main() {\n"
-    "  gl_Position = vec4(a_position.x, a_position.y, 0.0, 1.0);\n"
+    "  gl_Position = vec4(a_position.x, a_position.y, a_position.w, 1.0);\n"
+    "  v_color = a_color;\n"
     "  set_size(gl_PointSize, a_position.z);\n"
     "  preserve_size(gl_PointSize);\n"
     "}\n"
@@ -49,7 +56,8 @@ static const GLchar kVertexSource[] =
 
 static const GLchar kFragmentSource[] =
     "precision mediump float;\n"
-    "void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }\n";
+    "varying vec4 v_color;\n"
+    "void main() { gl_FragColor = v_color; }\n";
 
 float clip_coordinate_for_pixel(int pixel, int extent)
 {
@@ -60,9 +68,10 @@ float clip_coordinate_for_pixel(int pixel, int extent)
 }
 
 bool issue_point_draw(GLuint position_location,
-                      GLfloat clip_x, GLfloat clip_y, GLfloat point_size)
+                      GLfloat clip_x, GLfloat clip_y, GLfloat point_size,
+                      GLfloat clip_z = 0.0f)
 {
-    const GLfloat position[4] = {clip_x, clip_y, point_size, 1.0f};
+    const GLfloat position[4] = {clip_x, clip_y, point_size, clip_z};
     glVertexAttribPointer(position_location, 4, GL_FLOAT, GL_FALSE, 0, position);
     glDrawArrays(GL_POINTS, 0, 1);
     return glGetError() == GL_NO_ERROR;
@@ -77,15 +86,18 @@ bool draw_point_at_pixel(GLuint position_location,
         point_size);
 }
 
-bool expected_red_pixel(int x, int y)
+uint16_t expected_pixel_color(int x, int y)
 {
     for (const ExpectedRect& rect : kExpectedRedRects)
     {
         if (x >= rect.x && x < rect.x + rect.width &&
             y >= rect.y && y < rect.y + rect.height)
-            return true;
+            return kRed;
     }
-    return false;
+    if (x == 240 && y == 150) return kBlue;
+    if (x == 280 && y == 150) return kBlendedRedBlue;
+    if (x == 310 && y == 150) return kGreenOnBlue;
+    return 0;
 }
 
 bool framebuffer_matches_expected(const uint16_t *pixels)
@@ -94,9 +106,9 @@ bool framebuffer_matches_expected(const uint16_t *pixels)
     {
         for (int x = 0; x < DWIDTH; ++x)
         {
-            const bool expected = expected_red_pixel(x, y);
-            const bool actual =
-                pixels[static_cast<size_t>(y) * DWIDTH + x] == kRed;
+            const uint16_t expected = expected_pixel_color(x, y);
+            const uint16_t actual =
+                pixels[static_cast<size_t>(y) * DWIDTH + x];
             if (actual != expected)
                 return false;
         }
@@ -120,7 +132,7 @@ int main()
         pixels[i] = 0;
 
     const fxgl_surface_t surface = {
-        pixels, nullptr, nullptr, DWIDTH, DHEIGHT, DWIDTH
+        pixels, depth_pixels, nullptr, DWIDTH, DHEIGHT, DWIDTH
     };
     bool passed = fxglMakeCurrent(&surface) == GL_TRUE;
 
@@ -166,19 +178,25 @@ int main()
     }
 
     GLint position_location = -1;
+    GLint color_location = -1;
     if (passed)
     {
         glUseProgram(program);
         position_location = glGetAttribLocation(program, "a_position");
-        passed = position_location >= 0;
+        color_location = glGetAttribLocation(program, "a_color");
+        passed = position_location >= 0 && color_location >= 0;
     }
 
     if (passed)
     {
         glViewport(0, 0, DWIDTH, DHEIGHT);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        glClearDepthf(1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glEnableVertexAttribArray(static_cast<GLuint>(position_location));
+        glDisable(GL_DITHER);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         1.0f, 0.0f, 0.0f, 1.0f);
         passed = glGetError() == GL_NO_ERROR;
     }
 
@@ -240,6 +258,75 @@ int main()
     {
         /* The center outside homogeneous clip space must emit no fragments. */
         passed = issue_point_draw(position_location, 1.2f, 0.0f, 7.0f);
+    }
+
+    if (passed)
+    {
+        /* Depth rejects farther fragments and accepts a nearer replacement
+           at the same pixel. The final blue fragment must win. */
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glDepthMask(GL_TRUE);
+        glClearDepthf(1.0f);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         1.0f, 0.0f, 0.0f, 1.0f);
+        passed = issue_point_draw(
+            static_cast<GLuint>(position_location),
+            clip_coordinate_for_pixel(240, DWIDTH),
+            clip_coordinate_for_pixel(150, DHEIGHT), 1.0f, -0.5f);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         0.0f, 1.0f, 0.0f, 1.0f);
+        passed = passed && issue_point_draw(
+            static_cast<GLuint>(position_location),
+            clip_coordinate_for_pixel(240, DWIDTH),
+            clip_coordinate_for_pixel(150, DHEIGHT), 1.0f, 0.5f);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         0.0f, 0.0f, 1.0f, 1.0f);
+        passed = passed && issue_point_draw(
+            static_cast<GLuint>(position_location),
+            clip_coordinate_for_pixel(240, DWIDTH),
+            clip_coordinate_for_pixel(150, DHEIGHT), 1.0f, -0.75f);
+        glDisable(GL_DEPTH_TEST);
+        passed = passed && glGetError() == GL_NO_ERROR;
+    }
+
+    if (passed)
+    {
+        /* Alpha blend half-red over a blue clear at one scissored pixel.
+           RGB565 rounding gives 16/31 red and 16/31 blue (0x8010). */
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(280, 150, 1, 1);
+        glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         1.0f, 0.0f, 0.0f, 0.5f);
+        passed = draw_point_at_pixel(
+            static_cast<GLuint>(position_location), 280, 150, 1.0f);
+        glDisable(GL_BLEND);
+        passed = passed && glGetError() == GL_NO_ERROR;
+    }
+
+    if (passed)
+    {
+        /* A green-only write over blue preserves the destination blue. */
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(310, 150, 1, 1);
+        glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+        glColorMask(GL_FALSE, GL_TRUE, GL_FALSE, GL_FALSE);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         0.0f, 1.0f, 0.0f, 1.0f);
+        passed = draw_point_at_pixel(
+            static_cast<GLuint>(position_location), 310, 150, 1.0f);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        passed = passed && glGetError() == GL_NO_ERROR;
     }
 
     if (passed)

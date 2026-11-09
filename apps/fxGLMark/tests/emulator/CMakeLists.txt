@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(fxogl_point_size_smoke LANGUAGES C CXX)
+project(fxogl_emulator_regression LANGUAGES C CXX)
 
 include(GenerateG3A)
 include(Fxconv)
@@ -13,14 +13,14 @@ add_subdirectory(
     "${CMAKE_CURRENT_BINARY_DIR}/fxOGL"
 )
 
-add_executable(fxogl_point_size_smoke main.cpp)
-target_compile_options(fxogl_point_size_smoke PRIVATE -Wall -Wextra -Os)
-target_link_libraries(fxogl_point_size_smoke PRIVATE fxOGL::fxOGL Gint::Gint stdc++)
+add_executable(fxogl_emulator_regression main.cpp)
+target_compile_options(fxogl_emulator_regression PRIVATE -Wall -Wextra -Os)
+target_link_libraries(fxogl_emulator_regression PRIVATE fxOGL::fxOGL Gint::Gint stdc++)
 
 generate_g3a(
-    TARGET fxogl_point_size_smoke
-    OUTPUT "fxogl-point-size-smoke.g3a"
-    NAME "fxOGL Point Size Smoke"
+    TARGET fxogl_emulator_regression
+    OUTPUT "fxogl-emulator-regression.g3a"
+    NAME "fxOGL GLES Regression"
     ICONS
         "${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-uns.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-sel.png"
