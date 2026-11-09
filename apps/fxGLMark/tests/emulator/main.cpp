@@ -16,6 +16,7 @@ constexpr uint16_t kBlendedRedBlue = 0x8010;
 constexpr uint16_t kGreenOnBlue = 0x07ff;
 constexpr uint16_t kTextureGreen = 0x07e0;
 constexpr uint16_t kTextureWhite = 0xffff;
+constexpr uint16_t kTriangleCyan = 0x07ff;
 static uint16_t depth_pixels[DWIDTH * DHEIGHT];
 static uint8_t stencil_pixels[DWIDTH * DHEIGHT];
 
@@ -73,6 +74,11 @@ float clip_coordinate_for_pixel(int pixel, int extent)
        boundary so float conversion cannot round a coverage edge down. */
     return (2.0f * static_cast<float>(pixel) /
             static_cast<float>(extent)) - 1.0f + 0.00001f;
+}
+
+float clip_coordinate_for_screen(float screen_coordinate, int extent)
+{
+    return (2.0f * screen_coordinate / static_cast<float>(extent)) - 1.0f;
 }
 
 bool issue_point_draw(GLuint position_location,
@@ -133,7 +139,8 @@ bool framebuffer_matches_expected(const uint16_t *pixels)
            pixels[static_cast<size_t>(170) * DWIDTH + 360] == kTextureGreen &&
            pixels[static_cast<size_t>(170) * DWIDTH + 380] == kRed &&
            pixels[static_cast<size_t>(190) * DWIDTH + 240] == kTextureGreen &&
-           pixels[static_cast<size_t>(190) * DWIDTH + 260] == 0;
+           pixels[static_cast<size_t>(190) * DWIDTH + 260] == 0 &&
+           pixels[static_cast<size_t>(190) * DWIDTH + 280] == kTriangleCyan;
 }
 
 void publish_result(bool passed)
@@ -449,6 +456,29 @@ int main()
             static_cast<GLuint>(position_location), 260, 190, 1.0f);
         glDisable(GL_STENCIL_TEST);
         passed = passed && glGetError() == GL_NO_ERROR;
+    }
+
+    if (passed)
+    {
+        /* Render a deliberately sub-pixel-sized triangle whose only covered
+           sample is the center of (280,190). This exercises GL_TRIANGLES,
+           three-vertex attribute fetch, varying interpolation, and the
+           fragment shader's texture lookup through the public GLES path. */
+        const GLfloat triangle_positions[12] = {
+            clip_coordinate_for_screen(280.1f, DWIDTH),
+            clip_coordinate_for_screen(190.1f, DHEIGHT), 1.0f, 0.0f,
+            clip_coordinate_for_screen(280.9f, DWIDTH),
+            clip_coordinate_for_screen(190.1f, DHEIGHT), 1.0f, 0.0f,
+            clip_coordinate_for_screen(280.5f, DWIDTH),
+            clip_coordinate_for_screen(190.9f, DHEIGHT), 1.0f, 0.0f
+        };
+        glVertexAttribPointer(static_cast<GLuint>(position_location),
+                              4, GL_FLOAT, GL_FALSE, 0, triangle_positions);
+        glVertexAttrib4f(static_cast<GLuint>(color_location),
+                         0.0f, 1.0f, 1.0f, 1.0f);
+        glVertexAttrib2f(static_cast<GLuint>(uv_location), 0.75f, 0.75f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        passed = glGetError() == GL_NO_ERROR;
     }
 
     if (passed)
