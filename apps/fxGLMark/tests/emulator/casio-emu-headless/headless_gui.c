@@ -128,6 +128,9 @@ void runMainLoop(void (*callback)(void))
 {
     /* The application is non-interactive. Advance a bounded number of frames
        so display/DMA writes have time to reach the emulator's LCD callback. */
+    for (int frame = 0; frame < 12; ++frame)
+        callback();
+
     save_ppm();
     const unsigned marker = have_frame ? last_frame[0] : 0;
     int red_pixels = 0;
