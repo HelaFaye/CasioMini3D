@@ -1,6 +1,6 @@
 #include "math.hpp"
 
-#include <cmath>
+#include <math.h>
 #include <cstring>
 
 namespace fxgl
@@ -9,14 +9,14 @@ namespace
 {
 static bool finite_vertex(const ClipVertex& vertex, size_t varying_count)
 {
-    if (!std::isfinite(vertex.position.x) ||
-        !std::isfinite(vertex.position.y) ||
-        !std::isfinite(vertex.position.z) ||
-        !std::isfinite(vertex.position.w))
+    if (!isfinite(vertex.position.x) ||
+        !isfinite(vertex.position.y) ||
+        !isfinite(vertex.position.z) ||
+        !isfinite(vertex.position.w))
         return false;
 
     for (size_t i = 0; i < varying_count; ++i)
-        if (!std::isfinite(vertex.varying[i]))
+        if (!isfinite(vertex.varying[i]))
             return false;
     return true;
 }
@@ -101,10 +101,10 @@ bool mat4_perspective(
     float far_plane)
 {
     mat4_identity(out);
-    if (!std::isfinite(vertical_fov_radians) ||
-        !std::isfinite(aspect) ||
-        !std::isfinite(near_plane) ||
-        !std::isfinite(far_plane) ||
+    if (!isfinite(vertical_fov_radians) ||
+        !isfinite(aspect) ||
+        !isfinite(near_plane) ||
+        !isfinite(far_plane) ||
         vertical_fov_radians <= 0.0f ||
         vertical_fov_radians >= 3.14159265358979323846f ||
         aspect <= 0.0f || near_plane <= 0.0f ||
@@ -114,8 +114,8 @@ bool mat4_perspective(
         return false;
     }
 
-    const float tangent = std::tan(vertical_fov_radians * 0.5f);
-    if (!std::isfinite(tangent) || tangent <= 0.0f)
+    const float tangent = tanf(vertical_fov_radians * 0.5f);
+    if (!isfinite(tangent) || tangent <= 0.0f)
     {
         std::memset(out.m, 0, sizeof(out.m));
         return false;
@@ -175,7 +175,7 @@ bool clip_triangle(
             if (previous_inside != current_inside)
             {
                 const float denominator = previous_distance - current_distance;
-                if (denominator == 0.0f || !std::isfinite(denominator))
+                if (denominator == 0.0f || !isfinite(denominator))
                     return false;
                 const float t = previous_distance / denominator;
                 if (next_count >= MAX_CLIPPED_POLYGON_VERTICES)

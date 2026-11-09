@@ -1,7 +1,8 @@
 #include "pipeline.hpp"
 
 #include <algorithm>
-#include <cmath>
+#include <limits>
+#include <math.h>
 #include <cstring>
 
 namespace fxgl
@@ -98,8 +99,8 @@ static bool valid_state(const PipelineState& state)
 
     if (state.viewport[2] < 0 || state.viewport[3] < 0 ||
         state.scissor[2] < 0 || state.scissor[3] < 0 ||
-        !std::isfinite(state.depth_near) ||
-        !std::isfinite(state.depth_far))
+        !isfinite(state.depth_near) ||
+        !isfinite(state.depth_far))
         return false;
 
     return true;
@@ -141,7 +142,7 @@ static bool to_screen(
     ScreenVertex& output)
 {
     const float w = input.position.w;
-    if (!std::isfinite(w) || w <= 0.0f)
+    if (!isfinite(w) || w <= 0.0f)
         return false;
 
     const float inverse_w = 1.0f / w;
@@ -156,8 +157,8 @@ static bool to_screen(
     output.inverse_w = inverse_w;
     output.z_over_w = ndc_z;
 
-    if (!std::isfinite(output.x) || !std::isfinite(output.y) ||
-        !std::isfinite(output.z_over_w))
+    if (!isfinite(output.x) || !isfinite(output.y) ||
+        !isfinite(output.z_over_w))
         return false;
 
     for (size_t i = 0; i < varying_count; ++i)
@@ -198,7 +199,7 @@ static void write_stencil(
 
 static float clamp01(float value)
 {
-    if (!std::isfinite(value))
+    if (!isfinite(value))
         return 0.0f;
     return std::max(0.0f, std::min(1.0f, value));
 }
@@ -457,7 +458,7 @@ static bool rasterize_one(
 
     float area = edge(vertices[0], vertices[1],
                       vertices[2].x, vertices[2].y);
-    if (!std::isfinite(area) || area == 0.0f)
+    if (!isfinite(area) || area == 0.0f)
         return false;
 
     const bool ccw = area > 0.0f;
@@ -483,10 +484,10 @@ static bool rasterize_one(
     const float max_y = std::max(vertices[0].y,
         std::max(vertices[1].y, vertices[2].y));
 
-    int64_t x0 = static_cast<int64_t>(std::ceil(min_x - 0.5f));
-    int64_t x1 = static_cast<int64_t>(std::floor(max_x - 0.5f));
-    int64_t y0 = static_cast<int64_t>(std::ceil(min_y - 0.5f));
-    int64_t y1 = static_cast<int64_t>(std::floor(max_y - 0.5f));
+    int64_t x0 = static_cast<int64_t>(ceilf(min_x - 0.5f));
+    int64_t x1 = static_cast<int64_t>(floorf(max_x - 0.5f));
+    int64_t y0 = static_cast<int64_t>(ceilf(min_y - 0.5f));
+    int64_t y1 = static_cast<int64_t>(floorf(max_y - 0.5f));
 
     x0 = std::max<int64_t>(x0, 0);
     y0 = std::max<int64_t>(y0, 0);
@@ -653,7 +654,7 @@ static bool rasterize_one(
                 if (has_varyings)
                 {
                     interpolation_valid =
-                        std::isfinite(reciprocal_w) && reciprocal_w > 0.0f;
+                        isfinite(reciprocal_w) && reciprocal_w > 0.0f;
                     if (interpolation_valid)
                     {
                         const float inverse_reciprocal_w = 1.0f / reciprocal_w;
@@ -668,9 +669,9 @@ static bool rasterize_one(
                                 reciprocal_w + reciprocal_w_dx;
                             const float reciprocal_w_y =
                                 reciprocal_w + reciprocal_w_dy;
-                            valid_x = std::isfinite(reciprocal_w_x) &&
+                            valid_x = isfinite(reciprocal_w_x) &&
                                       reciprocal_w_x > 0.0f;
-                            valid_y = std::isfinite(reciprocal_w_y) &&
+                            valid_y = isfinite(reciprocal_w_y) &&
                                       reciprocal_w_y > 0.0f;
                             if (valid_x)
                                 inverse_x = 1.0f / reciprocal_w_x;
@@ -800,7 +801,7 @@ static bool clip_line_segment(
     {
         const float a = clip_plane_distance(input[0].position, plane);
         const float b = clip_plane_distance(input[1].position, plane);
-        if (!std::isfinite(a) || !std::isfinite(b))
+        if (!isfinite(a) || !isfinite(b))
             return false;
         if (a < 0.0f && b < 0.0f)
             return false;
@@ -953,58 +954,84 @@ bool draw_point(
     stats = {};
 
     if (!valid_surface(surface) || !valid_state(state) ||
-        !fragment_shader || varying_count > MAX_VARYINGS)
+        !fragment_shader || varying_count > MAX_VARYINGS ||
+        !isfinite(input.point_size))
         return false;
 
     ++stats.input_points;
     for (size_t i = 0; i < varying_count; ++i)
-        if (!std::isfinite(input.varying[i]))
+        if (!isfinite(input.varying[i]))
             return false;
     if (!clip_point(input))
         return false;
 
     ScreenVertex screen = {};
-    if (!to_screen(input, varying_count, state, screen))
+    if (!to_screen(input, varying_count, state, screen) ||
+        !isfinite(screen.x) || !isfinite(screen.y))
         return false;
 
-    const float min_x = static_cast<float>(std::max(0, state.viewport[0]));
-    const float min_y = static_cast<float>(std::max(0, state.viewport[1]));
-    const float max_x = static_cast<float>(std::min(
-        static_cast<int64_t>(surface.width),
-        static_cast<int64_t>(state.viewport[0]) + state.viewport[2]));
-    const float max_y = static_cast<float>(std::min(
-        static_cast<int64_t>(surface.height),
-        static_cast<int64_t>(state.viewport[1]) + state.viewport[3]));
+    /* GLES point primitives are square. Clamp their bounded work to the range
+       reported by GL_ALIASED_POINT_SIZE_RANGE; intersect with the surface,
+       viewport and scissor before converting any floating bound to an integer. */
+    const float point_size = std::min(
+        std::max(input.point_size, 1.0f), MAX_POINT_SIZE);
+    const double half_size = static_cast<double>(point_size) * 0.5;
+    int64_t clip_left = std::max<int64_t>(0, state.viewport[0]);
+    int64_t clip_bottom = std::max<int64_t>(0, state.viewport[1]);
+    int64_t clip_right = std::min<int64_t>(
+        surface.width, static_cast<int64_t>(state.viewport[0]) + state.viewport[2]);
+    int64_t clip_top = std::min<int64_t>(
+        surface.height, static_cast<int64_t>(state.viewport[1]) + state.viewport[3]);
     if (state.scissor_enabled)
     {
-        if (min_x >= max_x || min_y >= max_y)
-            return false;
-        if (screen.x < std::max(min_x, static_cast<float>(state.scissor[0])) ||
-            screen.y < std::max(min_y, static_cast<float>(state.scissor[1])) ||
-            screen.x >= std::min(max_x,
-                static_cast<float>(static_cast<int64_t>(state.scissor[0]) +
-                                   state.scissor[2])) ||
-            screen.y >= std::min(max_y,
-                static_cast<float>(static_cast<int64_t>(state.scissor[1]) +
-                                   state.scissor[3])))
-            return false;
+        clip_left = std::max<int64_t>(clip_left, state.scissor[0]);
+        clip_bottom = std::max<int64_t>(clip_bottom, state.scissor[1]);
+        clip_right = std::min<int64_t>(
+            clip_right, static_cast<int64_t>(state.scissor[0]) + state.scissor[2]);
+        clip_top = std::min<int64_t>(
+            clip_top, static_cast<int64_t>(state.scissor[1]) + state.scissor[3]);
     }
-
-    if (screen.x < min_x || screen.y < min_y ||
-        screen.x >= max_x || screen.y >= max_y)
+    if (clip_left >= clip_right || clip_bottom >= clip_top)
         return false;
 
-    const int x = static_cast<int>(std::floor(screen.x));
-    const int y = static_cast<int>(std::floor(screen.y));
+    const double left_bound =
+        floor(static_cast<double>(screen.x) - half_size - 0.5) + 1.0;
+    const double right_bound =
+        floor(static_cast<double>(screen.x) + half_size - 0.5) + 1.0;
+    const double bottom_bound =
+        floor(static_cast<double>(screen.y) - half_size - 0.5) + 1.0;
+    const double top_bound =
+        floor(static_cast<double>(screen.y) + half_size - 0.5) + 1.0;
+    const int64_t left = static_cast<int64_t>(std::clamp(
+        left_bound, static_cast<double>(clip_left), static_cast<double>(clip_right)));
+    const int64_t right = static_cast<int64_t>(std::clamp(
+        right_bound, static_cast<double>(clip_left), static_cast<double>(clip_right)));
+    const int64_t bottom = static_cast<int64_t>(std::clamp(
+        bottom_bound, static_cast<double>(clip_bottom), static_cast<double>(clip_top)));
+    const int64_t top = static_cast<int64_t>(std::clamp(
+        top_bound, static_cast<double>(clip_bottom), static_cast<double>(clip_top)));
+    if (left >= right || bottom >= top)
+        return false;
+
     float varyings[MAX_VARYINGS] = {};
     float zero_derivatives[MAX_VARYINGS] = {};
     for (size_t i = 0; i < varying_count; ++i)
         varyings[i] = input.varying[i];
 
-    return process_fragment(surface, state, x, y, varyings,
-        zero_derivatives, zero_derivatives,
-        varying_count, screen.z_over_w, true,
-        fragment_shader, user_data, stats);
+    bool wrote_any = false;
+    for (int64_t y = bottom; y < top; ++y)
+    {
+        for (int64_t x = left; x < right; ++x)
+        {
+            if (process_fragment(
+                    surface, state, static_cast<int>(x), static_cast<int>(y),
+                    varyings, zero_derivatives, zero_derivatives,
+                    varying_count, screen.z_over_w, true,
+                    fragment_shader, user_data, stats))
+                wrote_any = true;
+        }
+    }
+    return wrote_any;
 }
 
 bool draw_line(
@@ -1028,11 +1055,11 @@ bool draw_line(
     for (size_t endpoint = 0; endpoint < 2; ++endpoint)
     {
         const Vec4& p = input[endpoint].position;
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) ||
-            !std::isfinite(p.z) || !std::isfinite(p.w))
+        if (!isfinite(p.x) || !isfinite(p.y) ||
+            !isfinite(p.z) || !isfinite(p.w))
             return false;
         for (size_t i = 0; i < varying_count; ++i)
-            if (!std::isfinite(input[endpoint].varying[i]))
+            if (!isfinite(input[endpoint].varying[i]))
                 return false;
     }
 
@@ -1103,7 +1130,7 @@ bool draw_line(
     const float dx = b.x - a.x;
     const float dy = b.y - a.y;
     const int steps = static_cast<int>(
-        std::ceil(std::max(std::fabs(dx), std::fabs(dy))));
+        ceilf(std::max(fabsf(dx), fabsf(dy))));
     const int total_steps = std::max(steps, 1);
 
     bool wrote_any = false;
@@ -1117,8 +1144,8 @@ bool draw_line(
         const float t = static_cast<float>(step) / total_steps;
         const float screen_x = a.x + dx * t;
         const float screen_y = a.y + dy * t;
-        const int x = static_cast<int>(std::floor(screen_x));
-        const int y = static_cast<int>(std::floor(screen_y));
+        const int x = static_cast<int>(floorf(screen_x));
+        const int y = static_cast<int>(floorf(screen_y));
         if (x == previous_x && y == previous_y)
             continue;
         previous_x = x;
@@ -1126,7 +1153,7 @@ bool draw_line(
 
         const float reciprocal_w =
             a.inverse_w + (b.inverse_w - a.inverse_w) * t;
-        if (!std::isfinite(reciprocal_w) || reciprocal_w <= 0.0f)
+        if (!isfinite(reciprocal_w) || reciprocal_w <= 0.0f)
             continue;
         for (size_t i = 0; i < varying_count; ++i)
         {

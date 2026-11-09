@@ -76,6 +76,15 @@ void test_surface_binding_and_default_state()
     glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear_depth);
     assert(clear_depth > 0.374f && clear_depth < 0.376f);
 
+    GLfloat point_size_range[2] = {};
+    glGetFloatv(GL_ALIASED_POINT_SIZE_RANGE, point_size_range);
+    assert(point_size_range[0] == 1.0f);
+    assert(point_size_range[1] == 16.0f);
+    GLint integer_point_size_range[2] = {};
+    glGetIntegerv(GL_ALIASED_POINT_SIZE_RANGE, integer_point_size_range);
+    assert(integer_point_size_range[0] == 1);
+    assert(integer_point_size_range[1] == 16);
+
     assert(glGetString(GL_VENDOR) != nullptr);
     assert(glGetString(GL_RENDERER) != nullptr);
     assert(glGetString(GL_VERSION) != nullptr);
@@ -675,7 +684,15 @@ void test_gles_draw_arrays_and_elements()
         "#version 100\n"
         "attribute vec4 a_position;\n"
         "uniform mat4 u_mvp;\n"
-        "void main() { gl_Position = u_mvp * a_position; }";
+        "void set_point_size(out float size);\n"
+        "void enlarge_point_size(inout float size);\n"
+        "void main() {\n"
+        "  gl_Position = u_mvp * a_position;\n"
+        "  set_point_size(gl_PointSize);\n"
+        "  enlarge_point_size(gl_PointSize);\n"
+        "}\n"
+        "void set_point_size(out float size) { size = 2.5; }\n"
+        "void enlarge_point_size(inout float size) { size = size + 0.5; }";
     static const GLchar fragment_source[] =
         "#version 100\n"
         "precision mediump float;\n"
@@ -773,6 +790,13 @@ void test_gles_draw_arrays_and_elements()
         pixel = 0;
     glDrawArrays(GL_POINTS, 0, 1);
     assert(color[0] == BLUE);
+    assert(color[1] == BLUE);
+    assert(color[8] == BLUE);
+    assert(color[9] == BLUE);
+    size_t blue_point_pixels = 0;
+    for (uint16_t pixel : color)
+        if (pixel == BLUE) ++blue_point_pixels;
+    assert(blue_point_pixels == 4);
 
     // Unknown primitive enums are rejected, not treated as a known mode.
     glDrawArrays(0x0007, 0, 3);

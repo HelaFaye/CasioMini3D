@@ -278,6 +278,40 @@ void test_point_rasterization_and_clip_rejection()
     assert(stats.written_fragments == 1);
     assert(color[2 * 4 + 2] == 0xffe0);
 
+    reset_surface(color, depth, stencil);
+    ClipVertex large = center;
+    large.point_size = 3.0f;
+    assert(fxgl::draw_point(surface, state, large, 0,
+        solid_fragment, &yellow, &stats));
+    assert(stats.tested_fragments == 9);
+    assert(stats.written_fragments == 9);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            assert((color[y * 4 + x] == 0xffe0) ==
+                   (x >= 1 && x <= 3 && y >= 1 && y <= 3));
+
+    reset_surface(color, depth, stencil);
+    large.point_size = 2.0f;
+    state.scissor_enabled = true;
+    state.scissor[0] = 0;
+    state.scissor[1] = 0;
+    state.scissor[2] = 1;
+    state.scissor[3] = 1;
+    large.position = {-0.5f, -0.5f, 0.0f, 1.0f};
+    assert(fxgl::draw_point(surface, state, large, 0,
+        solid_fragment, &yellow, &stats));
+    assert(stats.written_fragments == 1);
+    assert(color[0] == 0xffe0);
+    assert(color[1] == 0x0000);
+    state.scissor_enabled = false;
+
+    reset_surface(color, depth, stencil);
+    large = center;
+    large.point_size = 100.0f;
+    assert(fxgl::draw_point(surface, state, large, 0,
+        solid_fragment, &yellow, &stats));
+    assert(stats.written_fragments == 16);
+
     const ClipVertex outside = vertex(2.0f, 0.0f, 0.0f, 1.0f);
     assert(!fxgl::draw_point(surface, state, outside, 0,
         solid_fragment, &yellow, &stats));

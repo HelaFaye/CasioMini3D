@@ -21,6 +21,8 @@ struct Mat4
 struct ClipVertex
 {
     Vec4 position;
+    /* Vertex-shader gl_PointSize; the 1-pixel default preserves legacy callers. */
+    float point_size = 1.0f;
     float varying[MAX_VARYINGS];
 };
 

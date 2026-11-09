@@ -861,6 +861,35 @@ static void test_user_function_stage_output_copyout()
     assert(near(readback_runtime.fragment_color.data[1], 1.0f));
     assert(near(readback_runtime.fragment_color.data[2], 1.5f));
     assert(near(readback_runtime.fragment_color.data[3], 2.0f));
+
+    static const char point_size_source[] =
+        "void set_size(out float size);\n"
+        "void expand(inout float size);\n"
+        "void main() { set_size(gl_PointSize); expand(gl_PointSize); }\n"
+        "void set_size(out float size) { size = 2.5; }\n"
+        "void expand(inout float size) { size = size + 0.5; }\n";
+    ShaderModule point_size_module = {};
+    const bool point_size_compiled = fxgl::compile_glsl(
+        ShaderStage::Vertex, point_size_source, point_size_module);
+    if (!point_size_compiled)
+        std::fprintf(stderr, "gl_PointSize diagnostic: %s\n",
+                     point_size_module.info_log);
+    assert(point_size_compiled);
+    ShaderRuntime point_size_runtime = {};
+    assert(fxgl::execute_glsl(point_size_module, point_size_runtime));
+    assert(point_size_runtime.point_size.type == ShaderType::Float);
+    assert(near(point_size_runtime.point_size.data[0], 3.0f));
+
+    static const char direct_point_size_source[] =
+        "void main() { gl_PointSize = 4.0; gl_PointSize = gl_PointSize + 1.0; }";
+    ShaderModule direct_point_size_module = {};
+    assert(fxgl::compile_glsl(
+        ShaderStage::Vertex, direct_point_size_source, direct_point_size_module));
+    ShaderRuntime direct_point_size_runtime = {};
+    assert(fxgl::execute_glsl(
+        direct_point_size_module, direct_point_size_runtime));
+    assert(direct_point_size_runtime.point_size.type == ShaderType::Float);
+    assert(near(direct_point_size_runtime.point_size.data[0], 5.0f));
 }
 
 static void test_user_function_out_inout_rejections()
@@ -1046,6 +1075,7 @@ static void test_compiler_rejects_unsupported_or_invalid_source()
         "void main() { gl_FragColor = unknown_name; }",
         "void main() { gl_FragColor = vec4(1.0, 2.0); }",
         "void main() { gl_Position = vec4(1.0); }",
+        "void main() { gl_PointSize = 3.0; gl_FragColor = vec4(1.0); }",
         "float missing(float value); void main() { gl_FragColor = vec4(1.0); }",
         "float helper(float value); float helper(float input) { return input; } float helper(float other) { return other; } void main() { gl_FragColor = vec4(1.0); }",
         "void main() { gl_FragColor = vec4(later(1.0)); } float later(float value) { return value; }",
@@ -1136,6 +1166,105 @@ static void test_reused_runtime_resets_locals_and_outputs()
     assert(near(runtime.fragment_color.data[2], 0.5f));
     assert(near(runtime.fragment_color.data[3], 0.5f));
 }
+
+static void test_matrix_column_indexing()
+{
+    static const char source[] =
+        "void main() {\n"
+        "  mat2 a = mat2(1.0, 2.0, 3.0, 4.0);\n"
+        "  mat3 b = mat3(1.0);\n"
+        "  mat4 c = mat4(1.0);\n"
+        "  a[1] = vec2(8.0, 9.0);\n"
+        "  b[2] = vec3(10.0, 11.0, 12.0);\n"
+        "  c[3] = vec4(13.0, 14.0, 15.0, 16.0);\n"
+        "  gl_FragColor = vec4(a[1].x, a[1].y, b[2].z, c[3].w);\n"
+        "}\n";
+    ShaderModule module = {};
+    const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, source, module);
+    if (!compiled)
+        std::fprintf(stderr, "matrix column diagnostic: %s\\n", module.info_log);
+    assert(compiled);
+    ShaderRuntime runtime = {};
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 8.0f));
+    assert(near(runtime.fragment_color.data[1], 9.0f));
+    assert(near(runtime.fragment_color.data[2], 12.0f));
+    assert(near(runtime.fragment_color.data[3], 16.0f));
+
+    const char *invalid[] = {
+        "void main() { mat2 m = mat2(1.0); gl_FragColor = vec4(m[2], 0.0, 1.0); }",
+        "void main() { mat3 m = mat3(1.0); gl_FragColor = vec4(m[-1], 1.0); }",
+        "void main() { mat4 m = mat4(1.0); gl_FragColor = vec4(m[1.5], 1.0); }",
+        "void main() { mat2 m = mat2(1.0); m[0] = vec3(1.0); gl_FragColor = vec4(1.0); }",
+        "uniform mat2 m; void main() { m[0] = vec2(1.0); gl_FragColor = vec4(1.0); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        assert(!fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected));
+    }
+}
+
+static void test_swizzle_assignments()
+{
+    static const char fragment_source[] =
+        "uniform vec4 u_color;\n"
+        "void main() {\n"
+        "  vec4 color = u_color;\n"
+        "  color.rgb = color.bgr;\n"
+        "  color.a = 0.25;\n"
+        "  gl_FragColor = vec4(0.0);\n"
+        "  gl_FragColor.bgr = color.rgb;\n"
+        "  gl_FragColor.a = color.a;\n"
+        "}\n";
+
+    ShaderModule fragment_module = {};
+    const bool fragment_compiled =
+        fxgl::compile_glsl(ShaderStage::Fragment, fragment_source, fragment_module);
+    if (!fragment_compiled)
+        std::fprintf(stderr, "fragment swizzle assignment diagnostic: %s\n",
+                     fragment_module.info_log);
+    assert(fragment_compiled);
+
+    ShaderRuntime fragment_runtime = {};
+    fragment_runtime.uniforms[0] = value(ShaderType::Vec4, 0.1f, 0.2f, 0.3f, 0.4f);
+    assert(fxgl::execute_glsl(fragment_module, fragment_runtime));
+    assert(near(fragment_runtime.fragment_color.data[0], 0.1f));
+    assert(near(fragment_runtime.fragment_color.data[1], 0.2f));
+    assert(near(fragment_runtime.fragment_color.data[2], 0.3f));
+    assert(near(fragment_runtime.fragment_color.data[3], 0.25f));
+
+    static const char vertex_source[] =
+        "attribute vec4 a_position;\n"
+        "varying vec4 v_color;\n"
+        "void main() {\n"
+        "  gl_Position = a_position;\n"
+        "  gl_Position.xy = vec2(0.25, 0.5);\n"
+        "  v_color = vec4(0.1, 0.2, 0.3, 0.4);\n"
+        "  v_color.zx = vec2(0.9, 0.8);\n"
+        "}\n";
+    ShaderModule vertex_module = {};
+    assert(fxgl::compile_glsl(ShaderStage::Vertex, vertex_source, vertex_module));
+    ShaderRuntime vertex_runtime = {};
+    vertex_runtime.attributes[0] = value(ShaderType::Vec4, -1.0f, -1.0f, 0.0f, 1.0f);
+    assert(fxgl::execute_glsl(vertex_module, vertex_runtime));
+    assert(near(vertex_runtime.position.data[0], 0.25f));
+    assert(near(vertex_runtime.position.data[1], 0.5f));
+    assert(near(vertex_runtime.position.data[2], 0.0f));
+    assert(near(vertex_runtime.position.data[3], 1.0f));
+    assert(near(vertex_runtime.varyings[0].data[0], 0.8f));
+    assert(near(vertex_runtime.varyings[0].data[1], 0.2f));
+    assert(near(vertex_runtime.varyings[0].data[2], 0.9f));
+    assert(near(vertex_runtime.varyings[0].data[3], 0.4f));
+
+    static const char duplicate_source[] =
+        "void main() { vec4 color = vec4(0.0); color.xx = vec2(1.0); "
+        "gl_FragColor = color; }";
+    ShaderModule duplicate_module = {};
+    assert(!fxgl::compile_glsl(
+        ShaderStage::Fragment, duplicate_source, duplicate_module));
+}
+
 } // namespace
 
 
@@ -1157,6 +1286,8 @@ int main()
     test_user_function_overload_errors();
     test_user_function_out_and_inout_parameters();
     test_user_function_stage_output_copyout();
+    test_matrix_column_indexing();
+    test_swizzle_assignments();
     test_user_function_out_inout_rejections();
     test_user_function_call_depth_is_bounded();
     test_non_terminating_shader_hits_execution_budget();

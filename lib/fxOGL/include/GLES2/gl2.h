@@ -252,6 +252,7 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_STENCIL_WRITEMASK 0x0B98
 #define GL_MAX_TEXTURE_SIZE 0x0D33
 #define GL_MAX_VIEWPORT_DIMS 0x0D3A
+#define GL_ALIASED_POINT_SIZE_RANGE 0x846D
 
 GLuint glCreateShader(GLenum type);
 void glDeleteShader(GLuint shader);

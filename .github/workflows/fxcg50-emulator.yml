@@ -1,0 +1,146 @@
+name: FX-CG50 emulated point-size smoke test
+
+on:
+  push:
+    branches:
+      - feature/glsl-point-size
+  workflow_dispatch:
+    inputs:
+      refresh_toolchain:
+        description: "Ignore the cached fxSDK/SH-4A toolchain layers and rebuild them"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fxcg50-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out CasioMini3D
+        uses: actions/checkout@v4
+
+      - name: Check out fxSDK toolchain recipe
+        uses: actions/checkout@v4
+        with:
+          repository: hexbinoct/casio-cg50
+          ref: deeaa627cd7e1aeb14339b14eb4f3a1f0375f07a
+          path: .cache/fxsdk-source
+          fetch-depth: 1
+
+      - name: Enable libstdc++ in fxSDK toolchain recipe
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          dockerfile = Path(".cache/fxsdk-source/tools/fxsdk-docker/Dockerfile")
+          source = dockerfile.read_text()
+          combined_step = "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc Lephenixnoir/gint"
+          if source.count(combined_step) != 1:
+              raise SystemExit("Unexpected fxSDK Dockerfile layout; refusing to patch it")
+          ordered_steps = "\n".join((
+              "RUN giteapc install -y Lephenixnoir/OpenLibm Vhex-Kernel-Core/fxlibc",
+              "RUN giteapc install -y Lephenixnoir/sh-elf-gcc",
+              "RUN giteapc install -y Lephenixnoir/gint",
+          ))
+          dockerfile.write_text(source.replace(combined_step, ordered_steps))
+          print("Applied the documented second GCC install after fxlibc")
+          PY
+
+      # BuildKit's GitHub Actions cache retains the completed Docker layers
+      # between workflow runs. Pinning the recipe above keeps the cache input
+      # stable; changes to the patched Dockerfile invalidate only affected layers.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build fxSDK and SH-4A toolchain image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .cache/fxsdk-source/tools/fxsdk-docker
+          file: .cache/fxsdk-source/tools/fxsdk-docker/Dockerfile
+          tags: fxsdk-ci:latest
+          load: true
+          push: false
+          cache-from: type=gha,scope=fxsdk-sh4a-deeaa627
+          cache-to: type=gha,mode=max,scope=fxsdk-sh4a-deeaa627
+          no-cache: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_toolchain }}
+
+      - name: Verify SH-4A freestanding C++ and math headers
+        run: |
+          docker run --rm -i fxsdk-ci sh -s <<'TOOLCHAIN_PROBE'
+          set -eu
+          command -v sh-elf-gcc
+          command -v sh-elf-g++
+          printf 'libstdc++ archive: '
+          sh-elf-g++ -print-file-name=libstdc++.a
+          printf 'libsupc++ archive: '
+          sh-elf-g++ -print-file-name=libsupc++.a
+
+          # fxSDK owns the canonical target include path. Do not guess it from
+          # -print-sysroot: the package's sysroot/include layout is versioned.
+          target_include="$(fxsdk path include)"
+          printf 'Target triple: %s\n' "$(sh-elf-g++ -dumpmachine)"
+          printf 'fxSDK target C headers: %s\n' "$target_include"
+          test -f "$target_include/math.h"
+
+          cat > /tmp/fxogl-cxx-probe.cpp <<'CPP'
+          #include <algorithm>
+          int main() {
+              int values[2] = {2, 1};
+              return values[0] > values[1] ? 0 : 1;
+          }
+          CPP
+          sh-elf-g++ -I"$target_include" -std=gnu++20 -ffreestanding -fno-exceptions -fsyntax-only /tmp/fxogl-cxx-probe.cpp
+
+          cat > /tmp/fxogl-cxx-math-probe.cpp <<'CPP'
+          #include <math.h>
+          int main() {
+              float x = sqrtf(2.0f);
+              return isfinite(floorf(x) + log2f(x)) ? 0 : 1;
+          }
+          CPP
+          sh-elf-g++ -I"$target_include" -D_GLIBCXX_INCLUDE_NEXT_C_HEADERS -std=gnu++20 -ffreestanding -fno-exceptions -fsyntax-only /tmp/fxogl-cxx-math-probe.cpp
+
+          cat > /tmp/fxogl-c-math-probe.c <<'C'
+          #include <math.h>
+          int main(void) {
+              float x = sqrtf(2.0f);
+              return isfinite(floorf(x) + log2f(x)) ? 0 : 1;
+          }
+          C
+          sh-elf-gcc -I"$target_include" -std=c11 -ffreestanding -fsyntax-only /tmp/fxogl-c-math-probe.c
+          TOOLCHAIN_PROBE
+
+      - name: Build point-size smoke add-in
+        run: |
+          docker run --rm --volume "$GITHUB_WORKSPACE:/work" --workdir /work/apps/fxGLMark/tests/emulator fxsdk-ci fxsdk build-cg
+          G3A="$(find apps/fxGLMark/tests/emulator -type f -name 'fxogl-point-size-smoke.g3a' -print -quit)"
+          test -n "$G3A"
+          printf 'FXSDK_G3A=%s\n' "$G3A" >> "$GITHUB_ENV"
+
+      - name: Check out Casio CG50 emulator
+        uses: actions/checkout@v4
+        with:
+          repository: Heath123/casio-emu
+          ref: master
+          path: .cache/casio-emu
+
+      - name: Build headless Casio emulator
+        run: |
+          cmake -S apps/fxGLMark/tests/emulator/casio-emu-headless -B build/casio-emu-headless -DCASIO_EMU_SOURCE="$GITHUB_WORKSPACE/.cache/casio-emu"
+          cmake --build build/casio-emu-headless --parallel 2
+
+      - name: Run fxOGL point-size smoke add-in in Casio emulator
+        run: build/casio-emu-headless/casio-emu-headless "$FXSDK_G3A"
+
+      - name: Upload emulated calculator screen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcg50-point-size-emulated-screen
+          path: emulated-screen.ppm
+          if-no-files-found: ignore

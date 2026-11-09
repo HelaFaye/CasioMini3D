@@ -91,11 +91,16 @@ enum class ShaderOp : uint8_t
     LoadVarying,
     LoadLocal,
     LoadPosition,
+    LoadPointSize,
     LoadFragmentColor,
     StoreVarying,
     StoreLocal,
     StorePosition,
+    StorePointSize,
     StoreFragmentColor,
+    StoreSwizzle,
+    LoadMatrixColumn,
+    StoreMatrixColumn,
     Construct,
     Swizzle,
     Negate,
@@ -172,6 +177,7 @@ struct ShaderRuntime
     float varying_ddx[GLSL_MAX_VARYINGS];
     float varying_ddy[GLSL_MAX_VARYINGS];
     ShaderValue position;
+    ShaderValue point_size;
     ShaderValue fragment_color;
 };
 

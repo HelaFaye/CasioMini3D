@@ -9,6 +9,9 @@
 namespace fxgl
 {
 
+/* Bounded software point rasterization range, also exposed by glGetFloatv. */
+constexpr float MAX_POINT_SIZE = 16.0f;
+
 struct RenderSurface
 {
     uint16_t *color;

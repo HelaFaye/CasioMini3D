@@ -1,9 +1,9 @@
 #include "glsl.hpp"
 
 #include <algorithm>
-#include <cmath>
+#include <math.h>
 #include <cstdio>
-#include <cstdlib>
+#include <stdlib.h>
 #include <cstring>
 
 namespace fxgl
@@ -112,8 +112,8 @@ public:
             std::memcpy(token.text, source_ + start, length);
             token.text[length] = '\0';
             char *end = nullptr;
-            token.number = std::strtof(token.text, &end);
-            if (!end || *end != '\0' || !std::isfinite(token.number))
+            token.number = ::strtof(token.text, &end);
+            if (!end || *end != '\0' || !isfinite(token.number))
             {
                 token.kind = TokenKind::Invalid;
                 copy_error_text(token.text, sizeof(token.text), "invalid number");
@@ -139,7 +139,7 @@ public:
             return token;
         }
 
-        if (std::strchr("{}();,=.+-*/.", c))
+        if (std::strchr("{}();,[]=.+-*/.", c))
         {
             token.kind = TokenKind::Punctuation;
             token.text[0] = c;
@@ -214,6 +214,7 @@ enum class Storage : uint8_t
     Varying,
     Local,
     Position,
+    PointSize,
     FragmentColor
 };
 
@@ -229,14 +230,15 @@ struct ResolvedVariable
 
 static constexpr uint16_t CALL_OUTPUT_TARGET_FULL = 0x8000;
 static constexpr uint16_t CALL_OUTPUT_TARGET_NONE = 0xffff;
-static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_SHIFT = 12;
-static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_MASK = 0x3000;
+static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_SHIFT = 11;
+static constexpr uint16_t CALL_OUTPUT_TARGET_STORAGE_MASK = 0x7800;
 
 enum class CallOutputStorage : uint8_t
 {
     Local,
     Varying,
     Position,
+    PointSize,
     FragmentColor
 };
 
@@ -703,6 +705,9 @@ private:
         if (stage_ == ShaderStage::Vertex &&
             std::strcmp(name, "gl_Position") == 0)
             return {Storage::Position, ShaderType::Vec4, 0, true};
+        if (stage_ == ShaderStage::Vertex &&
+            std::strcmp(name, "gl_PointSize") == 0)
+            return {Storage::PointSize, ShaderType::Float, 0, true};
         if (stage_ == ShaderStage::Fragment &&
             std::strcmp(name, "gl_FragColor") == 0)
             return {Storage::FragmentColor, ShaderType::Vec4, 0, true};
@@ -1265,6 +1270,8 @@ private:
                 return emit_simple(ShaderOp::StoreLocal, target.type, target.index);
             case Storage::Position:
                 return emit_simple(ShaderOp::StorePosition, target.type);
+            case Storage::PointSize:
+                return emit_simple(ShaderOp::StorePointSize, target.type);
             case Storage::FragmentColor:
                 return emit_simple(ShaderOp::StoreFragmentColor, target.type);
             default:
@@ -1284,21 +1291,81 @@ private:
         char name[GLSL_NAME_BYTES];
         std::snprintf(name, sizeof(name), "%s", current_.text);
         advance();
-        const ResolvedVariable target = lookup(name);
-        if (target.type == ShaderType::Invalid)
+        const ResolvedVariable base = lookup(name);
+        if (base.type == ShaderType::Invalid)
         {
             fail("assignment target is not declared");
             return;
         }
-        if ((target.storage == Storage::Local && !target.writable) ||
-            target.storage == Storage::Attribute ||
-            target.storage == Storage::Uniform ||
-            (target.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex) ||
-            (target.storage == Storage::Position && stage_ == ShaderStage::Fragment) ||
-            (target.storage == Storage::Varying && stage_ == ShaderStage::Fragment))
+        if ((base.storage == Storage::Local && !base.writable) ||
+            base.storage == Storage::Attribute ||
+            base.storage == Storage::Uniform ||
+            (base.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex) ||
+            (base.storage == Storage::Position && stage_ == ShaderStage::Fragment) ||
+            (base.storage == Storage::PointSize && stage_ != ShaderStage::Vertex) ||
+            (base.storage == Storage::Varying && stage_ == ShaderStage::Fragment))
         {
             fail("assignment target is read-only or unavailable in this shader stage");
             return;
+        }
+
+        ResolvedVariable target = base;
+        bool matrix_column_assignment = false;
+        uint8_t matrix_column = 0;
+        if (accept_punctuation('['))
+        {
+            const size_t dimension = matrix_dimension(base.type);
+            if (dimension == 0 || base.storage != Storage::Local || !base.writable)
+            {
+                fail("matrix column assignment requires a writable local matrix");
+                return;
+            }
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 0.0f || current_.number >= dimension)
+            {
+                fail("matrix column index must be a constant in range");
+                return;
+            }
+            matrix_column = static_cast<uint8_t>(current_.number);
+            advance();
+            expect_punctuation(']');
+            matrix_column_assignment = true;
+            target.type = vector_type(dimension);
+            emit_simple(ShaderOp::LoadLocal, base.type, base.index);
+        }
+        const bool swizzle_assignment = !matrix_column_assignment && is_punctuation('.');
+        if (swizzle_assignment)
+        {
+            if (!is_any_vector(base.type))
+            {
+                fail("swizzle assignment requires a vector target");
+                return;
+            }
+            const size_t instruction_start = module_.instruction_count;
+            ShaderType swizzle_type = base.type;
+            expression_lvalue_ = base;
+            parse_swizzle(swizzle_type);
+            target = expression_lvalue_;
+            module_.instruction_count = instruction_start;
+            expression_lvalue_ = {};
+            if (failed_)
+                return;
+            if (!target.is_swizzle || target.type != swizzle_type)
+            {
+                fail("swizzle assignment target is not writable");
+                return;
+            }
+            for (size_t i = 0; i < component_count(swizzle_type); ++i)
+            {
+                for (size_t j = i + 1; j < component_count(swizzle_type); ++j)
+                {
+                    if (target.components[i] == target.components[j])
+                    {
+                        fail("swizzle assignment cannot write a component more than once");
+                        return;
+                    }
+                }
+            }
         }
 
         expect_punctuation('=');
@@ -1310,7 +1377,33 @@ private:
         }
         if (consume_semicolon)
             expect_punctuation(';');
-        emit_assignment_store(target);
+
+        if (matrix_column_assignment)
+        {
+            ShaderInstruction instruction = {};
+            instruction.op = ShaderOp::StoreMatrixColumn;
+            instruction.type = base.type;
+            instruction.index = base.index;
+            instruction.argument_count = matrix_column;
+            emit(instruction);
+            return;
+        }
+
+        if (!swizzle_assignment)
+        {
+            emit_assignment_store(base);
+            return;
+        }
+
+        ShaderInstruction instruction = {};
+        instruction.op = ShaderOp::StoreSwizzle;
+        instruction.type = base.type;
+        instruction.index = base.index;
+        instruction.argument_count = static_cast<uint8_t>(component_count(target.type));
+        instruction.literal = static_cast<float>(base.storage);
+        for (size_t i = 0; i < instruction.argument_count; ++i)
+            instruction.swizzle[i] = target.components[i];
+        emit(instruction);
     }
 
     void parse_for_increment()
@@ -1839,8 +1932,10 @@ private:
             return;
         }
         if ((variable.storage == Storage::Position ||
+             variable.storage == Storage::PointSize ||
              variable.storage == Storage::FragmentColor) &&
             ((variable.storage == Storage::Position && stage_ != ShaderStage::Vertex) ||
+             (variable.storage == Storage::PointSize && stage_ != ShaderStage::Vertex) ||
              (variable.storage == Storage::FragmentColor && stage_ != ShaderStage::Fragment)))
         {
             fail("built-in variable is unavailable in this shader stage");
@@ -1857,10 +1952,39 @@ private:
             case Storage::Varying: op = ShaderOp::LoadVarying; break;
             case Storage::Local: op = ShaderOp::LoadLocal; break;
             case Storage::Position: op = ShaderOp::LoadPosition; break;
+            case Storage::PointSize: op = ShaderOp::LoadPointSize; break;
             case Storage::FragmentColor: op = ShaderOp::LoadFragmentColor; break;
         }
         emit_simple(op, variable.type, variable.index);
         result_type = variable.type;
+        if (is_punctuation('['))
+        {
+            const size_t dimension = matrix_dimension(variable.type);
+            if (dimension == 0)
+            {
+                fail("indexing is currently supported only for matrices");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            advance();
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 0.0f || current_.number >= dimension)
+            {
+                fail("matrix column index must be a constant in range");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            const uint8_t column = static_cast<uint8_t>(current_.number);
+            advance();
+            expect_punctuation(']');
+            ShaderInstruction instruction = {};
+            instruction.op = ShaderOp::LoadMatrixColumn;
+            instruction.type = vector_type(dimension);
+            instruction.index = column;
+            emit(instruction);
+            result_type = instruction.type;
+            expression_lvalue_ = {};
+        }
         parse_swizzle(result_type);
     }
 
@@ -2299,6 +2423,10 @@ private:
                         storage_bits = static_cast<uint16_t>(
                             CallOutputStorage::Position) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
                         break;
+                    case Storage::PointSize:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::PointSize) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
                     case Storage::FragmentColor:
                         storage_bits = static_cast<uint16_t>(
                             CallOutputStorage::FragmentColor) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
@@ -2612,6 +2740,8 @@ static ShaderValue *call_output_target_value(
             return index < GLSL_MAX_VARYINGS ? &runtime.varyings[index] : nullptr;
         case CallOutputStorage::Position:
             return index == 0 ? &runtime.position : nullptr;
+        case CallOutputStorage::PointSize:
+            return index == 0 ? &runtime.point_size : nullptr;
         case CallOutputStorage::FragmentColor:
             return index == 0 ? &runtime.fragment_color : nullptr;
         default:
@@ -2648,6 +2778,8 @@ static ShaderType call_output_target_declared_type(
         case CallOutputStorage::Position:
         case CallOutputStorage::FragmentColor:
             return index == 0 ? ShaderType::Vec4 : ShaderType::Invalid;
+        case CallOutputStorage::PointSize:
+            return index == 0 ? ShaderType::Float : ShaderType::Invalid;
         default:
             return ShaderType::Invalid;
     }
@@ -2775,7 +2907,7 @@ static bool finite_value(const ShaderValue& value)
 {
     const size_t count = component_count(value.type);
     for (size_t i = 0; i < count; ++i)
-        if (!std::isfinite(value.data[i]))
+        if (!isfinite(value.data[i]))
             return false;
     return true;
 }
@@ -2845,6 +2977,7 @@ void prepare_shader_runtime(
     // A reused output must not make an invocation appear successful when
     // its shader failed to write the required stage result.
     runtime.position.type = ShaderType::Invalid;
+    runtime.point_size.type = ShaderType::Invalid;
     runtime.fragment_color.type = ShaderType::Invalid;
 }
 
@@ -2940,6 +3073,16 @@ bool execute_glsl(
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
+            case ShaderOp::LoadPointSize:
+                if (instruction.type != ShaderType::Float)
+                    return false;
+                if (runtime.point_size.type == ShaderType::Float)
+                    copy_shader_value(result, runtime.point_size);
+                else
+                    set_zero_value(result, ShaderType::Float);
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
             case ShaderOp::LoadFragmentColor:
                 if (instruction.type != ShaderType::Vec4)
                     return false;
@@ -2976,12 +3119,110 @@ bool execute_glsl(
                     return false;
                 copy_shader_value(runtime.position, a);
                 break;
+            case ShaderOp::StorePointSize:
+                if (!pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Float)
+                    return false;
+                copy_shader_value(runtime.point_size, a);
+                break;
             case ShaderOp::StoreFragmentColor:
                 if (!pop_value(stack, stack_size, a) ||
                     a.type != ShaderType::Vec4)
                     return false;
                 copy_shader_value(runtime.fragment_color, a);
                 break;
+
+            case ShaderOp::LoadMatrixColumn:
+            {
+                if (!pop_value(stack, stack_size, a))
+                    return false;
+                const size_t dimension = matrix_dimension(a.type);
+                if (dimension == 0 || instruction.index >= dimension ||
+                    instruction.type != vector_type(dimension))
+                    return false;
+                set_zero_value(result, instruction.type);
+                const size_t offset = static_cast<size_t>(instruction.index) * dimension;
+                for (size_t row = 0; row < dimension; ++row)
+                    result.data[row] = a.data[offset + row];
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+            }
+
+            case ShaderOp::StoreMatrixColumn:
+            {
+                if (!pop_value(stack, stack_size, a) ||
+                    !pop_value(stack, stack_size, b) ||
+                    instruction.index >= GLSL_MAX_LOCALS)
+                    return false;
+                const size_t dimension = matrix_dimension(instruction.type);
+                if (dimension == 0 || instruction.argument_count >= dimension ||
+                    b.type != instruction.type ||
+                    a.type != vector_type(dimension))
+                    return false;
+                const size_t offset = static_cast<size_t>(instruction.argument_count) * dimension;
+                for (size_t row = 0; row < dimension; ++row)
+                    b.data[offset + row] = a.data[row];
+                copy_shader_value(locals[instruction.index], b);
+                break;
+            }
+
+            case ShaderOp::StoreSwizzle:
+            {
+                if (!pop_value(stack, stack_size, a) ||
+                    !is_any_vector(instruction.type) ||
+                    instruction.argument_count == 0 ||
+                    instruction.argument_count > 4 ||
+                    a.type != vector_type_for(
+                        instruction.argument_count,
+                        vector_base_type(instruction.type)))
+                    return false;
+
+                ShaderValue *destination = nullptr;
+                const Storage storage = static_cast<Storage>(
+                    static_cast<uint8_t>(instruction.literal));
+                switch (storage)
+                {
+                    case Storage::Local:
+                        if (instruction.index >= GLSL_MAX_LOCALS)
+                            return false;
+                        destination = &locals[instruction.index];
+                        break;
+                    case Storage::Varying:
+                        if (instruction.index >= GLSL_MAX_VARYINGS)
+                            return false;
+                        destination = &runtime.varyings[instruction.index];
+                        break;
+                    case Storage::Position:
+                        destination = &runtime.position;
+                        break;
+                    case Storage::FragmentColor:
+                        destination = &runtime.fragment_color;
+                        break;
+                    default:
+                        return false;
+                }
+                if (destination->type != instruction.type)
+                    return false;
+                for (size_t i = 0; i < instruction.argument_count; ++i)
+                {
+                    const size_t component = instruction.swizzle[i];
+                    if (component >= component_count(instruction.type))
+                        return false;
+                    for (size_t j = 0; j < i; ++j)
+                    {
+                        if (instruction.swizzle[j] == component)
+                            return false;
+                    }
+                    destination->data[component] = a.data[i];
+                    if (component < 4 && i < 4)
+                    {
+                        destination->ddx[component] = a.ddx[i];
+                        destination->ddy[component] = a.ddy[i];
+                    }
+                }
+                break;
+            }
 
             case ShaderOp::BranchIfFalse:
                 if (!pop_value(stack, stack_size, a) ||
@@ -3493,7 +3734,7 @@ bool execute_glsl(
                 set_zero_value(result, ShaderType::Float);
                 for (size_t i = 0; i < component_count(a.type); ++i)
                     result.data[0] += a.data[i] * a.data[i];
-                result.data[0] = std::sqrt(result.data[0]);
+                result.data[0] = sqrtf(result.data[0]);
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -3507,7 +3748,7 @@ bool execute_glsl(
                     for (size_t i = 0; i < component_count(a.type); ++i)
                         length_squared += a.data[i] * a.data[i];
                     const float inverse_length = length_squared > 0.0f
-                        ? 1.0f / std::sqrt(length_squared) : 0.0f;
+                        ? 1.0f / sqrtf(length_squared) : 0.0f;
                     for (size_t i = 0; i < component_count(a.type); ++i)
                         result.data[i] *= inverse_length;
                 }
@@ -3637,27 +3878,27 @@ bool execute_glsl(
                             float output = 0.0f;
                             switch (function)
                             {
-                                case BuiltinFunction::Sin: output = std::sin(value); break;
-                                case BuiltinFunction::Cos: output = std::cos(value); break;
-                                case BuiltinFunction::Tan: output = std::tan(value); break;
-                                case BuiltinFunction::Asin: output = std::asin(value); break;
-                                case BuiltinFunction::Acos: output = std::acos(value); break;
-                                case BuiltinFunction::Atan: output = std::atan(value); break;
-                                case BuiltinFunction::Exp: output = std::exp(value); break;
-                                case BuiltinFunction::Log: output = std::log(value); break;
-                                case BuiltinFunction::Exp2: output = std::exp2(value); break;
-                                case BuiltinFunction::Log2: output = std::log2(value); break;
-                                case BuiltinFunction::Sqrt: output = std::sqrt(value); break;
+                                case BuiltinFunction::Sin: output = sinf(value); break;
+                                case BuiltinFunction::Cos: output = cosf(value); break;
+                                case BuiltinFunction::Tan: output = tanf(value); break;
+                                case BuiltinFunction::Asin: output = asinf(value); break;
+                                case BuiltinFunction::Acos: output = acosf(value); break;
+                                case BuiltinFunction::Atan: output = atanf(value); break;
+                                case BuiltinFunction::Exp: output = expf(value); break;
+                                case BuiltinFunction::Log: output = logf(value); break;
+                                case BuiltinFunction::Exp2: output = exp2f(value); break;
+                                case BuiltinFunction::Log2: output = log2f(value); break;
+                                case BuiltinFunction::Sqrt: output = sqrtf(value); break;
                                 case BuiltinFunction::InverseSqrt:
-                                    output = value > 0.0f ? 1.0f / std::sqrt(value) : 0.0f;
+                                    output = value > 0.0f ? 1.0f / sqrtf(value) : 0.0f;
                                     break;
-                                case BuiltinFunction::Abs: output = std::fabs(value); break;
+                                case BuiltinFunction::Abs: output = fabsf(value); break;
                                 case BuiltinFunction::Sign:
                                     output = value > 0.0f ? 1.0f : value < 0.0f ? -1.0f : 0.0f;
                                     break;
-                                case BuiltinFunction::Floor: output = std::floor(value); break;
-                                case BuiltinFunction::Ceil: output = std::ceil(value); break;
-                                case BuiltinFunction::Fract: output = value - std::floor(value); break;
+                                case BuiltinFunction::Floor: output = floorf(value); break;
+                                case BuiltinFunction::Ceil: output = ceilf(value); break;
+                                case BuiltinFunction::Fract: output = value - floorf(value); break;
                                 case BuiltinFunction::Radians:
                                     output = value * 0.01745329251994329577f;
                                     break;
@@ -3702,11 +3943,11 @@ bool execute_glsl(
                             float output = 0.0f;
                             switch (function)
                             {
-                                case BuiltinFunction::Atan2: output = std::atan2(x, y); break;
-                                case BuiltinFunction::Pow: output = std::pow(x, y); break;
+                                case BuiltinFunction::Atan2: output = atan2f(x, y); break;
+                                case BuiltinFunction::Pow: output = powf(x, y); break;
                                 case BuiltinFunction::Mod:
                                     output = y == 0.0f ? 0.0f :
-                                        x - y * std::floor(x / y);
+                                        x - y * floorf(x / y);
                                     break;
                                 case BuiltinFunction::Step: output = x < y ? 0.0f : 1.0f; break;
                                 default: return false;
@@ -3727,7 +3968,7 @@ bool execute_glsl(
                             const float delta = args[0].data[i] - args[1].data[i];
                             result.data[0] += delta * delta;
                         }
-                        result.data[0] = std::sqrt(result.data[0]);
+                        result.data[0] = sqrtf(result.data[0]);
                         break;
 
                     case BuiltinFunction::Cross:
@@ -3796,7 +4037,7 @@ bool execute_glsl(
                             }
                             else
                             {
-                                const float factor = eta * dot + std::sqrt(k);
+                                const float factor = eta * dot + sqrtf(k);
                                 for (size_t i = 0; i < component_count(args[0].type); ++i)
                                     result.data[i] = eta * args[0].data[i] -
                                         factor * args[1].data[i];

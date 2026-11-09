@@ -4,9 +4,9 @@
 #include "context_internal.hpp"
 
 #include <algorithm>
-#include <cmath>
+#include <math.h>
 #include <cstdint>
-#include <cstdlib>
+#include <stdlib.h>
 #include <limits>
 #include <cstring>
 #include <limits>
@@ -304,7 +304,7 @@ static void release_texture_mips(TextureObject& object)
 {
     for (TextureMipObject& level : object.mip_levels)
     {
-        std::free(level.pixels);
+        ::free(level.pixels);
         level = {};
     }
 }
@@ -330,7 +330,7 @@ static void destroy_textures(Context& context)
 {
     for (TextureObject& object : context.textures)
     {
-        std::free(object.pixels);
+        ::free(object.pixels);
         release_texture_mips(object);
         object = {};
     }
@@ -564,7 +564,7 @@ static void destroy_framebuffer_resources(Context& context)
 {
     for (RenderbufferObject& renderbuffer : context.renderbuffers)
     {
-        std::free(renderbuffer.storage);
+        ::free(renderbuffer.storage);
         renderbuffer = {};
     }
     for (FramebufferObject& framebuffer : context.framebuffers)
@@ -590,7 +590,7 @@ static void destroy_buffers(Context& context)
 {
     for (BufferObject& object : context.buffers)
     {
-        std::free(object.data);
+        ::free(object.data);
         object = {};
     }
     context.buffer_bytes = 0;
@@ -683,7 +683,7 @@ static bool *capability(GLenum cap)
 
 static GLfloat clamp01(GLfloat value)
 {
-    if (!std::isfinite(value))
+    if (!isfinite(value))
         return 0.0f;
     return std::max(0.0f, std::min(1.0f, value));
 }
@@ -866,7 +866,7 @@ static bool fetch_vertex_attribute(
             element + i * component_bytes,
             attribute.type,
             attribute.normalized);
-        if (!std::isfinite(value.data[i]))
+        if (!isfinite(value.data[i]))
             return false;
     }
     return true;
@@ -964,9 +964,9 @@ static bool find_texture_passthrough(
 
     const float unit_value =
         program.uniform_values[uniform_location].data[0];
-    if (!std::isfinite(unit_value) || unit_value < 0.0f ||
+    if (!isfinite(unit_value) || unit_value < 0.0f ||
         unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
-        std::floor(unit_value) != unit_value)
+        floorf(unit_value) != unit_value)
         return false;
 
     const size_t offset =
@@ -1056,9 +1056,9 @@ static void initialize_draw_invocation(
         }
 
         const float unit_value = program.uniform_values[location].data[0];
-        if (!std::isfinite(unit_value) || unit_value < 0.0f ||
+        if (!isfinite(unit_value) || unit_value < 0.0f ||
             unit_value >= static_cast<float>(FXGL_MAX_TEXTURE_UNITS) ||
-            std::floor(unit_value) != unit_value)
+            floorf(unit_value) != unit_value)
         {
             invocation.varying_derivatives = true;
             continue;
@@ -1114,13 +1114,13 @@ static bool sample_bound_texture(
         }
     }
 
-    if (!std::isfinite(u) || !std::isfinite(v))
+    if (!isfinite(u) || !isfinite(v))
         return false;
     // Non-mipmapped nearest/linear filtering does not consume derivatives.
     // Avoid four finite checks on the common nearest-texture path.
     if (cached.requires_derivatives &&
-        (!std::isfinite(dudx) || !std::isfinite(dvdx) ||
-         !std::isfinite(dudy) || !std::isfinite(dvdy)))
+        (!isfinite(dudx) || !isfinite(dvdx) ||
+         !isfinite(dudy) || !isfinite(dvdy)))
         return false;
 
     if (sampler.filter == gfx::TextureFilter::Nearest &&
@@ -1140,14 +1140,14 @@ static bool sample_bound_texture(
     float lod = 0.0f;
     if (cached.requires_derivatives)
     {
-        const float rho_x = std::sqrt(
+        const float rho_x = sqrtf(
             (dudx * texture.width) * (dudx * texture.width) +
             (dvdx * texture.height) * (dvdx * texture.height));
-        const float rho_y = std::sqrt(
+        const float rho_y = sqrtf(
             (dudy * texture.width) * (dudy * texture.width) +
             (dvdy * texture.height) * (dvdy * texture.height));
         const float rho = std::max(rho_x, rho_y);
-        lod = rho > 0.0f ? std::log2(rho) : 0.0f;
+        lod = rho > 0.0f ? log2f(rho) : 0.0f;
     }
 
     const bool minifying = lod > 0.0f;
@@ -1168,8 +1168,8 @@ static bool sample_bound_texture(
     }
 
     const double scale = 65536.0;
-    const double scaled_u = std::floor(texel_u * scale);
-    const double scaled_v = std::floor(texel_v * scale);
+    const double scaled_u = floor(texel_u * scale);
+    const double scaled_v = floor(texel_v * scale);
     const double minimum = static_cast<double>(
         std::numeric_limits<int64_t>::min());
     const double maximum = static_cast<double>(
@@ -1337,6 +1337,10 @@ static bool execute_vertex(
         runtime.position.data[2],
         runtime.position.data[3]
     };
+    /* An unwritten point size is undefined by GLSL ES; retain the renderer's
+       established one-pixel behavior as a deterministic subset fallback. */
+    output.point_size = runtime.point_size.type == fxgl::ShaderType::Float
+        ? runtime.point_size.data[0] : 1.0f;
 
     for (size_t i = 0; i < module.varying_count; ++i)
     {
@@ -1615,7 +1619,7 @@ void glDeleteBuffers(GLsizei n, const GLuint *buffers)
         if (object->alive)
         {
             g_context.buffer_bytes -= object->size;
-            std::free(object->data);
+            ::free(object->data);
         }
         *object = {};
     }
@@ -1676,7 +1680,7 @@ void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usa
     uint8_t *new_data = nullptr;
     if (new_size > 0)
     {
-        new_data = static_cast<uint8_t *>(std::malloc(new_size));
+        new_data = static_cast<uint8_t *>(::malloc(new_size));
         if (!new_data)
         {
             set_error(GL_OUT_OF_MEMORY);
@@ -1688,7 +1692,7 @@ void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usa
             std::memset(new_data, 0, new_size);
     }
 
-    std::free(object->data);
+    ::free(object->data);
     object->data = new_data;
     object->size = new_size;
     object->usage = usage;
@@ -2285,7 +2289,7 @@ void glDeleteTextures(GLsizei n, const GLuint *textures)
         if (object->alive)
         {
             g_context.texture_bytes -= object->bytes;
-            std::free(object->pixels);
+            ::free(object->pixels);
             release_texture_mips(*object);
         }
         *object = {};
@@ -2594,7 +2598,7 @@ void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers)
         if (object->alive)
         {
             g_context.renderbuffer_bytes -= object->bytes;
-            std::free(object->storage);
+            ::free(object->storage);
         }
         *object = {};
     }
@@ -2674,7 +2678,7 @@ void glRenderbufferStorage(
     uint8_t *storage = nullptr;
     if (new_bytes > 0)
     {
-        storage = static_cast<uint8_t *>(std::malloc(new_bytes));
+        storage = static_cast<uint8_t *>(::malloc(new_bytes));
         if (!storage)
         {
             set_error(GL_OUT_OF_MEMORY);
@@ -2683,7 +2687,7 @@ void glRenderbufferStorage(
         std::memset(storage, 0, new_bytes);
     }
 
-    std::free(object->storage);
+    ::free(object->storage);
     object->storage = storage;
     object->bytes = new_bytes;
     object->width = width;
@@ -2951,7 +2955,7 @@ void glTexImage2D(
     uint16_t *new_pixels = nullptr;
     if (new_bytes > 0)
     {
-        new_pixels = static_cast<uint16_t *>(std::malloc(new_bytes));
+        new_pixels = static_cast<uint16_t *>(::malloc(new_bytes));
         if (!new_pixels)
         {
             set_error(GL_OUT_OF_MEMORY);
@@ -2978,7 +2982,7 @@ void glTexImage2D(
     if (level == 0)
     {
         // Replacing the base image invalidates the entire lower mip chain.
-        std::free(object->pixels);
+        ::free(object->pixels);
         release_texture_mips(*object);
         object->pixels = new_pixels;
         object->width = static_cast<uint16_t>(width);
@@ -2988,7 +2992,7 @@ void glTexImage2D(
     }
     else
     {
-        std::free(mip->pixels);
+        ::free(mip->pixels);
         mip->pixels = new_pixels;
         mip->width = static_cast<uint16_t>(width);
         mip->height = static_cast<uint16_t>(height);
@@ -3100,16 +3104,16 @@ void glGenerateMipmap(GLenum target)
         if (bytes > FXGL_MAX_TEXTURE_BYTES - retained - generated_bytes)
         {
             for (TextureMipObject& mip : generated)
-                std::free(mip.pixels);
+                ::free(mip.pixels);
             set_error(GL_OUT_OF_MEMORY);
             return;
         }
 
-        uint16_t *destination = static_cast<uint16_t *>(std::malloc(bytes));
+        uint16_t *destination = static_cast<uint16_t *>(::malloc(bytes));
         if (!destination)
         {
             for (TextureMipObject& mip : generated)
-                std::free(mip.pixels);
+                ::free(mip.pixels);
             set_error(GL_OUT_OF_MEMORY);
             return;
         }
@@ -3780,6 +3784,10 @@ void glGetIntegerv(GLenum pname, GLint *data)
             data[0] = g_context.surface.width;
             data[1] = g_context.surface.height;
             break;
+        case GL_ALIASED_POINT_SIZE_RANGE:
+            data[0] = 1;
+            data[1] = static_cast<GLint>(fxgl::MAX_POINT_SIZE);
+            break;
         default:
             set_error(GL_INVALID_ENUM);
             break;
@@ -3802,7 +3810,8 @@ void glGetBooleanv(GLenum pname, GLboolean *data)
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
-                      (pname == GL_MAX_VIEWPORT_DIMS ? 2 : 1);
+                      (pname == GL_MAX_VIEWPORT_DIMS ||
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
     for (int i = 0; i < count; ++i)
         data[i] = values[i] ? GL_TRUE : GL_FALSE;
 }
@@ -3841,7 +3850,8 @@ void glGetFloatv(GLenum pname, GLfloat *data)
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
-                      (pname == GL_MAX_VIEWPORT_DIMS ? 2 : 1);
+                      (pname == GL_MAX_VIEWPORT_DIMS ||
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
     for (int i = 0; i < count; ++i)
         data[i] = static_cast<GLfloat>(values[i]);
 }

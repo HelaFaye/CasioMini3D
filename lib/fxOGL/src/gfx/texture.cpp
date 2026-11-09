@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 #include <algorithm>
-#include <cmath>
+#include <math.h>
 #include <cstdint>
 
 namespace gfx
@@ -302,7 +302,7 @@ static uint16_t sample_texture_impl(
     const TextureSampler& sampler,
     float lod)
 {
-    if (!std::isfinite(lod))
+    if (!isfinite(lod))
         return 0;
 
     if (lod <= 0.0f)
@@ -343,13 +343,13 @@ static uint16_t sample_texture_impl(
 
     const float maximum_lod = static_cast<float>(required_levels);
     const float clamped_lod = std::max(0.0f, std::min(lod, maximum_lod));
-    const size_t lower_level = static_cast<size_t>(std::floor(clamped_lod));
+    const size_t lower_level = static_cast<size_t>(floorf(clamped_lod));
     const bool mip_nearest =
         sampler.min_filter == TextureMinFilter::NearestMipmapNearest ||
         sampler.min_filter == TextureMinFilter::LinearMipmapNearest;
     const size_t selected_level = std::min(
         mip_nearest
-            ? static_cast<size_t>(std::floor(clamped_lod + 0.5f))
+            ? static_cast<size_t>(floorf(clamped_lod + 0.5f))
             : lower_level,
         required_levels);
     const TextureFilter filter = linear_texel
@@ -493,7 +493,7 @@ bool sample_texture_nearest_validated(
 {
     if (sampler.filter != TextureFilter::Nearest ||
         sampler.min_filter != TextureMinFilter::Nearest ||
-        !std::isfinite(u) || !std::isfinite(v))
+        !isfinite(u) || !isfinite(v))
         return false;
 
     // The glmark2 32x32 repeat/repeat texture is the hottest GLES case.
