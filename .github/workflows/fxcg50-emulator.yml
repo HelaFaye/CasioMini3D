@@ -124,14 +124,15 @@ jobs:
       - name: Inspect target ELF symbols around observed SH-4 PC
         run: |
           docker run --rm --volume "$GITHUB_WORKSPACE:/work" --workdir /work fxsdk-ci sh -c '
-            ELF="$(find apps/fxGLMark/tests/emulator/build-cg -type f -name "*.elf" -print -quit)"
+            ELF="$(find apps/fxGLMark/tests/emulator/build-cg -type f -name 'fxogl_emulator_regression*' ! -name '*.g3a' -print -quit)"
             if [ -z "$ELF" ]; then
-              echo "No target ELF found"
+              echo "No target executable found"
               find apps/fxGLMark/tests/emulator/build-cg -maxdepth 3 -type f -print
               exit 1
             fi
             echo "FXSDK_ELF=$ELF"
-            sh-elf-nm -n -C "$ELF" | awk "$1 >= \"00300600\" && $1 <= \"00300900\""
+            sh-elf-nm -n -C "$ELF" | grep -E '^00300[6-9][[:xdigit:]]{2} '
+            sh-elf-addr2line -f -C -e "$ELF" 0x003006b6 0x00300750 0x00300768 0x00300798
             sh-elf-objdump -d -C --start-address=0x00300600 --stop-address=0x00300900 "$ELF"
           '
 
