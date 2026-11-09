@@ -69,7 +69,7 @@ jobs:
         run: |
           docker run --rm fxsdk-ci sh -c 'set -eu; command -v sh-elf-gcc; command -v sh-elf-g++; libstdcxx="$(sh-elf-g++ -print-file-name=libstdc++.a)"; test "$libstdcxx" != libstdc++.a; test -f "$libstdcxx"'
           printf '%s\n' '#include <algorithm>' 'int main() { int values[2] = {2, 1}; return values[0] > values[1] ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh-elf-g++ -std=gnu++20 -ffreestanding -fno-exceptions -x c++ -fsyntax-only -
-          printf '%s\n' '#include <math.h>' 'int main() { float x = sqrtf(2.0f); return isfinite(floorf(x) + log2f(x)) ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh -c 'sysroot="$(sh-elf-g++ -print-sysroot)"; test -f "$sysroot/include/math.h"; sh-elf-g++ -I"$sysroot/include" -std=gnu++20 -ffreestanding -fno-exceptions -x c++ -fsyntax-only -'
+          printf '%s\n' '#include <math.h>' 'int main() { float x = sqrtf(2.0f); return isfinite(floorf(x) + log2f(x)) ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh -c 'set -eu; sysroot="$(sh-elf-g++ -print-sysroot)"; triple="$(sh-elf-g++ -dumpmachine)"; target_include="$sysroot/$triple/include"; test -f "$target_include/math.h"; printf "Target triple: %s\nTarget C headers: %s\n" "$triple" "$target_include"; sh-elf-g++ -I"$target_include" -std=gnu++20 -ffreestanding -fno-exceptions -x c++ -fsyntax-only -'
           printf '%s\n' '#include <math.h>' 'int main(void) { float x = sqrtf(2.0f); return isfinite(floorf(x) + log2f(x)) ? 0 : 1; }' | docker run --rm -i fxsdk-ci sh-elf-gcc -std=c11 -ffreestanding -x c -fsyntax-only -
 
       - name: Build point-size smoke add-in
