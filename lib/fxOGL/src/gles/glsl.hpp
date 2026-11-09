@@ -67,6 +67,10 @@ struct ShaderVariable
     uint8_t index;
     /* Used only for function parameters. In is the default qualifier. */
     ShaderParameterQualifier qualifier;
+    /* Local arrays only: element count, zero for non-arrays. An array of N
+       elements occupies N consecutive local slots starting at index; the
+       slots after the first are recorded as unnamed element entries. */
+    uint8_t array_size;
 };
 
 struct ShaderFunction
@@ -90,11 +94,16 @@ enum class ShaderOp : uint8_t
     LoadUniform,
     LoadVarying,
     LoadLocal,
+    /* Pops an int index; index is the array's first slot, argument_count
+       its element count. Out-of-range indices fail the invocation. */
+    LoadLocalIndexed,
     LoadPosition,
     LoadPointSize,
     LoadFragmentColor,
     StoreVarying,
     StoreLocal,
+    /* Pops the value, then the int index pushed before it. */
+    StoreLocalIndexed,
     StorePosition,
     StorePointSize,
     StoreFragmentColor,
@@ -204,8 +213,16 @@ using TextureSampleFunction = bool (*)(
    global outputs are not supported as copy-out targets. Input/output aliases
    follow value-return semantics; overlapping output destinations are rejected.
    Built-in function dispatch remains on its existing fixed-signature path.
-   Arrays, structs, do-while, switch, preprocessor directives and precision
-   qualifiers other than ordinary precision statements remain unsupported. */
+   One-dimensional local arrays (`float a[4];`, no initializer) of any
+   non-sampler type are supported. Elements are read and written with
+   constant integer indices, including element swizzles, matrix columns and
+   out/inout arguments, or with int index expressions for whole-element
+   reads and writes. Dynamic indices are bounds-checked at run time and an
+   out-of-range access fails the invocation. Each element uses one local
+   slot. Arrays as function parameters or return values, whole-array
+   assignment, uniform/attribute/varying arrays, structs, do-while, switch,
+   preprocessor directives and precision qualifiers other than ordinary
+   precision statements remain unsupported. */
 bool compile_glsl(
     ShaderStage stage,
     const char *source,
