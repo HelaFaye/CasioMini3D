@@ -98,6 +98,7 @@ enum class ShaderOp : uint8_t
     StorePosition,
     StorePointSize,
     StoreFragmentColor,
+    StoreSwizzle,
     Construct,
     Swizzle,
     Negate,
