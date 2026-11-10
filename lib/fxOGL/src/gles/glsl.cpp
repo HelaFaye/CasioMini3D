@@ -834,7 +834,9 @@ private:
             for (size_t parameter = 0; parameter < parameter_count; ++parameter)
             {
                 if (function.parameters[parameter].type !=
-                    parameters[parameter].type)
+                        parameters[parameter].type ||
+                    function.parameters[parameter].array_size !=
+                        parameters[parameter].array_size)
                 {
                     matches = false;
                     break;
@@ -846,9 +848,13 @@ private:
         return -1;
     }
 
+    /* argument_arrays[i] is the element count of an array argument that
+       starts at position i (its elements occupy positions i..i+n-1), else 0.
+       Arrays must match array parameters of the same size exactly. */
     int find_function(
         const char *name,
         const ShaderType *argument_types,
+        const uint8_t *argument_arrays,
         size_t argument_count) const
     {
         for (size_t i = 0; i < module_.function_count; ++i)
@@ -861,7 +867,9 @@ private:
             bool matches = true;
             for (size_t argument = 0; argument < argument_count; ++argument)
             {
-                if (function.parameters[argument].type != argument_types[argument])
+                if (function.parameters[argument].type != argument_types[argument] ||
+                    function.parameters[argument].array_size !=
+                        argument_arrays[argument])
                 {
                     matches = false;
                     break;
@@ -1049,12 +1057,44 @@ private:
                     return;
                 }
 
+                size_t parameter_slots = 1;
                 if (accept_punctuation('['))
                 {
-                    fail("array parameters are not supported");
-                    return;
+                    // An array parameter expands to one VM parameter per
+                    // element in consecutive slots, laid out like a local
+                    // array: the first carries the name and size.
+                    if (parameter_type == ShaderType::Sampler2D)
+                    {
+                        fail("sampler arrays are not supported");
+                        return;
+                    }
+                    if (current_.kind != TokenKind::Number || !current_.integer ||
+                        current_.number < 1.0f ||
+                        current_.number > static_cast<float>(GLSL_MAX_PARAMETERS))
+                    {
+                        fail("array parameter size must be a positive integer constant");
+                        return;
+                    }
+                    parameter_slots = static_cast<size_t>(current_.number);
+                    advance();
+                    if (!expect_punctuation(']'))
+                        return;
+                    if (parameter_count + parameter_slots > GLSL_MAX_PARAMETERS)
+                    {
+                        fail("function parameter limit exceeded (array elements count individually)");
+                        return;
+                    }
+                    parameter.array_size = static_cast<uint8_t>(parameter_slots);
+                    for (size_t element = 1; element < parameter_slots; ++element)
+                    {
+                        ShaderVariable& slot = parameters[parameter_count + element];
+                        slot = {};
+                        slot.type = parameter_type;
+                        slot.index = static_cast<uint8_t>(parameter_count + element);
+                        slot.qualifier = qualifier;
+                    }
                 }
-                ++parameter_count;
+                parameter_count += parameter_slots;
                 if (accept_punctuation(')'))
                     break;
                 if (!expect_punctuation(','))
@@ -1132,16 +1172,18 @@ private:
         function.local_count = 0;
         function.has_return = false;
         for (size_t i = 0; i < parameter_count; ++i)
+            function.parameters[i] = parameters[i];
+        for (size_t i = 0; i < parameter_count;)
         {
             if (parameters[i].name[0] == '\0')
             {
                 fail("function definitions require parameter names");
                 return;
             }
-            function.parameters[i] = parameters[i];
-            if (!add_function_local(
-                    function, parameters[i].name, parameters[i].type))
+            if (!add_function_local(function, parameters[i].name,
+                    parameters[i].type, parameters[i].array_size))
                 return;
+            i += parameters[i].array_size == 0 ? 1 : parameters[i].array_size;
         }
 
         function.entry_pc = module_.instruction_count;
@@ -2233,10 +2275,147 @@ private:
         expression_lvalue_ = {};
     }
 
+    /* Sentinel for emit_user_call when no user overload matches. */
+    static constexpr ShaderType CALL_NOT_FOUND = static_cast<ShaderType>(0xff);
+
+    ShaderType emit_user_call(
+        const char *name,
+        const ShaderType *arguments,
+        const ResolvedVariable *argument_lvalues,
+        const uint8_t *argument_arrays,
+        size_t argument_count)
+    {
+        const int function_index =
+            find_function(name, arguments, argument_arrays, argument_count);
+        if (function_index >= 0)
+        {
+            const ShaderFunction& function =
+                module_.functions[static_cast<size_t>(function_index)];
+            ShaderInstruction call = {};
+            call.op = ShaderOp::Call;
+            call.type = function.return_type;
+            call.index = static_cast<uint8_t>(function_index);
+            call.argument_count = static_cast<uint8_t>(argument_count);
+            uint8_t output_masks[GLSL_MAX_PARAMETERS] = {};
+            for (size_t i = 0; i < GLSL_MAX_PARAMETERS; ++i)
+                call.output_targets[i] = CALL_OUTPUT_TARGET_NONE;
+
+            for (size_t i = 0; i < argument_count; ++i)
+            {
+                if (function.parameters[i].qualifier ==
+                    ShaderParameterQualifier::In)
+                    continue;
+
+                const ResolvedVariable& target = argument_lvalues[i];
+                if (!target.writable ||
+                    target.type != function.parameters[i].type)
+                {
+                    fail("out/inout arguments require a writable variable or swizzle");
+                    return ShaderType::Invalid;
+                }
+
+                uint16_t storage_bits = 0;
+                switch (target.storage)
+                {
+                    case Storage::Local:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::Local) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    case Storage::Varying:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::Varying) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    case Storage::Position:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::Position) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    case Storage::PointSize:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::PointSize) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    case Storage::FragmentColor:
+                        storage_bits = static_cast<uint16_t>(
+                            CallOutputStorage::FragmentColor) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
+                        break;
+                    default:
+                        fail("unsupported output argument storage");
+                        return ShaderType::Invalid;
+                }
+
+                if (!target.is_swizzle)
+                {
+                    call.output_targets[i] = static_cast<uint16_t>(
+                        CALL_OUTPUT_TARGET_FULL | storage_bits | target.index);
+                    output_masks[i] = 0xff;
+                    continue;
+                }
+
+                const size_t components =
+                    component_count(function.parameters[i].type);
+                if (components == 0 || components > 4)
+                {
+                    fail("copy-out swizzle has an unsupported component count");
+                    return ShaderType::Invalid;
+                }
+
+                uint16_t descriptor =
+                    static_cast<uint16_t>(storage_bits | target.index);
+                uint8_t mask = 0;
+                for (size_t component = 0; component < components; ++component)
+                {
+                    const uint8_t selector = target.components[component];
+                    const uint8_t bit = static_cast<uint8_t>(1u << selector);
+                    if (mask & bit)
+                    {
+                        fail("copy-out swizzle cannot repeat a component");
+                        return ShaderType::Invalid;
+                    }
+                    mask = static_cast<uint8_t>(mask | bit);
+                    descriptor = static_cast<uint16_t>(
+                        descriptor | (static_cast<uint16_t>(selector)
+                                      << (3 + 2 * component)));
+                }
+                call.output_targets[i] = descriptor;
+                output_masks[i] = mask;
+            }
+
+            // Input arguments are copied before the call and may alias an
+            // output destination. Only overlapping output destinations are
+            // rejected; disjoint swizzles of one local are safe to merge.
+            for (size_t i = 0; i < argument_count; ++i)
+            {
+                if (function.parameters[i].qualifier ==
+                    ShaderParameterQualifier::In)
+                    continue;
+                for (size_t j = 0; j < i; ++j)
+                {
+                    if (function.parameters[j].qualifier ==
+                        ShaderParameterQualifier::In)
+                        continue;
+                    if (argument_lvalues[i].index ==
+                            argument_lvalues[j].index &&
+                        argument_lvalues[i].storage ==
+                            argument_lvalues[j].storage &&
+                        (output_masks[i] & output_masks[j]) != 0)
+                    {
+                        fail("overlapping output arguments are unsupported");
+                        return ShaderType::Invalid;
+                    }
+                }
+            }
+
+            emit(call);
+            return function.return_type;
+        }
+        return CALL_NOT_FOUND;
+    }
+
     ShaderType parse_call(const char *name)
     {
         ShaderType arguments[4] = {};
         ResolvedVariable argument_lvalues[4] = {};
+        uint8_t argument_arrays[4] = {};
+        bool has_array_argument = false;
         size_t argument_count = 0;
 
         if (!accept_punctuation(')'))
@@ -2248,6 +2427,44 @@ private:
                     fail("function argument limit exceeded");
                     return ShaderType::Invalid;
                 }
+                // A whole array is passed as one value per element, in
+                // order, matching an expanded array parameter.
+                const ResolvedVariable array = current_.kind == TokenKind::Identifier
+                    ? lookup(current_.text) : ResolvedVariable{};
+                if (array.array_size != 0 &&
+                    (peek_punctuation(',') || peek_punctuation(')')))
+                {
+                    if (argument_count + array.array_size > 4)
+                    {
+                        fail("function argument limit exceeded (array elements count individually)");
+                        return ShaderType::Invalid;
+                    }
+                    advance(); /* array name */
+                    argument_arrays[argument_count] = array.array_size;
+                    for (size_t element = 0; element < array.array_size; ++element)
+                    {
+                        ResolvedVariable slot = {};
+                        slot.storage = array.storage;
+                        slot.type = array.type;
+                        slot.index = static_cast<uint8_t>(array.index + element);
+                        slot.writable = array.writable;
+                        emit_simple(array.storage == Storage::Uniform
+                                        ? ShaderOp::LoadUniform : ShaderOp::LoadLocal,
+                                    slot.type, slot.index);
+                        arguments[argument_count] = slot.type;
+                        argument_lvalues[argument_count] = slot;
+                        ++argument_count;
+                    }
+                    has_array_argument = true;
+                    expression_lvalue_ = {};
+                    if (failed_)
+                        return ShaderType::Invalid;
+                    if (accept_punctuation(')'))
+                        break;
+                    if (!expect_punctuation(','))
+                        return ShaderType::Invalid;
+                    continue;
+                }
                 const size_t argument_index = argument_count++;
                 arguments[argument_index] = parse_expression(1);
                 argument_lvalues[argument_index] = expression_lvalue_;
@@ -2258,6 +2475,18 @@ private:
                 if (!expect_punctuation(','))
                     return ShaderType::Invalid;
             }
+        }
+
+        // Whole arrays only match user-defined array parameters; resolve them
+        // before built-ins and constructors so expanded elements can never
+        // match a built-in signature.
+        if (has_array_argument)
+        {
+            const ShaderType user_result = emit_user_call(
+                name, arguments, argument_lvalues, argument_arrays, argument_count);
+            if (user_result == CALL_NOT_FOUND && !failed_)
+                fail("arrays can only be passed to matching user-defined array parameters");
+            return failed_ ? ShaderType::Invalid : user_result;
         }
 
         ShaderType constructor = constructor_type(name);
@@ -2625,126 +2854,11 @@ private:
             return arguments[0];
         }
 
-        const int function_index = find_function(name, arguments, argument_count);
-        if (function_index >= 0)
         {
-            const ShaderFunction& function =
-                module_.functions[static_cast<size_t>(function_index)];
-            ShaderInstruction call = {};
-            call.op = ShaderOp::Call;
-            call.type = function.return_type;
-            call.index = static_cast<uint8_t>(function_index);
-            call.argument_count = static_cast<uint8_t>(argument_count);
-            uint8_t output_masks[GLSL_MAX_PARAMETERS] = {};
-            for (size_t i = 0; i < GLSL_MAX_PARAMETERS; ++i)
-                call.output_targets[i] = CALL_OUTPUT_TARGET_NONE;
-
-            for (size_t i = 0; i < argument_count; ++i)
-            {
-                if (function.parameters[i].qualifier ==
-                    ShaderParameterQualifier::In)
-                    continue;
-
-                const ResolvedVariable& target = argument_lvalues[i];
-                if (!target.writable ||
-                    target.type != function.parameters[i].type)
-                {
-                    fail("out/inout arguments require a writable variable or swizzle");
-                    return ShaderType::Invalid;
-                }
-
-                uint16_t storage_bits = 0;
-                switch (target.storage)
-                {
-                    case Storage::Local:
-                        storage_bits = static_cast<uint16_t>(
-                            CallOutputStorage::Local) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
-                        break;
-                    case Storage::Varying:
-                        storage_bits = static_cast<uint16_t>(
-                            CallOutputStorage::Varying) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
-                        break;
-                    case Storage::Position:
-                        storage_bits = static_cast<uint16_t>(
-                            CallOutputStorage::Position) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
-                        break;
-                    case Storage::PointSize:
-                        storage_bits = static_cast<uint16_t>(
-                            CallOutputStorage::PointSize) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
-                        break;
-                    case Storage::FragmentColor:
-                        storage_bits = static_cast<uint16_t>(
-                            CallOutputStorage::FragmentColor) << CALL_OUTPUT_TARGET_STORAGE_SHIFT;
-                        break;
-                    default:
-                        fail("unsupported output argument storage");
-                        return ShaderType::Invalid;
-                }
-
-                if (!target.is_swizzle)
-                {
-                    call.output_targets[i] = static_cast<uint16_t>(
-                        CALL_OUTPUT_TARGET_FULL | storage_bits | target.index);
-                    output_masks[i] = 0xff;
-                    continue;
-                }
-
-                const size_t components =
-                    component_count(function.parameters[i].type);
-                if (components == 0 || components > 4)
-                {
-                    fail("copy-out swizzle has an unsupported component count");
-                    return ShaderType::Invalid;
-                }
-
-                uint16_t descriptor =
-                    static_cast<uint16_t>(storage_bits | target.index);
-                uint8_t mask = 0;
-                for (size_t component = 0; component < components; ++component)
-                {
-                    const uint8_t selector = target.components[component];
-                    const uint8_t bit = static_cast<uint8_t>(1u << selector);
-                    if (mask & bit)
-                    {
-                        fail("copy-out swizzle cannot repeat a component");
-                        return ShaderType::Invalid;
-                    }
-                    mask = static_cast<uint8_t>(mask | bit);
-                    descriptor = static_cast<uint16_t>(
-                        descriptor | (static_cast<uint16_t>(selector)
-                                      << (3 + 2 * component)));
-                }
-                call.output_targets[i] = descriptor;
-                output_masks[i] = mask;
-            }
-
-            // Input arguments are copied before the call and may alias an
-            // output destination. Only overlapping output destinations are
-            // rejected; disjoint swizzles of one local are safe to merge.
-            for (size_t i = 0; i < argument_count; ++i)
-            {
-                if (function.parameters[i].qualifier ==
-                    ShaderParameterQualifier::In)
-                    continue;
-                for (size_t j = 0; j < i; ++j)
-                {
-                    if (function.parameters[j].qualifier ==
-                        ShaderParameterQualifier::In)
-                        continue;
-                    if (argument_lvalues[i].index ==
-                            argument_lvalues[j].index &&
-                        argument_lvalues[i].storage ==
-                            argument_lvalues[j].storage &&
-                        (output_masks[i] & output_masks[j]) != 0)
-                    {
-                        fail("overlapping output arguments are unsupported");
-                        return ShaderType::Invalid;
-                    }
-                }
-            }
-
-            emit(call);
-            return function.return_type;
+            const ShaderType user_result = emit_user_call(
+                name, arguments, argument_lvalues, argument_arrays, argument_count);
+            if (user_result != CALL_NOT_FOUND || failed_)
+                return user_result;
         }
 
         if (has_function_name(name))

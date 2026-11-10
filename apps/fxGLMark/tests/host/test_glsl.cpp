@@ -1550,6 +1550,74 @@ static void test_conditional_operator()
     }
 }
 
+static void test_array_function_parameters()
+{
+    static const char source[] =
+        "uniform float u_weights[3];\n"
+        "float sum3(float values[3]);\n"
+        "float pick(float a[2]) { return a[1]; }\n"
+        "float pick(float x, float y) { return x; }\n"
+        "void fill(out float result[2], float base) {\n"
+        "  for (int i = 0; i < 2; i++) { result[i] = base + float(i); }\n"
+        "}\n"
+        "void scale(inout vec2 points[2]) { points[0] = points[0] * 2.0; points[1].y = -1.0; }\n"
+        "void main() {\n"
+        "  float local_values[3];\n"
+        "  local_values[0] = 1.0; local_values[1] = 2.0; local_values[2] = 4.0;\n"
+        "  float pair[2];\n"
+        "  fill(pair, 10.0);\n"
+        "  vec2 points[2];\n"
+        "  points[0] = vec2(1.0, 3.0); points[1] = vec2(5.0, 7.0);\n"
+        "  scale(points);\n"
+        "  gl_FragColor = vec4(sum3(local_values) + sum3(u_weights),\n"
+        "                      pick(pair) + pick(pair[0], 100.0),\n"
+        "                      points[0].y + points[1].x, points[1].y);\n"
+        "}\n"
+        "float sum3(float values[3]) {\n"
+        "  float total = 0.0;\n"
+        "  for (int i = 0; i < 3; i++) { total = total + values[i]; }\n"
+        "  values[0] = 99.0;\n"
+        "  return total;\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module, "array parameters");
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Float, 0.5f);
+    runtime.uniforms[1] = value(ShaderType::Float, 0.25f);
+    runtime.uniforms[2] = value(ShaderType::Float, 0.125f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    // sum3: 7 + 0.875 (callee writes to its copy do not leak back);
+    // pick(array) -> pair[1] = 11, pick(x, y) -> pair[0] = 10;
+    // scale doubles points[0] (y = 6) and sets points[1].y = -1.
+    assert(near(runtime.fragment_color.data[0], 7.875f));
+    assert(near(runtime.fragment_color.data[1], 21.0f));
+    assert(near(runtime.fragment_color.data[2], 11.0f));
+    assert(near(runtime.fragment_color.data[3], -1.0f));
+
+    const char *invalid[] = {
+        "float f(float a[2]) { return a[0]; } void main() { float b[3]; gl_FragColor = vec4(f(b)); }",
+        "float f(float a[2]) { return a[0]; } void main() { gl_FragColor = vec4(f(1.0)); }",
+        "float f(float a, float b) { return a; } void main() { float c[2]; gl_FragColor = vec4(f(c)); }",
+        "void main() { float a[2]; gl_FragColor = vec4(max(a)); }",
+        "void main() { float a[2]; gl_FragColor = vec4(vec2(a), 0.0, 1.0); }",
+        "uniform float u[2]; void f(out float a[2]) { a[0] = 1.0; } void main() { f(u); gl_FragColor = vec4(1.0); }",
+        "float f(float a[3], float b[2]) { return a[0]; } void main() { gl_FragColor = vec4(1.0); }",
+        "float f(float a[0]) { return 1.0; } void main() { gl_FragColor = vec4(1.0); }",
+        "uniform sampler2D s; float f(sampler2D t[2]) { return 1.0; } void main() { gl_FragColor = vec4(1.0); }",
+        "float f(float a[2]); float f(float a[3]) { return a[0]; } void main() { float b[2]; gl_FragColor = vec4(f(b)); }",
+        "float f(float a[2]) { return a[2]; } void main() { gl_FragColor = vec4(1.0); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
+    }
+}
+
 } // namespace
 
 
@@ -1589,6 +1657,7 @@ int main()
     test_uniform_array_reads();
     test_lexer_errors_report_their_reason();
     test_conditional_operator();
+    test_array_function_parameters();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;
