@@ -2030,6 +2030,84 @@ void test_polygon_offset()
     fxglReleaseCurrent();
 }
 
+void test_sampler_array_uniforms()
+{
+    uint16_t color[1] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 1, 1, 1};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "attribute vec4 a_position; varying vec2 v_uv;\n"
+        "void main() { gl_Position = a_position; v_uv = vec2(0.5); gl_PointSize = 1.0; }\n";
+    static const GLchar fragment_source[] =
+        "precision mediump float; uniform sampler2D u_textures[2]; varying vec2 v_uv;\n"
+        "void main() { gl_FragColor = texture2D(u_textures[1], v_uv); }\n";
+    const GLchar *vertex_parts[] = {vertex_source};
+    const GLchar *fragment_parts[] = {fragment_source};
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, vertex_parts, nullptr);
+    glShaderSource(fs, 1, fragment_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+    GLint status = GL_FALSE;
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glBindAttribLocation(program, 0, "a_position");
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &status);
+    assert(status == GL_TRUE);
+
+    GLchar name[32] = {};
+    GLint size = 0;
+    GLenum type = 0;
+    glGetActiveUniform(program, 0, sizeof(name), nullptr, &size, &type, name);
+    assert(std::strcmp(name, "u_textures[0]") == 0 && size == 2 && type == GL_SAMPLER_2D);
+
+    // Unit 0 holds red, unit 1 holds green.
+    GLuint textures[2] = {};
+    glGenTextures(2, textures);
+    const uint16_t texels[2] = {0xf800, 0x07e0};
+    for (int unit = 0; unit < 2; ++unit)
+    {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, textures[unit]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB,
+                     GL_UNSIGNED_SHORT_5_6_5, &texels[unit]);
+    }
+    glUseProgram(program);
+    const GLint location = glGetUniformLocation(program, "u_textures");
+    assert(location >= 0);
+    assert(glGetUniformLocation(program, "u_textures[1]") == location + 1);
+
+    const GLfloat point[] = {0.0f, 0.0f, 0.0f, 1.0f};
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, point);
+    glViewport(0, 0, 1, 1);
+
+    // The shader reads element 1: unit 1 (green), then unit 0 (red).
+    const GLint units[2] = {0, 1};
+    glUniform1iv(location, 2, units);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0x07e0);
+
+    const GLint swapped[2] = {1, 0};
+    glUniform1iv(location, 2, swapped);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0xf800);
+
+    glDeleteTextures(2, textures);
+    glDeleteProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -2140,6 +2218,7 @@ int main()
     test_remaining_gles2_entry_points();
     test_copy_tex_image_from_framebuffer();
     test_polygon_offset();
+    test_sampler_array_uniforms();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

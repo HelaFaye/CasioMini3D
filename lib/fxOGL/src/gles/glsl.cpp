@@ -655,11 +655,6 @@ private:
                 fail("only uniform and local arrays are supported");
                 return;
             }
-            if (type == ShaderType::Sampler2D)
-            {
-                fail("sampler arrays are not supported");
-                return;
-            }
             if (current_.kind != TokenKind::Number || !current_.integer ||
                 current_.number < 1.0f ||
                 current_.number > static_cast<float>(GLSL_MAX_UNIFORMS))
@@ -969,6 +964,12 @@ private:
         }
         else
         {
+            // GLSL ES 1.00 only allows constant indices into sampler arrays.
+            if (array.type == ShaderType::Sampler2D)
+            {
+                fail("sampler arrays require a constant integer index");
+                return false;
+            }
             if (parse_expression(1) != ShaderType::Int)
             {
                 fail("array index must be an int expression");

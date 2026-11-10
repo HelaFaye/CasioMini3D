@@ -225,8 +225,10 @@ using TextureSampleFunction = bool (*)(
    out/inout arguments, or with int index expressions for whole-element
    reads and writes. Dynamic indices are bounds-checked at run time and an
    out-of-range access fails the invocation. Each element uses one local
-   slot. Uniform arrays (`uniform vec4 u[3];`, non-sampler) follow the same
-   read rules and use one uniform slot per element. Array function
+   slot. Uniform arrays (`uniform vec4 u[3];`) follow the same read rules
+   and use one uniform slot per element; sampler arrays
+   (`uniform sampler2D s[2];`) take constant indices only, as GLSL ES 1.00
+   requires. Array function
    parameters (`float f(inout float a[3])`) take a whole local or uniform
    array of the same element type and size by value, with copy-out for
    out/inout; each element counts toward the four-parameter limit. Array
