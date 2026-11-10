@@ -116,6 +116,26 @@ change replaced a 64-bit division and remainder by a shift and mask) became
 with layout alone; only larger or consistent changes are treated as
 performance results.
 
+A follow-up run on commit `ea02e8c` (GLSL `?:`, array and sampler-array
+parameters, the remaining GLES 2.0 entry points and polygon offset; no
+per-pixel path change when polygon offset is disabled) confirmed no
+regression against `67ac1cd`:
+
+| fxGLMark scene | `67ac1cd` | `ea02e8c` | Change |
+|---|---|---|---|
+| `build:use-vbo=true` (two runs each) | 2.292015 s | 2.272323 s | -0.9% |
+| `build:use-vbo=false` | 2.284665 s | 2.259410 s | -1.1% |
+| `texture:texture-filter=nearest` (two runs each) | 1.913667 s | 1.893010 s | -1.1% |
+| `texture:texture-filter=linear` | 2.322774 s | 2.306384 s | -0.7% |
+| `shading:shading=gouraud` | 2.292590 s | 2.272456 s | -0.9% |
+| `clear` (no triangles) | 34.373 ms | 38.305 ms | +11.4% |
+
+Microbenchmarks moved by at most 1.9% (`texture-nearest-clamp` 17.911 to
+18.254 µs; `shader-vm` 124.352 to 124.915 µs; `triangle-raster` 126.269 to
+125.817 ms). `clear`, whose code has not changed, has now measured 38.242,
+34.373 and 38.305 ms across three builds, confirming that its earlier -10%
+was code placement rather than a speed-up.
+
 The two preceding physical fx-CG50 runs measured two builds of the
 GLSL array work: commit `11d1320` (array opcodes inserted mid-enum) and commit
 `52798af` (the same opcodes appended to the end of the enum and interpreter
