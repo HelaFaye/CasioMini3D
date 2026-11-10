@@ -577,6 +577,83 @@ void test_perspective_planes_preserve_varyings_and_finite_difference_gradients()
     assert(std::fabs(capture.ddy[1] - (88.0f / 399.0f)) < 0.0005f);
 }
 
+struct CountingColor
+{
+    float rgba[4];
+    unsigned calls;
+};
+
+bool counting_fragment(const fxgl::FragmentInput&, float rgba[4], void *user_data)
+{
+    CountingColor& color = *static_cast<CountingColor *>(user_data);
+    ++color.calls;
+    for (int i = 0; i < 4; ++i)
+        rgba[i] = color.rgba[i];
+    return true;
+}
+
+void test_early_depth_test_skips_shading_without_changing_buffers()
+{
+    // Draw a near triangle, then a farther one covering the same pixels,
+    // once with early depth testing and once without. Buffers must match;
+    // with early depth the second draw must not run its shader at all.
+    uint16_t color_late[16], depth_late[16], color_early[16], depth_early[16];
+    uint8_t stencil_late[16], stencil_early[16];
+    reset_surface(color_late, depth_late, stencil_late);
+    reset_surface(color_early, depth_early, stencil_early);
+    const RenderSurface late = {color_late, depth_late, stencil_late, 4, 4, 4};
+    const RenderSurface early = {color_early, depth_early, stencil_early, 4, 4, 4};
+
+    PipelineState state = {};
+    fxgl::pipeline_default_state(state, 4, 4);
+    assert(!state.early_depth_test);
+    state.depth_enabled = true;
+
+    ClipVertex near_triangle[3];
+    ClipVertex far_triangle[3];
+    full_screen_triangle(near_triangle, -0.5f);
+    full_screen_triangle(far_triangle, 0.5f);
+    CountingColor red = {{1.0f, 0.0f, 0.0f, 1.0f}, 0};
+    CountingColor blue = {{0.0f, 0.0f, 1.0f, 1.0f}, 0};
+
+    assert(fxgl::draw_triangle(late, state, near_triangle, 0, counting_fragment, &red));
+    RasterStats late_stats = {};
+    assert(!fxgl::draw_triangle(late, state, far_triangle, 0,
+        counting_fragment, &blue, &late_stats));
+    const unsigned late_calls = blue.calls;
+    assert(late_calls > 0);
+    assert(late_stats.shaded_fragments == late_calls);
+
+    state.early_depth_test = true;
+    red.calls = 0;
+    blue.calls = 0;
+    assert(fxgl::draw_triangle(early, state, near_triangle, 0, counting_fragment, &red));
+    RasterStats early_stats = {};
+    assert(!fxgl::draw_triangle(early, state, far_triangle, 0,
+        counting_fragment, &blue, &early_stats));
+    assert(blue.calls == 0);
+    assert(early_stats.tested_fragments == late_stats.tested_fragments);
+    assert(early_stats.shaded_fragments == 0);
+    for (size_t i = 0; i < 16; ++i)
+    {
+        assert(color_early[i] == color_late[i]);
+        assert(depth_early[i] == depth_late[i]);
+    }
+
+    // With stencil active, depth failures update stencil after shading, so
+    // early depth testing must not apply.
+    state.stencil_enabled = true;
+    state.stencil_front.depth_fail = GL_INCR;
+    state.stencil_back.depth_fail = GL_INCR;
+    blue.calls = 0;
+    assert(!fxgl::draw_triangle(early, state, far_triangle, 0, counting_fragment, &blue));
+    assert(blue.calls == late_calls);
+    bool incremented = false;
+    for (uint8_t value : stencil_early)
+        incremented = incremented || value == 1;
+    assert(incremented);
+}
+
 } // namespace
 
 int main()
@@ -593,6 +670,7 @@ int main()
     test_opaque_scanline_fast_path_matches_general_fragment_path();
     test_perspective_correct_screen_space_varying_gradients();
     test_perspective_planes_preserve_varyings_and_finite_difference_gradients();
+    test_early_depth_test_skips_shading_without_changing_buffers();
 
     std::puts("GLES software pipeline tests: PASS");
     return 0;

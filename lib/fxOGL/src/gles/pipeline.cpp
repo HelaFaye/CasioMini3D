@@ -9,6 +9,83 @@ namespace fxgl
 {
 namespace
 {
+/*
+ * The fx-CG50 has no FPU: every float comparison, multiply and conversion is
+ * a software library call. The helpers below replace float operations on
+ * hot per-pixel paths with integer operations on IEEE-754 bit patterns that
+ * produce bit-identical results.
+ */
+constexpr uint32_t FLOAT_SIGN = 0x80000000u;
+constexpr uint32_t FLOAT_EXPONENT = 0x7f800000u;
+constexpr uint32_t FLOAT_ONE = 0x3f800000u;
+
+constexpr uint32_t float_bits(float value)
+{
+    return __builtin_bit_cast(uint32_t, value);
+}
+
+constexpr float bits_float(uint32_t bits)
+{
+    return __builtin_bit_cast(float, bits);
+}
+
+/* Thresholds for channel = (uint16_t)(c * scale + 0.5f) over c in [0, 1].
+   Rounded float multiply/add and truncation are monotonic in c, so the
+   channel equals the number of thresholds t[k] (k = 1..levels) with
+   bits(c) >= t[k]. Non-negative float bit patterns order like their values.
+   Thresholds are found at compile time with the same IEEE single-precision
+   operations the runtime expression uses. */
+template <unsigned Levels>
+struct ChannelThresholds
+{
+    uint32_t bits[Levels];
+};
+
+template <unsigned Levels>
+constexpr ChannelThresholds<Levels> make_channel_thresholds()
+{
+    ChannelThresholds<Levels> table = {};
+    const float scale = static_cast<float>(Levels);
+    for (unsigned k = 1; k <= Levels; ++k)
+    {
+        uint32_t low = 0;
+        uint32_t high = FLOAT_ONE;
+        while (low < high)
+        {
+            const uint32_t middle = low + (high - low) / 2;
+            const unsigned channel = static_cast<unsigned>(
+                bits_float(middle) * scale + 0.5f);
+            if (channel >= k)
+                high = middle;
+            else
+                low = middle + 1;
+        }
+        table.bits[k - 1] = low;
+    }
+    return table;
+}
+
+constexpr ChannelThresholds<31> RGB565_FIVE_BIT = make_channel_thresholds<31>();
+constexpr ChannelThresholds<63> RGB565_SIX_BIT = make_channel_thresholds<63>();
+
+template <unsigned Levels>
+static inline unsigned quantize_unit_float(
+    uint32_t bits,
+    const ChannelThresholds<Levels>& table)
+{
+    unsigned low = 0;
+    unsigned high = Levels;
+    while (low < high)
+    {
+        const unsigned middle = (low + high) / 2;
+        if (bits >= table.bits[middle])
+            low = middle + 1;
+        else
+            high = middle;
+    }
+    return low;
+}
+
 struct ScreenVertex
 {
     float x;
@@ -130,9 +207,15 @@ static bool top_left_edge(const ScreenVertex& a, const ScreenVertex& b)
     return dy > 0.0f || (dy == 0.0f && dx < 0.0f);
 }
 
-static bool covered(float value, bool top_left)
+/* value > 0.0f || (value == 0.0f && top_left), on the IEEE bit pattern:
+   positive values (including +inf) are 0x00000001..0x7f800000, NaN is never
+   covered, and both zeros defer to the top-left rule. */
+static inline bool covered(float value, bool top_left)
 {
-    return value > 0.0f || (value == 0.0f && top_left);
+    const uint32_t bits = float_bits(value);
+    if (bits - 1u < FLOAT_EXPONENT)
+        return true;
+    return top_left && (bits & ~FLOAT_SIGN) == 0;
 }
 
 static bool to_screen(
@@ -197,11 +280,16 @@ static void write_stencil(
         (destination & static_cast<uint8_t>(~mask)) | (changed & mask));
 }
 
-static float clamp01(float value)
+/* Non-finite values map to 0; otherwise std::max(0, std::min(1, value)),
+   which turns every negative value and -0.0f into +0.0f. */
+static inline float clamp01(float value)
 {
-    if (!isfinite(value))
+    const uint32_t bits = float_bits(value);
+    if ((bits & FLOAT_EXPONENT) == FLOAT_EXPONENT || (bits & FLOAT_SIGN) != 0)
         return 0.0f;
-    return std::max(0.0f, std::min(1.0f, value));
+    if (bits >= FLOAT_ONE)
+        return 1.0f;
+    return value;
 }
 
 static float blend_factor(
@@ -254,28 +342,25 @@ static float blend_channel(
 
 static void unpack_rgb565(uint16_t pixel, float rgba[4])
 {
-    rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
-    rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
-    rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
-    rgba[3] = 1.0f;
+    rgb565_to_unit_float(pixel, rgba);
+}
+
+/* The fragment path has already clamped RGB to [0, 1]. Equivalent to
+   (uint16_t)(c * 31.0f + 0.5f) per five-bit channel (63.0f for green). */
+static inline uint16_t pack_rgb565_clamped(const float rgba[4])
+{
+    const unsigned r = quantize_unit_float(float_bits(rgba[0]), RGB565_FIVE_BIT);
+    const unsigned g = quantize_unit_float(float_bits(rgba[1]), RGB565_SIX_BIT);
+    const unsigned b = quantize_unit_float(float_bits(rgba[2]), RGB565_FIVE_BIT);
+    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
 }
 
 static uint16_t pack_rgb565(const float rgba[4])
 {
-    const uint16_t r = static_cast<uint16_t>(clamp01(rgba[0]) * 31.0f + 0.5f);
-    const uint16_t g = static_cast<uint16_t>(clamp01(rgba[1]) * 63.0f + 0.5f);
-    const uint16_t b = static_cast<uint16_t>(clamp01(rgba[2]) * 31.0f + 0.5f);
-    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
-}
-
-/* The fragment path has already clamped RGB. Avoid repeating three finite
-   checks and min/max operations when writing an opaque RGB565 pixel. */
-static uint16_t pack_rgb565_clamped(const float rgba[4])
-{
-    const uint16_t r = static_cast<uint16_t>(rgba[0] * 31.0f + 0.5f);
-    const uint16_t g = static_cast<uint16_t>(rgba[1] * 63.0f + 0.5f);
-    const uint16_t b = static_cast<uint16_t>(rgba[2] * 31.0f + 0.5f);
-    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+    const float clamped[3] = {
+        clamp01(rgba[0]), clamp01(rgba[1]), clamp01(rgba[2])
+    };
+    return pack_rgb565_clamped(clamped);
 }
 
 static void blend_pixel(
@@ -347,6 +432,36 @@ static bool process_fragment(
         return false;
 
     ++stats.tested_fragments;
+
+    const bool depth_active = state.depth_enabled && surface.depth;
+    const bool stencil_active = state.stencil_enabled && surface.stencil;
+    const size_t offset = static_cast<size_t>(y) * surface.stride +
+                          static_cast<size_t>(x);
+    uint16_t incoming_depth = 0;
+    if (depth_active)
+    {
+        const float window_depth = ndc_depth * 0.5f + 0.5f;
+        float mapped_depth = 0.0f;
+        // With the default glDepthRangef(0, 1), near + window * (far - near)
+        // is exactly window (a -0.0f result is clamped to +0.0f below).
+        if (float_bits(state.depth_near) == 0 &&
+            float_bits(state.depth_far) == FLOAT_ONE)
+            mapped_depth = clamp01(window_depth);
+        else
+            mapped_depth = clamp01(state.depth_near + window_depth *
+                (state.depth_far - state.depth_near));
+        incoming_depth = static_cast<uint16_t>(
+            mapped_depth * 65535.0f + 0.5f);
+    }
+
+    // Without stencil, a fragment failing the depth test changes no buffer
+    // whatever the shader returns, so the shader need not run for it.
+    const bool early_depth =
+        state.early_depth_test && depth_active && !stencil_active;
+    if (early_depth &&
+        !compare_values(state.depth_function, incoming_depth, surface.depth[offset]))
+        return false;
+
     float source[4] = {};
     const FragmentInput input = {
         varyings, varying_ddx, varying_ddy, varying_count
@@ -363,23 +478,9 @@ static bool process_fragment(
     if (state.blend_enabled)
         source[3] = clamp01(source[3]);
 
-    const bool depth_active = state.depth_enabled && surface.depth;
-    uint16_t incoming_depth = 0;
-    if (depth_active)
-    {
-        const float mapped_depth = clamp01(
-            state.depth_near + (ndc_depth * 0.5f + 0.5f) *
-            (state.depth_far - state.depth_near));
-        incoming_depth = static_cast<uint16_t>(
-            mapped_depth * 65535.0f + 0.5f);
-    }
-
-    const size_t offset = static_cast<size_t>(y) * surface.stride +
-                          static_cast<size_t>(x);
-
     const StencilFaceState& stencil_face = front
         ? state.stencil_front : state.stencil_back;
-    if (state.stencil_enabled && surface.stencil)
+    if (stencil_active)
     {
         const uint8_t stored = surface.stencil[offset];
         const uint32_t masked_reference =
@@ -397,7 +498,7 @@ static bool process_fragment(
         }
     }
 
-    const bool depth_pass = !depth_active ||
+    const bool depth_pass = !depth_active || early_depth ||
         compare_values(state.depth_function, incoming_depth, surface.depth[offset]);
     if (!depth_pass)
     {
@@ -644,12 +745,23 @@ static bool rasterize_one(
             }
         }
 
+        // Each edge value is a running float sum of a constant step, so it is
+        // monotonic along the row (IEEE rounding is monotonic), and so is
+        // its coverage test. The covered pixels of a row are therefore one
+        // contiguous run: once it ends, no later pixel can be covered and the
+        // remaining increments would never be used.
+        bool row_entered = false;
         for (int64_t x = x0; x <= x1; ++x)
         {
-            if (covered(edge0, top_left_0) &&
+            const bool pixel_covered =
+                covered(edge0, top_left_0) &&
                 covered(edge1, top_left_1) &&
-                covered(edge2, top_left_2))
+                covered(edge2, top_left_2);
+            if (!pixel_covered && row_entered)
+                break;
+            if (pixel_covered)
             {
+                row_entered = true;
                 bool interpolation_valid = true;
                 if (has_varyings)
                 {

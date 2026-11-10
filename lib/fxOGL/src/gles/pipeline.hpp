@@ -41,6 +41,13 @@ struct PipelineState
     /* Compute perspective-correct varying gradients only when a shader path
        consumes implicit texture derivatives (e.g. mipmapped sampling). */
     bool varying_derivatives;
+    /* Test depth before running the fragment shader when no stencil test is
+       active. Buffer results are unchanged; the shader is simply not run
+       for fragments that would fail the depth test, so a shader's side
+       effects (including failure reporting) are skipped for them. Off by
+       default; the GLES layer enables it because its shaders cannot write
+       depth and their only side effect is failure reporting. */
+    bool early_depth_test;
 
     bool cull_enabled;
     GLenum cull_face;
@@ -94,6 +101,35 @@ using FragmentShader = bool (*)(
     const FragmentInput& input,
     float rgba[4],
     void *user_data);
+
+template <unsigned Levels>
+struct UnitFloatTable
+{
+    float values[Levels + 1];
+};
+
+template <unsigned Levels>
+constexpr UnitFloatTable<Levels> make_unit_float_table()
+{
+    UnitFloatTable<Levels> table = {};
+    for (unsigned i = 0; i <= Levels; ++i)
+        table.values[i] = static_cast<float>(i) / static_cast<float>(Levels);
+    return table;
+}
+
+/* static_cast<float>(i) / 31.0f and / 63.0f, folded at compile time with the
+   same correctly rounded IEEE division the device performs in software. */
+inline constexpr UnitFloatTable<31> UNIT_FROM_FIVE_BIT = make_unit_float_table<31>();
+inline constexpr UnitFloatTable<63> UNIT_FROM_SIX_BIT = make_unit_float_table<63>();
+
+/* Expand an RGB565 pixel to normalized RGBA with alpha 1.0. */
+inline void rgb565_to_unit_float(uint16_t pixel, float rgba[4])
+{
+    rgba[0] = UNIT_FROM_FIVE_BIT.values[(pixel >> 11) & 0x1f];
+    rgba[1] = UNIT_FROM_SIX_BIT.values[(pixel >> 5) & 0x3f];
+    rgba[2] = UNIT_FROM_FIVE_BIT.values[pixel & 0x1f];
+    rgba[3] = 1.0f;
+}
 
 void pipeline_default_state(PipelineState& state, GLsizei width, GLsizei height);
 
