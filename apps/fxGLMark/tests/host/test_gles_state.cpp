@@ -1840,6 +1840,88 @@ void test_remaining_gles2_entry_points()
     fxglReleaseCurrent();
 }
 
+void test_copy_tex_image_from_framebuffer()
+{
+    uint16_t color[16] = {};
+    for (uint16_t i = 0; i < 16; ++i)
+        color[i] = static_cast<uint16_t>(0x1000 + i); // pixel (x, y) = 0x1000 + y * 4 + x
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 8);
+
+    // A 3x2 region starting at (2, 1) runs past the right edge: the
+    // outside column reads as zero.
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 1, 3, 2, 0);
+    assert(glGetError() == GL_NO_ERROR);
+    gfx::Texture2DView view = {};
+    gfx::TextureSampler sampler = {};
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.width == 3 && view.height == 2);
+    const uint16_t expected[6] = {0x1006, 0x1007, 0, 0x100a, 0x100b, 0};
+    for (size_t i = 0; i < 6; ++i)
+        assert(view.pixels[i] == expected[i]);
+    GLint alignment = 0;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+    assert(alignment == 8);
+
+    // Sub-copy (0, 3)..(1, 3) into texel (1, 0).
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 0, 3, 2, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.pixels[0] == 0x1006 && view.pixels[1] == 0x100c &&
+           view.pixels[2] == 0x100d && view.pixels[3] == 0x100a);
+
+    // Errors: destination overflow, formats, border, target, sizes.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 2, 0, 0, 0, 2, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 0, 0, 1, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 2, 2, 0);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 0, 0, 2, 2, 0);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, 2, 2, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexImage2D(GL_DEPTH_TEST, 0, GL_RGB, 0, 0, 2, 2, 0);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, -1, 2, 0);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 100000, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    // An empty sub-copy still requires the destination level to exist.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 0, 0);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // Feedback: copy level 0 of a texture attached to the bound framebuffer
+    // onto itself. The source is read before the level is replaced.
+    uint16_t base[4] = {0x0001, 0x0002, 0x0003, 0x0004};
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, base);
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 0, 1, 2, 0);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.width == 1 && view.height == 2);
+    assert(view.pixels[0] == 0x0002 && view.pixels[1] == 0x0004);
+
+    // An incomplete framebuffer cannot be read.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, 1, 1, 0);
+    assert(glGetError() == GL_INVALID_FRAMEBUFFER_OPERATION);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &texture);
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -1948,6 +2030,7 @@ int main()
     test_integer_and_boolean_vector_uniform_api();
     test_uniform_array_api_and_draw();
     test_remaining_gles2_entry_points();
+    test_copy_tex_image_from_framebuffer();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

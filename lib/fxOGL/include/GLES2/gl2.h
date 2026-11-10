@@ -200,8 +200,11 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_CLAMP_TO_EDGE 0x812F
 #define GL_REPEAT 0x2901
 #define GL_MIRRORED_REPEAT 0x8370
+#define GL_ALPHA 0x1906
 #define GL_RGB 0x1907
 #define GL_RGBA 0x1908
+#define GL_LUMINANCE 0x1909
+#define GL_LUMINANCE_ALPHA 0x190A
 #define GL_UNSIGNED_SHORT_5_6_5 0x8363
 
 #define GL_ARRAY_BUFFER 0x8892
@@ -443,8 +446,7 @@ GLenum glGetError(void);
    glReleaseShaderCompiler do nothing, glShaderBinary and the compressed
    texture uploads report GL_INVALID_ENUM, lines are 1 pixel wide
    (GL_ALIASED_LINE_WIDTH_RANGE is [1, 1]) and sample coverage is stored
-   state only. glPolygonOffset, glCopyTexImage2D and glCopyTexSubImage2D
-   are not implemented yet. */
+   state only. glPolygonOffset is not implemented yet. */
 void glFlush(void);
 void glFinish(void);
 void glHint(GLenum target, GLenum mode);
@@ -469,6 +471,14 @@ void glVertexAttrib1fv(GLuint index, const GLfloat *values);
 void glVertexAttrib2fv(GLuint index, const GLfloat *values);
 void glVertexAttrib3fv(GLuint index, const GLfloat *values);
 void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat *params);
+/* Copy from the current framebuffer's RGB565 color buffer into the bound
+   texture. Only GL_RGB is accepted: the color buffer has no alpha, and
+   fxOGL stores RGB565 textures only. Reads outside the framebuffer give
+   zero, as glReadPixels does. */
+void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat,
+    GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
+void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset,
+    GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height);
 
 #ifdef __cplusplus
 }

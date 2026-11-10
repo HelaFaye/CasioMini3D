@@ -3075,6 +3075,146 @@ void glTexSubImage2D(
     }
 }
 
+/* Shared validation and readback for glCopyTex(Sub)Image2D. The region is
+   first copied into temporary RGB565 storage: the framebuffer's color
+   attachment may be the very texture level being redefined, which the
+   upload frees and replaces. Returns nullptr (after reporting an error)
+   on failure; the caller frees the buffer. */
+static uint16_t *read_copy_source(
+    GLint x, GLint y, GLsizei width, GLsizei height, bool& empty)
+{
+    empty = width == 0 || height == 0;
+    fxgl_surface_t surface = {};
+    if (!resolve_draw_surface(surface) || !surface.color)
+    {
+        set_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return nullptr;
+    }
+    if (empty)
+        return nullptr;
+
+    const size_t count = static_cast<size_t>(width) * static_cast<size_t>(height);
+    uint16_t *copy = static_cast<uint16_t *>(::malloc(count * sizeof(uint16_t)));
+    if (!copy)
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return nullptr;
+    }
+    for (GLsizei row = 0; row < height; ++row)
+    {
+        const int64_t source_y = static_cast<int64_t>(y) + row;
+        for (GLsizei column = 0; column < width; ++column)
+        {
+            const int64_t source_x = static_cast<int64_t>(x) + column;
+            uint16_t pixel = 0;
+            if (source_x >= 0 && source_y >= 0 &&
+                source_x < surface.width && source_y < surface.height)
+                pixel = surface.color[static_cast<size_t>(source_y) * surface.stride +
+                                      static_cast<size_t>(source_x)];
+            copy[static_cast<size_t>(row) * width + column] = pixel;
+        }
+    }
+    return copy;
+}
+
+/* Upload tightly packed RGB565 rows regardless of GL_UNPACK_ALIGNMENT:
+   uint16_t rows are always 2-byte aligned. */
+struct PackedRgb565Unpack
+{
+    GLint saved_alignment = g_context.unpack_alignment;
+    PackedRgb565Unpack() { g_context.unpack_alignment = 2; }
+    ~PackedRgb565Unpack() { g_context.unpack_alignment = saved_alignment; }
+};
+
+void glCopyTexImage2D(
+    GLenum target,
+    GLint level,
+    GLenum internalformat,
+    GLint x,
+    GLint y,
+    GLsizei width,
+    GLsizei height,
+    GLint border)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (internalformat == GL_RGBA || internalformat == GL_ALPHA ||
+        internalformat == GL_LUMINANCE_ALPHA)
+    {
+        // The RGB565 color buffer has no alpha component to copy.
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (internalformat != GL_RGB)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (level < 0 || level >= static_cast<GLint>(FXGL_MAX_TEXTURE_LEVELS) ||
+        width < 0 || height < 0 || border != 0 ||
+        width > FXGL_MAX_TEXTURE_SIZE || height > FXGL_MAX_TEXTURE_SIZE)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    bool empty = false;
+    uint16_t *copy = read_copy_source(x, y, width, height, empty);
+    if (!copy && !empty)
+        return;
+    {
+        const PackedRgb565Unpack packed;
+        glTexImage2D(target, level, GL_RGB, width, height, 0,
+                     GL_RGB, GL_UNSIGNED_SHORT_5_6_5, copy);
+    }
+    ::free(copy);
+}
+
+void glCopyTexSubImage2D(
+    GLenum target,
+    GLint level,
+    GLint xoffset,
+    GLint yoffset,
+    GLint x,
+    GLint y,
+    GLsizei width,
+    GLsizei height)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    // Any region larger than the maximum texture size cannot fit a level;
+    // reject it before allocating the temporary copy.
+    if (level < 0 || level >= static_cast<GLint>(FXGL_MAX_TEXTURE_LEVELS) ||
+        xoffset < 0 || yoffset < 0 || width < 0 || height < 0 ||
+        width > FXGL_MAX_TEXTURE_SIZE || height > FXGL_MAX_TEXTURE_SIZE)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    bool empty = false;
+    uint16_t *copy = read_copy_source(x, y, width, height, empty);
+    if (!copy && !empty)
+        return;
+    // glTexSubImage2D validates the destination level and region. An empty
+    // region still needs an existing level, so pass a non-null placeholder.
+    static const uint16_t no_pixels = 0;
+    {
+        const PackedRgb565Unpack packed;
+        glTexSubImage2D(target, level, xoffset, yoffset, width, height,
+                        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, copy ? copy : &no_pixels);
+    }
+    ::free(copy);
+}
+
 void glGenerateMipmap(GLenum target)
 {
     if (!has_context()) return;
