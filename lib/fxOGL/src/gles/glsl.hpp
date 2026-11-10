@@ -67,6 +67,10 @@ struct ShaderVariable
     uint8_t index;
     /* Used only for function parameters. In is the default qualifier. */
     ShaderParameterQualifier qualifier;
+    /* Local and uniform arrays: element count, zero for non-arrays. An
+       array of N elements occupies N consecutive slots starting at index;
+       the slots after the first are recorded as unnamed element entries. */
+    uint8_t array_size;
 };
 
 struct ShaderFunction
@@ -129,7 +133,16 @@ enum class ShaderOp : uint8_t
     Jump,
     Call,
     Return,
-    Texture2D
+    Texture2D,
+    /* Array opcodes are appended so earlier opcodes keep their values and
+       the interpreter's existing dispatch layout (measured on hardware). */
+    /* Pops an int index; index is the array's first slot, argument_count
+       its element count. Out-of-range indices fail the invocation. */
+    LoadLocalIndexed,
+    /* Pops the value, then the int index pushed before it. */
+    StoreLocalIndexed,
+    /* Dynamic uniform-array read; operands as for LoadLocalIndexed. */
+    LoadUniformIndexed
 };
 
 struct ShaderInstruction
@@ -204,7 +217,16 @@ using TextureSampleFunction = bool (*)(
    global outputs are not supported as copy-out targets. Input/output aliases
    follow value-return semantics; overlapping output destinations are rejected.
    Built-in function dispatch remains on its existing fixed-signature path.
-   Arrays, structs, do-while, switch, preprocessor directives and precision
+   One-dimensional local arrays (`float a[4];`, no initializer) of any
+   non-sampler type are supported. Elements are read and written with
+   constant integer indices, including element swizzles, matrix columns and
+   out/inout arguments, or with int index expressions for whole-element
+   reads and writes. Dynamic indices are bounds-checked at run time and an
+   out-of-range access fails the invocation. Each element uses one local
+   slot. Uniform arrays (`uniform vec4 u[3];`, non-sampler) follow the same
+   read rules and use one uniform slot per element. Arrays as function
+   parameters or return values, whole-array assignment, attribute/varying
+   arrays, structs, do-while, switch, preprocessor directives and precision
    qualifiers other than ordinary precision statements remain unsupported. */
 bool compile_glsl(
     ShaderStage stage,

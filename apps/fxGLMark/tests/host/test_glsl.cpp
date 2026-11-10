@@ -1265,6 +1265,233 @@ static void test_swizzle_assignments()
         ShaderStage::Fragment, duplicate_source, duplicate_module));
 }
 
+static void compile_or_report(ShaderStage stage, const char *source,
+                              ShaderModule& module, const char *label)
+{
+    const bool compiled = fxgl::compile_glsl(stage, source, module);
+    if (!compiled)
+        std::fprintf(stderr, "%s diagnostic: %s\n", label, module.info_log);
+    assert(compiled);
+}
+
+static void test_local_array_constant_index_lvalues()
+{
+    static const char source[] =
+        "void set_value(out float target, float value) { target = value; }\n"
+        "void main() {\n"
+        "  float weights[3];\n"
+        "  vec4 colors[2];\n"
+        "  mat2 basis[2];\n"
+        "  weights[0] = 0.5;\n"
+        "  weights[2] = weights[0] + 0.25;\n"
+        "  set_value(weights[1], 2.0);\n"
+        "  colors[1] = vec4(0.1, 0.2, 0.3, 0.4);\n"
+        "  colors[1].zx = vec2(0.9, 0.8);\n"
+        "  basis[1][0] = vec2(5.0, 6.0);\n"
+        "  gl_FragColor = vec4(weights[1] + weights[2], colors[1].x,\n"
+        "                      colors[1].z + colors[0].w, basis[1][0].y);\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module,
+                      "constant-index array");
+    ShaderRuntime runtime = {};
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 2.75f));
+    assert(near(runtime.fragment_color.data[1], 0.8f));
+    assert(near(runtime.fragment_color.data[2], 0.9f));
+    assert(near(runtime.fragment_color.data[3], 6.0f));
+}
+
+static void test_local_array_dynamic_index_in_loops_and_functions()
+{
+    static const char source[] =
+        "uniform vec4 u_scale;\n"
+        "float accumulate(int count) {\n"
+        "  float values[4];\n"
+        "  for (int i = 0; i < count; i++) { values[i] = float(i) + 1.0; }\n"
+        "  float sum = 0.0;\n"
+        "  for (int j = 0; j < count; j++) { sum = sum + values[j]; }\n"
+        "  return sum;\n"
+        "}\n"
+        "void main() {\n"
+        "  vec2 table[2];\n"
+        "  int pick = 1;\n"
+        "  table[pick] = u_scale.xy;\n"
+        "  gl_FragColor = vec4(accumulate(4), table[pick].y, table[0].x, 1.0);\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module,
+                      "dynamic-index array");
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Vec4, 3.0f, 7.0f, 0.0f, 0.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 10.0f));
+    assert(near(runtime.fragment_color.data[1], 7.0f));
+    assert(near(runtime.fragment_color.data[2], 0.0f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+
+    /* A reused runtime starts each invocation with zeroed array elements. */
+    runtime.uniforms[0] = value(ShaderType::Vec4, 1.0f, 2.0f, 0.0f, 0.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[1], 2.0f));
+    assert(near(runtime.fragment_color.data[2], 0.0f));
+}
+
+static void test_local_array_dynamic_index_bounds_fail_invocation()
+{
+    static const char *const sources[] = {
+        "uniform int u_index; void main() { float a[2]; "
+        "gl_FragColor = vec4(a[u_index]); }",
+        "uniform int u_index; void main() { float a[2]; float b = 5.0; "
+        "a[u_index] = 1.0; gl_FragColor = vec4(b); }"
+    };
+    const float indices[] = {-1.0f, 2.0f, 1.0f};
+    for (const char *source : sources)
+    {
+        ShaderModule module = {};
+        compile_or_report(ShaderStage::Fragment, source, module,
+                          "array bounds");
+        for (float index : indices)
+        {
+            ShaderRuntime runtime = {};
+            runtime.uniforms[0] = value(ShaderType::Int, index);
+            fxgl::prepare_shader_runtime(module, runtime);
+            const bool executed = fxgl::execute_glsl(module, runtime);
+            assert(executed == (index == 1.0f));
+        }
+    }
+
+    /* The out-of-range write must not clobber the neighboring local. */
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, sources[1], module,
+                      "array neighbor");
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Int, 1.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.fragment_color.data[0], 5.0f));
+}
+
+static void test_local_array_rejections()
+{
+    const char *invalid[] = {
+        "void main() { float a[2]; gl_FragColor = vec4(a); }",
+        "void main() { float a[2]; float b[2]; a = b; gl_FragColor = vec4(1.0); }",
+        "void main() { float a[2] = 1.0; gl_FragColor = vec4(1.0); }",
+        "void main() { float a[0]; gl_FragColor = vec4(1.0); }",
+        "void main() { float a[9]; gl_FragColor = vec4(1.0); }",
+        "void main() { vec4 a[4]; vec4 b[4]; vec4 c; gl_FragColor = c; }",
+        "void main() { float a[2]; gl_FragColor = vec4(a[2]); }",
+        "void main() { float a[2]; a[-1] = 1.0; gl_FragColor = vec4(1.0); }",
+        "void main() { float a[2]; gl_FragColor = vec4(a[1.0]); }",
+        "void main() { vec4 a[2]; int i = 0; a[i].x = 1.0; gl_FragColor = a[0]; }",
+        "void main() { mat2 a[2]; int i = 0; a[i][0] = vec2(1.0); gl_FragColor = vec4(1.0); }",
+        "void main() { float a[2]; a[0] = vec2(1.0); gl_FragColor = vec4(1.0); }",
+        "void main() { sampler2D s[2]; gl_FragColor = vec4(1.0); }",
+        "void set_value(out float t) { t = 1.0; } void main() { float a[2]; int i = 0; "
+        "set_value(a[i]); gl_FragColor = vec4(a[0]); }",
+        "void main() { float a[2]; for (int i = 0; i < 2; a++) { } gl_FragColor = vec4(1.0); }",
+        "void main() { float x = 1.0; gl_FragColor = vec4(x[0]); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled =
+            fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
+        assert(rejected.info_log[0] != '\0');
+    }
+}
+
+static void test_uniform_array_reads()
+{
+    static const char source[] =
+        "attribute vec4 a_position;\n"
+        "uniform float u_bias;\n"
+        "uniform vec4 u_rows[3];\n"
+        "uniform int u_pick;\n"
+        "void main() {\n"
+        "  vec4 sum = vec4(0.0);\n"
+        "  for (int i = 0; i < 3; i++) { sum = sum + u_rows[i]; }\n"
+        "  gl_Position = vec4(sum.x, u_rows[u_pick].y, u_rows[2].z, u_bias);\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Vertex, source, module, "uniform array");
+    /* u_bias, three u_rows element slots, u_pick. */
+    assert(module.uniform_count == 5);
+    assert(std::strcmp(module.uniforms[1].name, "u_rows") == 0);
+    assert(module.uniforms[1].array_size == 3);
+    assert(module.uniforms[2].name[0] == '\0');
+    assert(module.uniforms[3].type == ShaderType::Vec4);
+    assert(std::strcmp(module.uniforms[4].name, "u_pick") == 0);
+    assert(module.uniforms[4].index == 4);
+
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Float, 1.0f);
+    runtime.uniforms[1] = value(ShaderType::Vec4, 1.0f, 10.0f, 100.0f, 0.0f);
+    runtime.uniforms[2] = value(ShaderType::Vec4, 2.0f, 20.0f, 200.0f, 0.0f);
+    runtime.uniforms[3] = value(ShaderType::Vec4, 3.0f, 30.0f, 300.0f, 0.0f);
+    runtime.uniforms[4] = value(ShaderType::Int, 1.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    assert(near(runtime.position.data[0], 6.0f));
+    assert(near(runtime.position.data[1], 20.0f));
+    assert(near(runtime.position.data[2], 300.0f));
+    assert(near(runtime.position.data[3], 1.0f));
+
+    /* Dynamic uniform indices are bounds-checked like local arrays. */
+    runtime.uniforms[4] = value(ShaderType::Int, 3.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(!fxgl::execute_glsl(module, runtime));
+
+    const char *invalid[] = {
+        "uniform vec4 u[2]; void main() { gl_FragColor = u; }",
+        "uniform vec4 u[2]; void main() { gl_FragColor = u[2]; }",
+        "uniform vec4 u[2]; void main() { u[0] = vec4(1.0); gl_FragColor = u[1]; }",
+        "uniform vec4 u[0]; void main() { gl_FragColor = vec4(1.0); }",
+        "uniform vec4 u[17]; void main() { gl_FragColor = vec4(1.0); }",
+        "uniform vec4 u[12]; uniform vec4 v[5]; void main() { gl_FragColor = u[0]; }",
+        "uniform sampler2D u_textures[2]; void main() { gl_FragColor = vec4(1.0); }",
+        "varying vec4 v_colors[2]; void main() { gl_FragColor = v_colors[0]; }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled =
+            fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
+    }
+}
+
+static void test_lexer_errors_report_their_reason()
+{
+    const struct
+    {
+        const char *source;
+        const char *reason;
+    } cases[] = {
+        {"void main() { float this_identifier_is_longer_than_31_chars = 1.0; }",
+         "identifier too long"},
+        {"void main() { float a = 1.0 ? 2.0 : 3.0; }", "unexpected character '?'"},
+        {"void main() { float a = 1e; }", "invalid exponent"},
+    };
+    for (const auto& c : cases)
+    {
+        ShaderModule rejected = {};
+        assert(!fxgl::compile_glsl(ShaderStage::Fragment, c.source, rejected));
+        if (!std::strstr(rejected.info_log, c.reason))
+            std::fprintf(stderr, "unexpected log: %s\n", rejected.info_log);
+        assert(std::strstr(rejected.info_log, c.reason) != nullptr);
+    }
+}
+
 } // namespace
 
 
@@ -1297,6 +1524,12 @@ int main()
     test_compiler_rejects_unsupported_or_invalid_source();
     test_instruction_budget_and_stack_safety();
     test_reused_runtime_resets_locals_and_outputs();
+    test_local_array_constant_index_lvalues();
+    test_local_array_dynamic_index_in_loops_and_functions();
+    test_local_array_dynamic_index_bounds_fail_invocation();
+    test_local_array_rejections();
+    test_uniform_array_reads();
+    test_lexer_errors_report_their_reason();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;

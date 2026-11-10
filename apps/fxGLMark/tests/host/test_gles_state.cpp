@@ -1497,6 +1497,201 @@ void test_integer_and_boolean_vector_uniform_api()
     fxglReleaseCurrent();
 }
 
+void test_uniform_array_api_and_draw()
+{
+    uint16_t color[1] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 1, 1, 1};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "attribute vec4 a_position;\n"
+        "uniform vec2 u_offsets[2];\n"
+        "void main() {\n"
+        "  gl_Position = vec4(a_position.xy + u_offsets[1], 0.0, 1.0);\n"
+        "  gl_PointSize = 1.0;\n"
+        "}\n";
+    static const GLchar fragment_source[] =
+        "precision mediump float;\n"
+        "uniform vec4 u_colors[3];\n"
+        "uniform int u_pick;\n"
+        "uniform mat2 u_basis[2];\n"
+        "uniform float u_gain;\n"
+        "void main() {\n"
+        "  gl_FragColor = u_colors[u_pick] * u_basis[1][1].y * u_gain;\n"
+        "}\n";
+    const GLchar *vertex_parts[] = {vertex_source};
+    const GLchar *fragment_parts[] = {fragment_source};
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, vertex_parts, nullptr);
+    glShaderSource(fs, 1, fragment_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+    GLint status = GL_FALSE;
+    glGetShaderiv(vs, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &status);
+    assert(status == GL_TRUE);
+
+    /* Each array is one active uniform reported as name[0] with its size. */
+    glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &status);
+    assert(status == 5);
+    bool saw_colors = false;
+    bool saw_basis = false;
+    bool saw_pick = false;
+    for (GLuint i = 0; i < 5; ++i)
+    {
+        GLchar name[40] = {};
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveUniform(program, i, sizeof(name), &length, &size, &type, name);
+        assert(length == static_cast<GLsizei>(std::strlen(name)));
+        if (std::strcmp(name, "u_colors[0]") == 0)
+            saw_colors = size == 3 && type == GL_FLOAT_VEC4;
+        if (std::strcmp(name, "u_basis[0]") == 0)
+            saw_basis = size == 2 && type == GL_FLOAT_MAT2;
+        if (std::strcmp(name, "u_pick") == 0)
+            saw_pick = size == 1 && type == GL_INT;
+    }
+    assert(saw_colors && saw_basis && saw_pick);
+    GLchar unused[8];
+    glGetActiveUniform(program, 5, sizeof(unused), nullptr, nullptr, nullptr, unused);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    const GLint colors = glGetUniformLocation(program, "u_colors");
+    assert(colors >= 0);
+    assert(glGetUniformLocation(program, "u_colors[0]") == colors);
+    const GLint colors1 = glGetUniformLocation(program, "u_colors[1]");
+    assert(colors1 == colors + 1);
+    assert(glGetUniformLocation(program, "u_colors[2]") == colors + 2);
+    const char *bad_names[] = {
+        "u_colors[3]", "u_colors[01]", "u_colors[]", "u_colors[x]",
+        "u_colors[1]x", "u_pick[0]", "[0]", "", "u_colors[-1]"
+    };
+    for (const char *bad : bad_names)
+        assert(glGetUniformLocation(program, bad) == -1);
+    assert(glGetError() == GL_NO_ERROR);
+
+    const GLint offsets = glGetUniformLocation(program, "u_offsets");
+    const GLint pick = glGetUniformLocation(program, "u_pick");
+    const GLint basis = glGetUniformLocation(program, "u_basis");
+    const GLint basis1 = glGetUniformLocation(program, "u_basis[1]");
+    const GLint gain = glGetUniformLocation(program, "u_gain");
+    assert(offsets >= 0 && pick >= 0 && basis >= 0 && basis1 == basis + 1 &&
+           gain >= 0);
+    glUseProgram(program);
+
+    /* count spans consecutive elements; values past the end are ignored. */
+    const GLfloat palette[12] = {
+        1.0f, 0.0f, 0.0f, 1.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    glUniform4fv(colors, 3, palette);
+    const GLfloat tail[12] = {
+        0.0f, 1.0f, 0.0f, 1.0f,
+        0.0f, 0.0f, 1.0f, 1.0f,
+        9.0f, 9.0f, 9.0f, 9.0f
+    };
+    glUniform4fv(colors1, 3, tail);
+    assert(glGetError() == GL_NO_ERROR);
+    GLfloat retrieved[4] = {};
+    glGetUniformfv(program, colors, retrieved);
+    assert(retrieved[0] == 1.0f && retrieved[1] == 0.0f);
+    glGetUniformfv(program, colors1, retrieved);
+    assert(retrieved[1] == 1.0f && retrieved[2] == 0.0f);
+    glGetUniformfv(program, colors + 2, retrieved);
+    assert(retrieved[1] == 0.0f && retrieved[2] == 1.0f);
+    /* The excess value did not spill into the next uniform. */
+    glGetUniformfv(program, colors + 3, retrieved);
+    assert(retrieved[0] != 9.0f);
+
+    const GLfloat offset_values[4] = {5.0f, 5.0f, 0.0f, 0.0f};
+    glUniform2fv(offsets, 2, offset_values);
+    const GLfloat bases[8] = {
+        0.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f, 1.0f
+    };
+    glUniformMatrix2fv(basis, 2, GL_FALSE, bases);
+    GLfloat retrieved_matrix[4] = {};
+    glGetUniformfv(program, basis1, retrieved_matrix);
+    assert(retrieved_matrix[0] == 1.0f && retrieved_matrix[3] == 1.0f);
+    const GLfloat one = 1.0f;
+    glUniform1fv(gain, 1, &one);
+    assert(glGetError() == GL_NO_ERROR);
+
+    /* count > 1 needs an array; a negative count is invalid. */
+    const GLfloat two[2] = {1.0f, 1.0f};
+    glUniform1fv(gain, 2, two);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glUniform4fv(colors, -1, palette);
+    assert(glGetError() == GL_INVALID_VALUE);
+    const GLint picks[2] = {0, 0};
+    glUniform1iv(pick, 2, picks);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    /* Draw one point; the fragment colour is u_colors[u_pick]. The vertex
+       stage reads u_offsets[1] (zero), so a wrong element would move the
+       point off the 1x1 surface. */
+    const GLint position = glGetAttribLocation(program, "a_position");
+    assert(position >= 0);
+    const GLfloat center[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    glVertexAttribPointer(static_cast<GLuint>(position), 4, GL_FLOAT,
+                          GL_FALSE, 0, center);
+    glEnableVertexAttribArray(static_cast<GLuint>(position));
+    glViewport(0, 0, 1, 1);
+    const uint16_t expected[3] = {RED, GREEN, BLUE};
+    for (GLint index = 0; index < 3; ++index)
+    {
+        color[0] = SENTINEL;
+        glUniform1i(pick, index);
+        glDrawArrays(GL_POINTS, 0, 1);
+        assert(glGetError() == GL_NO_ERROR);
+        assert(color[0] == expected[index]);
+    }
+
+    /* An out-of-range dynamic index fails the fragment, not memory. */
+    color[0] = SENTINEL;
+    glUniform1i(pick, 3);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    assert(color[0] == SENTINEL);
+
+    glDeleteProgram(program);
+    glDeleteShader(fs);
+
+    /* Stages must agree on a shared uniform array's size. */
+    static const GLchar mismatched_fragment[] =
+        "precision mediump float;\n"
+        "uniform vec2 u_offsets[3];\n"
+        "void main() { gl_FragColor = vec4(u_offsets[2], 0.0, 1.0); }\n";
+    const GLchar *mismatched_parts[] = {mismatched_fragment};
+    const GLuint mismatched_fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(mismatched_fs, 1, mismatched_parts, nullptr);
+    glCompileShader(mismatched_fs);
+    glGetShaderiv(mismatched_fs, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+    const GLuint mismatched = glCreateProgram();
+    glAttachShader(mismatched, vs);
+    glAttachShader(mismatched, mismatched_fs);
+    glLinkProgram(mismatched);
+    glGetProgramiv(mismatched, GL_LINK_STATUS, &status);
+    assert(status == GL_FALSE);
+
+    glDeleteProgram(mismatched);
+    glDeleteShader(mismatched_fs);
+    glDeleteShader(vs);
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -1603,6 +1798,7 @@ int main()
     test_shader_and_program_object_lifecycle();
     test_mat2_mat3_uniform_api_and_introspection();
     test_integer_and_boolean_vector_uniform_api();
+    test_uniform_array_api_and_draw();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

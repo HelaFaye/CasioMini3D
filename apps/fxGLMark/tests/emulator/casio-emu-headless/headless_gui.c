@@ -6,9 +6,19 @@
 
 #define SCREEN_WIDTH 396
 #define SCREEN_HEIGHT 224
+
 #define EXPECTED_POINT_SIZE_MARKER 0x07e0
 #define EXPECTED_POINT_RED 0xf800
 #define EXPECTED_POINT_SIZE_RED_PIXELS 600
+#define EXPECTED_AUXILIARY_PIXELS 15
+#define EXPECTED_DEPTH_PIXEL 0x001f
+#define EXPECTED_BLEND_PIXEL 0x8010
+#define EXPECTED_COLOR_MASK_PIXEL 0x07ff
+#define EXPECTED_TEXTURE_GREEN 0x07e0
+#define EXPECTED_TEXTURE_WHITE 0xffff
+#define EXPECTED_TRIANGLE_PIXEL 0x07ff
+#define EXPECTED_INDEXED_TRIANGLE_PIXEL 0xf81f
+#define EXPECTED_LOCAL_ARRAY_PIXEL 0xffe0
 
 struct ExpectedRect
 {
@@ -71,7 +81,7 @@ static void save_ppm(void)
     fclose(file);
 }
 
-static int expected_red_pixel(int x, int y)
+static int expected_point_red_pixel(int x, int y)
 {
     for (size_t i = 0;
          i < sizeof(expected_red_rects) / sizeof(expected_red_rects[0]);
@@ -85,9 +95,40 @@ static int expected_red_pixel(int x, int y)
     return 0;
 }
 
-static int validate_framebuffer(int *red_pixel_count)
+static u16 expected_pixel_color(int x, int y)
+{
+    if (expected_point_red_pixel(x, y))
+        return EXPECTED_POINT_RED;
+    if (x == 240 && y == 150) return EXPECTED_DEPTH_PIXEL;
+    if (x == 280 && y == 150) return EXPECTED_BLEND_PIXEL;
+    if (x == 310 && y == 150) return EXPECTED_COLOR_MASK_PIXEL;
+    if (x == 240 && y == 190) return EXPECTED_TEXTURE_GREEN;
+    if (x == 280 && y == 190) return EXPECTED_TRIANGLE_PIXEL;
+    if (x == 320 && y == 190) return EXPECTED_INDEXED_TRIANGLE_PIXEL;
+    if (x == 360 && y == 190) return EXPECTED_LOCAL_ARRAY_PIXEL;
+
+    if (y == 170)
+    {
+        switch (x)
+        {
+            case 240:
+            case 320:
+            case 380: return EXPECTED_POINT_RED;
+            case 260:
+            case 340:
+            case 360: return EXPECTED_TEXTURE_GREEN;
+            case 280: return EXPECTED_DEPTH_PIXEL;
+            case 300: return EXPECTED_TEXTURE_WHITE;
+            default: break;
+        }
+    }
+    return 0;
+}
+
+static int validate_framebuffer(int *red_pixel_count, int *auxiliary_pixel_count)
 {
     int red_pixels = 0;
+    int auxiliary_pixels = 0;
     for (int y = 0; y < SCREEN_HEIGHT; ++y)
     {
         for (int x = 0; x < SCREEN_WIDTH; ++x)
@@ -98,19 +139,21 @@ static int validate_framebuffer(int *red_pixel_count)
             if (x == 0 && y == 0)
                 continue;
 
-            const int expected_red = expected_red_pixel(x, y);
-            const int actual_red = pixel == EXPECTED_POINT_RED;
-            if (actual_red)
+            const u16 expected = expected_pixel_color(x, y);
+            if (expected_point_red_pixel(x, y))
                 ++red_pixels;
+            else if (expected != 0)
+                ++auxiliary_pixels;
 
-            if (expected_red != actual_red ||
-                (!expected_red && pixel != 0))
+            if (pixel != expected)
                 return 0;
         }
     }
 
     *red_pixel_count = red_pixels;
-    return red_pixels == EXPECTED_POINT_SIZE_RED_PIXELS;
+    *auxiliary_pixel_count = auxiliary_pixels;
+    return red_pixels == EXPECTED_POINT_SIZE_RED_PIXELS &&
+           auxiliary_pixels == EXPECTED_AUXILIARY_PIXELS;
 }
 
 void runMainLoop(void (*callback)(void))
@@ -123,19 +166,21 @@ void runMainLoop(void (*callback)(void))
     save_ppm();
     const unsigned marker = have_frame ? last_frame[0] : 0;
     int red_pixels = 0;
+    int auxiliary_pixels = 0;
     const int framebuffer_valid =
-        have_frame && validate_framebuffer(&red_pixels);
+        have_frame && validate_framebuffer(&red_pixels, &auxiliary_pixels);
 
-    printf("CASIO_EMU_POINT_SIZE_MARKER=0x%04x\n", marker);
-    printf("CASIO_EMU_POINT_SIZE_RED_PIXELS=%d\n", red_pixels);
-    printf("CASIO_EMU_POINT_SIZE_CASES=10\n");
+    printf("CASIO_EMU_GLES_MARKER=0x%04x\n", marker);
+    printf("CASIO_EMU_GLES_RED_PIXELS=%d\n", red_pixels);
+    printf("CASIO_EMU_GLES_AUXILIARY_PIXELS=%d\n", auxiliary_pixels);
+    printf("CASIO_EMU_GLES_CASES=26\n");
     printf("CASIO_EMU_DISPLAY_CAPTURED=%s\n", have_frame ? "yes" : "no");
 
     if (!have_frame || marker != EXPECTED_POINT_SIZE_MARKER ||
         !framebuffer_valid)
     {
-        fprintf(stderr, "Casio emulator point-rasterization test failed\n");
+        fprintf(stderr, "Casio emulator GLES regression test failed\n");
         exit(1);
     }
-    puts("CASIO_EMU_POINT_SIZE_RESULT=PASS");
+    puts("CASIO_EMU_GLES_RESULT=PASS");
 }

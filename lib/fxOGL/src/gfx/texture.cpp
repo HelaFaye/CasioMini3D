@@ -17,20 +17,54 @@ struct FixedCoordinate
     uint32_t fraction;
 };
 
-/* C++ signed division truncates toward zero. Convert it to mathematical floor
-   so negative texture coordinates wrap and interpolate consistently. */
+/* Mathematical floor division by 65536 with a non-negative remainder, so
+   negative texture coordinates wrap and interpolate consistently. Arithmetic
+   right shift (defined for negative values since C++20) is that floor, and
+   avoids 64-bit division library calls on the SH-4. */
 static FixedCoordinate split_coordinate(int64_t value)
 {
-    int64_t whole = value / FIXED_ONE_16;
-    int64_t remainder = value % FIXED_ONE_16;
+    return {value >> 16,
+            static_cast<uint32_t>(static_cast<uint64_t>(value) &
+                                  static_cast<uint64_t>(FIXED_ONE_16 - 1))};
+}
 
-    if (remainder < 0)
+/* For coordinate in [-64, 64) and shift <= 16 (any uint16_t pow2 extent),
+   floor(coordinate * 2^shift) using integer operations on the IEEE bits.
+   Scaling by a power of two is exact, so this equals the float multiply,
+   truncation and negative floor correction it replaces. Returns false
+   outside the range, which also rejects NaN and infinities. */
+static inline bool floor_scaled_pow2_bounded(
+    float coordinate,
+    unsigned shift,
+    int32_t& result)
+{
+    constexpr uint32_t SIXTY_FOUR = 0x42800000u; // 64.0f
+    const uint32_t bits = __builtin_bit_cast(uint32_t, coordinate);
+    const uint32_t magnitude = bits & 0x7fffffffu;
+    const bool negative = (bits >> 31) != 0;
+    if (negative ? magnitude > SIXTY_FOUR : magnitude >= SIXTY_FOUR)
+        return false;
+
+    const uint32_t biased_exponent = magnitude >> 23;
+    if (biased_exponent == 0)
     {
-        --whole;
-        remainder += FIXED_ONE_16;
+        // Zero or subnormal: |value * 2^shift| < 1.
+        result = (negative && magnitude != 0) ? -1 : 0;
+        return true;
     }
-
-    return {whole, static_cast<uint32_t>(remainder)};
+    const uint32_t mantissa = (magnitude & 0x7fffffu) | 0x800000u;
+    // value * 2^shift = mantissa * 2^(biased_exponent - 150 + shift); the
+    // range check bounds the exponent (<= 133) so the right shift is >= 1.
+    const unsigned right = 150u - shift - biased_exponent;
+    if (right >= 32)
+    {
+        result = negative ? -1 : 0;
+        return true;
+    }
+    const int32_t whole = static_cast<int32_t>(mantissa >> right);
+    const bool has_fraction = (mantissa & ((1u << right) - 1u)) != 0;
+    result = negative ? -whole - (has_fraction ? 1 : 0) : whole;
+    return true;
 }
 
 static uint16_t address_index(
@@ -48,8 +82,14 @@ static uint16_t address_index(
     }
 
     const int64_t extent = static_cast<int64_t>(size);
+    // For power-of-two extents, two's-complement masking equals the
+    // non-negative modulo below without a 64-bit division library call.
+    const bool power_of_two = (size & static_cast<uint16_t>(size - 1)) == 0;
     if (mode == TextureAddressMode::Repeat)
     {
+        if (power_of_two)
+            return static_cast<uint16_t>(
+                static_cast<uint64_t>(index) & static_cast<uint64_t>(extent - 1));
         int64_t wrapped = index % extent;
         if (wrapped < 0)
             wrapped += extent;
@@ -57,9 +97,16 @@ static uint16_t address_index(
     }
 
     const int64_t period = extent * 2;
-    int64_t wrapped = index % period;
-    if (wrapped < 0)
-        wrapped += period;
+    int64_t wrapped = 0;
+    if (power_of_two)
+        wrapped = static_cast<int64_t>(
+            static_cast<uint64_t>(index) & static_cast<uint64_t>(period - 1));
+    else
+    {
+        wrapped = index % period;
+        if (wrapped < 0)
+            wrapped += period;
+    }
     if (wrapped >= extent)
         wrapped = period - wrapped - 1;
     return static_cast<uint16_t>(wrapped);
@@ -379,6 +426,87 @@ static uint16_t sample_texture_impl(
     return interpolate_rgb565(first, second, std::min<uint32_t>(fraction, 65536u));
 }
 
+bool texture_coordinate_16_16(
+    float coordinate,
+    uint16_t size,
+    bool half_texel_offset,
+    int64_t& result)
+{
+    const uint32_t bits = __builtin_bit_cast(uint32_t, coordinate);
+    const uint32_t biased_exponent = (bits >> 23) & 0xffu;
+    if (biased_exponent == 0xffu)
+        return false;
+
+    // |coordinate| * size * 65536 == product * 2^shift exactly, where
+    // product < 2^24 * 2^16 = 2^40.
+    uint64_t mantissa = bits & 0x7fffffu;
+    int shift = 0;
+    if (biased_exponent == 0)
+        shift = -149 + 16;
+    else
+    {
+        mantissa |= 0x800000u;
+        shift = static_cast<int>(biased_exponent) - 150 + 16;
+    }
+    const uint64_t product = mantissa * size;
+    const bool negative = (bits >> 31) != 0;
+    const uint64_t offset = half_texel_offset ? 32768u : 0u;
+    constexpr uint64_t TWO_63 = 0x8000000000000000ull;
+
+    if (!negative)
+    {
+        // result = floor(product * 2^shift) - offset must be below 2^63.
+        uint64_t whole = 0;
+        if (shift >= 0)
+        {
+            if (product != 0 &&
+                (shift > 63 || product > ((TWO_63 - 1 + offset) >> shift)))
+                return false;
+            whole = product << shift;
+        }
+        else
+            whole = shift <= -64 ? 0 : product >> -shift;
+        result = static_cast<int64_t>(whole - offset);
+        return true;
+    }
+
+    // Negative: floor(-m) == -ceil(m); the result must be at least -2^63.
+    uint64_t magnitude = 0;
+    if (shift >= 0)
+    {
+        if (product != 0 &&
+            (shift > 63 || product > ((TWO_63 - offset) >> shift)))
+            return false;
+        magnitude = product << shift;
+    }
+    else if (product != 0)
+    {
+        // The double-precision reference subtracts 0.5 before scaling: for
+        // a negative texel coordinate of magnitude at most 2^-54 (half the
+        // 2^-53 ulp of doubles in [0.5, 1); a tie rounds to the even -0.5),
+        // texel - 0.5 rounds to exactly -0.5. The magnitude here is
+        // product * 2^shift = |texel| * 2^16, so that bound is
+        // product <= 2^(-shift - 38).
+        const int absorbed_exponent = -shift - 38;
+        if (half_texel_offset && absorbed_exponent >= 0 &&
+            (absorbed_exponent >= 40 ||
+             product <= (1ull << absorbed_exponent)))
+            magnitude = 0;
+        else if (shift <= -64)
+            magnitude = 1;
+        else
+        {
+            const unsigned right = static_cast<unsigned>(-shift);
+            const uint64_t mask = (1ull << right) - 1;
+            magnitude = (product >> right) + ((product & mask) != 0 ? 1 : 0);
+        }
+    }
+    if (magnitude + offset > TWO_63)
+        return false;
+    result = static_cast<int64_t>(0 - (magnitude + offset));
+    return true;
+}
+
 uint16_t sample_texture_validated(
     const Texture2DView& texture,
     int64_t u_16_16,
@@ -407,6 +535,9 @@ bool prepare_texture_nearest_repeat_pow2_sampler(
     uint8_t row_shift = 0;
     while ((static_cast<uint32_t>(1) << row_shift) < texture.width)
         ++row_shift;
+    uint8_t height_shift = 0;
+    while ((static_cast<uint32_t>(1) << height_shift) < texture.height)
+        ++height_shift;
 
     prepared.pixels = texture.pixels;
     prepared.scale_u = static_cast<float>(texture.width);
@@ -414,6 +545,7 @@ bool prepare_texture_nearest_repeat_pow2_sampler(
     prepared.mask_u = static_cast<uint16_t>(texture.width - 1);
     prepared.mask_v = static_cast<uint16_t>(texture.height - 1);
     prepared.row_shift = row_shift;
+    prepared.height_shift = height_shift;
     return true;
 }
 
@@ -423,21 +555,13 @@ bool sample_texture_nearest_repeat_pow2_cached(
     float v,
     uint16_t& pixel)
 {
-    // Range comparisons reject NaN and infinities before integer conversion.
-    if (!(u >= -64.0f && u < 64.0f &&
-          v >= -64.0f && v < 64.0f))
+    // Accepts u, v in [-64, 64), rejecting NaN and infinities, and returns
+    // floor(coordinate * 2^shift) exactly; see floor_scaled_pow2_bounded().
+    int32_t x = 0;
+    int32_t y = 0;
+    if (!floor_scaled_pow2_bounded(u, sampler.row_shift, x) ||
+        !floor_scaled_pow2_bounded(v, sampler.height_shift, y))
         return false;
-
-    const float scaled_u = u * sampler.scale_u;
-    const float scaled_v = v * sampler.scale_v;
-    int32_t x = static_cast<int32_t>(scaled_u);
-    int32_t y = static_cast<int32_t>(scaled_v);
-
-    // The glmark2 sphere supplies nonnegative UVs, where truncation equals floor.
-    if (u < 0.0f)
-        if (static_cast<float>(x) > scaled_u) --x;
-    if (v < 0.0f)
-        if (static_cast<float>(y) > scaled_v) --y;
 
     const uint32_t addressed_x =
         static_cast<uint32_t>(x) & sampler.mask_u;

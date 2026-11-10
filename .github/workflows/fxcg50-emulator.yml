@@ -1,9 +1,20 @@
-name: FX-CG50 emulated point-size smoke test
+name: FX-CG50 emulator GLES regression
 
+# Run on every change that can affect the add-in or the emulator harness,
+# both for pull requests and after merging to main.
 on:
   push:
     branches:
-      - feature/glsl-point-size
+      - main
+    paths:
+      - "lib/fxOGL/**"
+      - "apps/fxGLMark/tests/emulator/**"
+      - ".github/workflows/fxcg50-emulator.yml"
+  pull_request:
+    paths:
+      - "lib/fxOGL/**"
+      - "apps/fxGLMark/tests/emulator/**"
+      - ".github/workflows/fxcg50-emulator.yml"
   workflow_dispatch:
     inputs:
       refresh_toolchain:
@@ -115,18 +126,19 @@ jobs:
           sh-elf-gcc -I"$target_include" -std=c11 -ffreestanding -fsyntax-only /tmp/fxogl-c-math-probe.c
           TOOLCHAIN_PROBE
 
-      - name: Build point-size smoke add-in
+      - name: Build fxOGL emulator regression add-in
         run: |
           docker run --rm --volume "$GITHUB_WORKSPACE:/work" --workdir /work/apps/fxGLMark/tests/emulator fxsdk-ci fxsdk build-cg
-          G3A="$(find apps/fxGLMark/tests/emulator -type f -name 'fxogl-point-size-smoke.g3a' -print -quit)"
+          G3A="$(find apps/fxGLMark/tests/emulator -type f -name 'fxogl-emulator-regression.g3a' -print -quit)"
           test -n "$G3A"
           printf 'FXSDK_G3A=%s\n' "$G3A" >> "$GITHUB_ENV"
-
       - name: Check out Casio CG50 emulator
         uses: actions/checkout@v4
         with:
           repository: Heath123/casio-emu
-          ref: master
+          # Pinned for reproducible results; this is master as of 2023-10-23,
+          # which every passing run of this suite has used. Bump deliberately.
+          ref: 5d34e298b94be65f7ab0505d3c0f9b9ed802ac4b
           path: .cache/casio-emu
 
       - name: Build headless Casio emulator
@@ -134,13 +146,13 @@ jobs:
           cmake -S apps/fxGLMark/tests/emulator/casio-emu-headless -B build/casio-emu-headless -DCASIO_EMU_SOURCE="$GITHUB_WORKSPACE/.cache/casio-emu"
           cmake --build build/casio-emu-headless --parallel 2
 
-      - name: Run fxOGL point-size smoke add-in in Casio emulator
+      - name: Run fxOGL GLES regression add-in in Casio emulator
         run: build/casio-emu-headless/casio-emu-headless "$FXSDK_G3A"
 
       - name: Upload emulated calculator screen
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fxcg50-point-size-emulated-screen
+          name: fxcg50-gles-emulated-screen
           path: emulated-screen.ppm
           if-no-files-found: ignore

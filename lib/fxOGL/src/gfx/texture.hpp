@@ -62,6 +62,18 @@ bool texture_valid(const Texture2DView& texture);
 bool sampler_valid(const TextureSampler& sampler);
 /* True when implicit LOD can change the selected minification/magnification filter. */
 bool sampler_requires_implicit_derivatives(const TextureSampler& sampler);
+/* Convert a finite normalized coordinate to 16.16 texel space:
+   floor(coordinate * size * 65536), minus half a texel (32768) when
+   half_texel_offset is set for linear filtering. Exactly equal to the
+   double-precision formulation it replaces, using integer arithmetic only
+   (the fx-CG50 has no FPU). Returns false for non-finite input or when the
+   result is outside [-2^63, 2^63). */
+bool texture_coordinate_16_16(
+    float coordinate,
+    uint16_t size,
+    bool half_texel_offset,
+    int64_t& result);
+
 /* Fast path for a texture/sampler pair already validated and kept unchanged
    for the duration of a draw call. The caller must satisfy both preconditions. */
 uint16_t sample_texture_validated(
@@ -80,7 +92,8 @@ struct TextureNearestRepeatPow2Sampler
     float scale_v;
     uint16_t mask_u;
     uint16_t mask_v;
-    uint8_t row_shift;
+    uint8_t row_shift;    /* log2(width) */
+    uint8_t height_shift; /* log2(height) */
 };
 
 /* Prepare once per draw; returns false unless the texture/sampler is exactly

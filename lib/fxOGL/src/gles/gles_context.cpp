@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <limits>
 #include <cstring>
-#include <limits>
 
 namespace
 {
@@ -1106,10 +1105,7 @@ static bool sample_bound_texture(
         if (gfx::sample_texture_nearest_repeat_pow2_cached(
                 cached.repeat_sampler, u, v, pixel))
         {
-            rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
-            rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
-            rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
-            rgba[3] = 1.0f;
+            fxgl::rgb565_to_unit_float(pixel, rgba);
             return true;
         }
     }
@@ -1130,10 +1126,7 @@ static bool sample_bound_texture(
         if (!gfx::sample_texture_nearest_validated(
                 texture, u, v, sampler, pixel))
             return false;
-        rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
-        rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
-        rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
-        rgba[3] = 1.0f;
+        fxgl::rgb565_to_unit_float(pixel, rgba);
         return true;
     }
 
@@ -1157,37 +1150,18 @@ static bool sample_bound_texture(
            sampler.min_filter == gfx::TextureMinFilter::LinearMipmapLinear)
         : sampler.filter == gfx::TextureFilter::Bilinear;
 
-    /* Normalized GLES coordinates are converted to texel-space coordinates.
-       Linear filtering is centered half a texel between neighboring samples. */
-    double texel_u = static_cast<double>(u) * texture.width;
-    double texel_v = static_cast<double>(v) * texture.height;
-    if (linear_filter)
-    {
-        texel_u -= 0.5;
-        texel_v -= 0.5;
-    }
-
-    const double scale = 65536.0;
-    const double scaled_u = floor(texel_u * scale);
-    const double scaled_v = floor(texel_v * scale);
-    const double minimum = static_cast<double>(
-        std::numeric_limits<int64_t>::min());
-    const double maximum = static_cast<double>(
-        std::numeric_limits<int64_t>::max());
-    if (scaled_u < minimum || scaled_u >= maximum ||
-        scaled_v < minimum || scaled_v >= maximum)
+    /* Normalized GLES coordinates are converted to 16.16 texel space.
+       Linear filtering is centered half a texel between neighboring samples.
+       The conversion is exact integer arithmetic (no FPU on the fx-CG50). */
+    int64_t scaled_u = 0;
+    int64_t scaled_v = 0;
+    if (!gfx::texture_coordinate_16_16(u, texture.width, linear_filter, scaled_u) ||
+        !gfx::texture_coordinate_16_16(v, texture.height, linear_filter, scaled_v))
         return false;
 
     const uint16_t pixel = gfx::sample_texture_validated(
-        texture,
-        static_cast<int64_t>(scaled_u),
-        static_cast<int64_t>(scaled_v),
-        sampler,
-        lod);
-    rgba[0] = static_cast<float>((pixel >> 11) & 0x1f) / 31.0f;
-    rgba[1] = static_cast<float>((pixel >> 5) & 0x3f) / 63.0f;
-    rgba[2] = static_cast<float>(pixel & 0x1f) / 31.0f;
-    rgba[3] = 1.0f;
+        texture, scaled_u, scaled_v, sampler, lod);
+    fxgl::rgb565_to_unit_float(pixel, rgba);
     return true;
 }
 
@@ -3967,6 +3941,9 @@ static void build_pipeline_context(
 
     pipeline_default_state(state, surface.width, surface.height);
     state.varying_derivatives = varying_derivatives;
+    // GLES shaders here cannot write depth or discard; skipping them for
+    // depth-rejected fragments leaves every buffer unchanged.
+    state.early_depth_test = true;
     for (int i = 0; i < 4; ++i)
     {
         state.viewport[i] = g_context.viewport[i];

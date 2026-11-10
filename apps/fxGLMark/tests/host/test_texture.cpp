@@ -689,9 +689,59 @@ static void test_invalid_inputs_fail_closed()
 }
 } // namespace
 
+static void test_texture_coordinate_conversion_matches_double_reference()
+{
+    // texture_coordinate_16_16 replaces this double-precision formula; it
+    // was verified against it for every float bit pattern. Keep the boundary
+    // cases here: zero signs, tiny negatives absorbed by texel - 0.5, int64
+    // limits and non-finite input.
+    const auto reference = [](float u, uint16_t size, bool linear, int64_t& out)
+    {
+        if (!std::isfinite(u))
+            return false;
+        double texel = static_cast<double>(u) * size;
+        if (linear)
+            texel -= 0.5;
+        const double scaled = std::floor(texel * 65536.0);
+        if (scaled < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
+            scaled >= static_cast<double>(std::numeric_limits<int64_t>::max()))
+            return false;
+        out = static_cast<int64_t>(scaled);
+        return true;
+    };
+    const float cases[] = {
+        0.0f, -0.0f, 0.25f, -0.25f, 1.0f, -1.0f, 0.999999f, 1.5f, -2.75f,
+        1.0e-30f, -1.0e-30f, -std::ldexp(1.0f, -54), -std::ldexp(1.0f, -53),
+        -std::nextafter(std::ldexp(1.0f, -54), 1.0f),
+        std::numeric_limits<float>::denorm_min(),
+        -std::numeric_limits<float>::denorm_min(),
+        std::ldexp(1.0f, 40), -std::ldexp(1.0f, 40),
+        std::ldexp(1.0f, 47), -std::ldexp(1.0f, 47),
+        std::ldexp(1.0f, 60), -std::ldexp(1.0f, 60),
+        std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN()
+    };
+    const uint16_t sizes[] = {1, 3, 32, 100, 128, 65535};
+    for (float u : cases)
+        for (uint16_t size : sizes)
+            for (int linear = 0; linear < 2; ++linear)
+            {
+                int64_t expected = 0;
+                int64_t actual = 0;
+                const bool expected_ok = reference(u, size, linear != 0, expected);
+                const bool actual_ok =
+                    gfx::texture_coordinate_16_16(u, size, linear != 0, actual);
+                assert(expected_ok == actual_ok);
+                if (expected_ok)
+                    assert(expected == actual);
+            }
+}
+
 int main()
 {
     test_sampler_derivative_requirements();
+    test_texture_coordinate_conversion_matches_double_reference();
     test_validated_sampler_matches_checked_sampler();
     test_normalized_nearest_fast_path_matches_fixed_point();
     test_view_and_sampler_validation();

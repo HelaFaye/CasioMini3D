@@ -57,11 +57,14 @@ current compatibility boundary is documented in
 
 ## Hardware measurements
 
-The fxGLMark nearest-texture scene has been measured on a physical fx-CG50.
-The latest supplied 24-frame run averaged 3.117216 seconds for 144 triangles
-per frame. The paired VBO build run averaged 3.133346 seconds. These are
-calculator-specific software-rendering measurements, not glmark2 scores
-comparable with desktop/mobile GPUs.
+fxGLMark has been measured on a physical fx-CG50. The latest supplied run
+(commit `52798af`, 24 frames of 144 triangles) averaged 3.163 seconds per
+frame for the nearest-texture scene, 3.195 seconds for the VBO build scene,
+3.194 seconds for Gouraud shading and 4.617 seconds for linear texture
+filtering. These are calculator-specific software-rendering measurements, not
+glmark2 scores comparable with desktop/mobile GPUs. Per-scene and
+microbenchmark figures are recorded in
+[`docs/fxOGL-roadmap.md`](docs/fxOGL-roadmap.md#performance-work).
 
 The device has also produced all seven F4 renderer microbenchmark stages.
 Further release validation remains: every battery and workload, CSV

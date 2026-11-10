@@ -149,8 +149,8 @@ public:
         }
 
         token.kind = TokenKind::Invalid;
-        token.text[0] = c;
-        token.text[1] = '\0';
+        std::snprintf(token.text, sizeof(token.text),
+                      "unexpected character '%c'", c);
         ++offset_;
         return token;
     }
@@ -226,6 +226,8 @@ struct ResolvedVariable
     bool writable = false;
     bool is_swizzle = false;
     uint8_t components[4] = {};
+    /* Non-zero for an unindexed local array; type is the element type. */
+    uint8_t array_size = 0;
 };
 
 static constexpr uint16_t CALL_OUTPUT_TARGET_FULL = 0x8000;
@@ -490,8 +492,9 @@ private:
     void advance()
     {
         current_ = lexer_.next();
+        // The lexer leaves a reason (e.g. "identifier too long") in the text.
         if (current_.kind == TokenKind::Invalid && !failed_)
-            fail("invalid token");
+            fail(current_.text[0] != '\0' ? current_.text : "invalid token");
     }
 
     bool is_identifier(const char *name) const
@@ -644,10 +647,30 @@ private:
         std::snprintf(name, sizeof(name), "%s", current_.text);
         advance();
 
+        size_t array_size = 0;
         if (accept_punctuation('['))
         {
-            fail("arrays are not supported yet");
-            return;
+            if (storage != Storage::Uniform)
+            {
+                fail("only uniform and local arrays are supported");
+                return;
+            }
+            if (type == ShaderType::Sampler2D)
+            {
+                fail("sampler arrays are not supported");
+                return;
+            }
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 1.0f ||
+                current_.number > static_cast<float>(GLSL_MAX_UNIFORMS))
+            {
+                fail("array size must be a positive integer constant");
+                return;
+            }
+            array_size = static_cast<size_t>(current_.number);
+            advance();
+            if (!expect_punctuation(']'))
+                return;
         }
         expect_punctuation(';');
         if (failed_)
@@ -687,17 +710,28 @@ private:
             capacity = GLSL_MAX_VARYINGS;
         }
 
-        if (*count >= capacity)
+        const size_t slots = array_size == 0 ? 1 : array_size;
+        if (*count + slots > capacity)
         {
             fail("shader variable limit exceeded");
             return;
         }
 
-        ShaderVariable& variable = variables[*count];
-        std::snprintf(variable.name, sizeof(variable.name), "%s", name);
-        variable.type = type;
-        variable.index = static_cast<uint8_t>(*count);
-        ++(*count);
+        // Uniform arrays use consecutive slots like local arrays: the first
+        // entry carries the name and size, later elements are unnamed.
+        for (size_t slot = 0; slot < slots; ++slot)
+        {
+            ShaderVariable& variable = variables[*count];
+            variable = {};
+            if (slot == 0)
+            {
+                std::snprintf(variable.name, sizeof(variable.name), "%s", name);
+                variable.array_size = static_cast<uint8_t>(array_size);
+            }
+            variable.type = type;
+            variable.index = static_cast<uint8_t>(*count);
+            ++(*count);
+        }
     }
 
     ResolvedVariable lookup(const char *name) const
@@ -719,7 +753,12 @@ private:
             const ShaderVariable *local = find_variable(
                 function.locals, function.local_count, name);
             if (local)
-                return {Storage::Local, local->type, local->index, true};
+            {
+                ResolvedVariable resolved = {
+                    Storage::Local, local->type, local->index, true};
+                resolved.array_size = local->array_size;
+                return resolved;
+            }
         }
 
         const ShaderVariable *variable = find_variable(
@@ -730,7 +769,12 @@ private:
         variable = find_variable(
             module_.uniforms, module_.uniform_count, name);
         if (variable)
-            return {Storage::Uniform, variable->type, variable->index};
+        {
+            ResolvedVariable resolved = {
+                Storage::Uniform, variable->type, variable->index};
+            resolved.array_size = variable->array_size;
+            return resolved;
+        }
 
         variable = find_variable(
             module_.varyings, module_.varying_count, name);
@@ -840,9 +884,11 @@ private:
     bool add_function_local(
         ShaderFunction& function,
         const char *name,
-        ShaderType type)
+        ShaderType type,
+        size_t array_size = 0)
     {
-        if (function.local_count >= GLSL_MAX_LOCALS)
+        const size_t slots = array_size == 0 ? 1 : array_size;
+        if (function.local_count + slots > GLSL_MAX_LOCALS)
         {
             fail("function local limit exceeded");
             return false;
@@ -855,12 +901,75 @@ private:
                 return false;
             }
         }
-        ShaderVariable& local = function.locals[function.local_count];
-        std::snprintf(local.name, sizeof(local.name), "%s", name);
-        local.type = type;
-        local.index = static_cast<uint8_t>(function.local_count);
-        ++function.local_count;
+        // Array elements after the first are unnamed entries so name lookup
+        // finds only the array itself, while per-slot zeroing and out/inout
+        // copy-out still see every element's type and slot index.
+        for (size_t slot = 0; slot < slots; ++slot)
+        {
+            ShaderVariable& local = function.locals[function.local_count];
+            local = {};
+            if (slot == 0)
+            {
+                std::snprintf(local.name, sizeof(local.name), "%s", name);
+                local.array_size = static_cast<uint8_t>(array_size);
+            }
+            local.type = type;
+            local.index = static_cast<uint8_t>(function.local_count);
+            ++function.local_count;
+        }
         return true;
+    }
+
+    /* Parse `[index]` after an array name; the '[' is current. A lone
+       integer literal yields a constant element l-value without emitting
+       code. Any other int expression is emitted for a dynamic access. */
+    bool parse_array_index(
+        const ResolvedVariable& array,
+        ResolvedVariable& element,
+        bool& dynamic)
+    {
+        if (!expect_punctuation('['))
+            return false;
+        element = {};
+        element.storage = array.storage;
+        element.type = array.type;
+        element.index = array.index;
+        dynamic = false;
+        if (is_punctuation('-'))
+        {
+            Lexer lookahead = lexer_;
+            const Token operand = lookahead.next();
+            if (operand.kind == TokenKind::Number && operand.integer &&
+                operand.number > 0.0f)
+            {
+                fail("array index is out of range");
+                return false;
+            }
+        }
+        if (current_.kind == TokenKind::Number && current_.integer &&
+            peek_punctuation(']'))
+        {
+            if (current_.number < 0.0f || current_.number >= array.array_size)
+            {
+                fail("array index is out of range");
+                return false;
+            }
+            element.index = static_cast<uint8_t>(
+                array.index + static_cast<size_t>(current_.number));
+            element.writable = array.writable;
+            advance();
+        }
+        else
+        {
+            if (parse_expression(1) != ShaderType::Int)
+            {
+                fail("array index must be an int expression");
+                return false;
+            }
+            dynamic = true;
+        }
+        expression_lvalue_ = {};
+        return expect_punctuation(']') && !failed_;
     }
 
     void parse_function_definition()
@@ -1310,12 +1419,48 @@ private:
         }
 
         ResolvedVariable target = base;
+        if (base.array_size != 0)
+        {
+            if (!is_punctuation('['))
+            {
+                fail("arrays must be indexed; whole-array assignment is unsupported");
+                return;
+            }
+            ResolvedVariable element;
+            bool dynamic = false;
+            if (!parse_array_index(base, element, dynamic))
+                return;
+            if (dynamic)
+            {
+                if (is_punctuation('.') || is_punctuation('['))
+                {
+                    fail("dynamically indexed array assignments must write whole elements");
+                    return;
+                }
+                expect_punctuation('=');
+                if (parse_expression(1) != base.type)
+                {
+                    fail("assignment type does not match target type");
+                    return;
+                }
+                if (consume_semicolon)
+                    expect_punctuation(';');
+                emit_simple(ShaderOp::StoreLocalIndexed, base.type,
+                            base.index, base.array_size);
+                return;
+            }
+            // A constant element is an ordinary local slot from here on, so
+            // swizzle and matrix-column writes follow the existing paths.
+            target = element;
+        }
+        const ResolvedVariable element_base = target;
         bool matrix_column_assignment = false;
         uint8_t matrix_column = 0;
         if (accept_punctuation('['))
         {
-            const size_t dimension = matrix_dimension(base.type);
-            if (dimension == 0 || base.storage != Storage::Local || !base.writable)
+            const size_t dimension = matrix_dimension(element_base.type);
+            if (dimension == 0 || element_base.storage != Storage::Local ||
+                !element_base.writable)
             {
                 fail("matrix column assignment requires a writable local matrix");
                 return;
@@ -1331,19 +1476,19 @@ private:
             expect_punctuation(']');
             matrix_column_assignment = true;
             target.type = vector_type(dimension);
-            emit_simple(ShaderOp::LoadLocal, base.type, base.index);
+            emit_simple(ShaderOp::LoadLocal, element_base.type, element_base.index);
         }
         const bool swizzle_assignment = !matrix_column_assignment && is_punctuation('.');
         if (swizzle_assignment)
         {
-            if (!is_any_vector(base.type))
+            if (!is_any_vector(element_base.type))
             {
                 fail("swizzle assignment requires a vector target");
                 return;
             }
             const size_t instruction_start = module_.instruction_count;
-            ShaderType swizzle_type = base.type;
-            expression_lvalue_ = base;
+            ShaderType swizzle_type = element_base.type;
+            expression_lvalue_ = element_base;
             parse_swizzle(swizzle_type);
             target = expression_lvalue_;
             module_.instruction_count = instruction_start;
@@ -1382,8 +1527,8 @@ private:
         {
             ShaderInstruction instruction = {};
             instruction.op = ShaderOp::StoreMatrixColumn;
-            instruction.type = base.type;
-            instruction.index = base.index;
+            instruction.type = element_base.type;
+            instruction.index = element_base.index;
             instruction.argument_count = matrix_column;
             emit(instruction);
             return;
@@ -1391,16 +1536,16 @@ private:
 
         if (!swizzle_assignment)
         {
-            emit_assignment_store(base);
+            emit_assignment_store(element_base);
             return;
         }
 
         ShaderInstruction instruction = {};
         instruction.op = ShaderOp::StoreSwizzle;
-        instruction.type = base.type;
-        instruction.index = base.index;
+        instruction.type = element_base.type;
+        instruction.index = element_base.index;
         instruction.argument_count = static_cast<uint8_t>(component_count(target.type));
-        instruction.literal = static_cast<float>(base.storage);
+        instruction.literal = static_cast<float>(element_base.storage);
         for (size_t i = 0; i < instruction.argument_count; ++i)
             instruction.swizzle[i] = target.components[i];
         emit(instruction);
@@ -1420,7 +1565,8 @@ private:
         std::snprintf(name, sizeof(name), "%s", current_.text);
         advance();
         const ResolvedVariable target = lookup(name);
-        if (target.storage != Storage::Local || !target.writable)
+        if (target.storage != Storage::Local || !target.writable ||
+            target.array_size != 0)
         {
             fail("for-loop increment target must be a writable local variable");
             return;
@@ -1651,8 +1797,34 @@ private:
             return;
         }
 
+        size_t array_size = 0;
+        if (accept_punctuation('['))
+        {
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 1.0f ||
+                current_.number > static_cast<float>(GLSL_MAX_LOCALS))
+            {
+                fail("array size must be a positive integer constant");
+                return;
+            }
+            if (type == ShaderType::Sampler2D)
+            {
+                fail("sampler arrays are not supported");
+                return;
+            }
+            array_size = static_cast<size_t>(current_.number);
+            advance();
+            if (!expect_punctuation(']'))
+                return;
+            if (is_punctuation('='))
+            {
+                fail("array initializers are not supported in GLSL ES 1.00");
+                return;
+            }
+        }
+
         ShaderFunction& function = module_.functions[active_function_];
-        if (!add_function_local(function, name, type))
+        if (!add_function_local(function, name, type, array_size))
             return;
         const uint8_t local_index =
             static_cast<uint8_t>(function.local_count - 1);
@@ -1943,6 +2115,36 @@ private:
             return;
         }
 
+        if (variable.array_size != 0)
+        {
+            if (!is_punctuation('['))
+            {
+                fail("arrays must be indexed; whole-array use is unsupported");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            ResolvedVariable element;
+            bool dynamic = false;
+            if (!parse_array_index(variable, element, dynamic))
+            {
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            const bool uniform = variable.storage == Storage::Uniform;
+            if (dynamic)
+                emit_simple(uniform ? ShaderOp::LoadUniformIndexed
+                                    : ShaderOp::LoadLocalIndexed,
+                            variable.type, variable.index, variable.array_size);
+            else
+                emit_simple(uniform ? ShaderOp::LoadUniform : ShaderOp::LoadLocal,
+                            element.type, element.index);
+            result_type = element.type;
+            expression_lvalue_ = dynamic ? ResolvedVariable{} : element;
+            parse_matrix_column_read(result_type);
+            parse_swizzle(result_type);
+            return;
+        }
+
         expression_lvalue_ = variable;
         ShaderOp op = ShaderOp::LoadLocal;
         switch (variable.storage)
@@ -1957,35 +2159,41 @@ private:
         }
         emit_simple(op, variable.type, variable.index);
         result_type = variable.type;
-        if (is_punctuation('['))
-        {
-            const size_t dimension = matrix_dimension(variable.type);
-            if (dimension == 0)
-            {
-                fail("indexing is currently supported only for matrices");
-                result_type = ShaderType::Invalid;
-                return;
-            }
-            advance();
-            if (current_.kind != TokenKind::Number || !current_.integer ||
-                current_.number < 0.0f || current_.number >= dimension)
-            {
-                fail("matrix column index must be a constant in range");
-                result_type = ShaderType::Invalid;
-                return;
-            }
-            const uint8_t column = static_cast<uint8_t>(current_.number);
-            advance();
-            expect_punctuation(']');
-            ShaderInstruction instruction = {};
-            instruction.op = ShaderOp::LoadMatrixColumn;
-            instruction.type = vector_type(dimension);
-            instruction.index = column;
-            emit(instruction);
-            result_type = instruction.type;
-            expression_lvalue_ = {};
-        }
+        parse_matrix_column_read(result_type);
         parse_swizzle(result_type);
+    }
+
+    /* Optional constant `[column]` applied to a matrix value already on the
+       stack. Leaves non-indexed expressions untouched. */
+    void parse_matrix_column_read(ShaderType& result_type)
+    {
+        if (!is_punctuation('['))
+            return;
+        const size_t dimension = matrix_dimension(result_type);
+        if (dimension == 0)
+        {
+            fail("indexing is supported only for matrices and arrays");
+            result_type = ShaderType::Invalid;
+            return;
+        }
+        advance();
+        if (current_.kind != TokenKind::Number || !current_.integer ||
+            current_.number < 0.0f || current_.number >= dimension)
+        {
+            fail("matrix column index must be a constant in range");
+            result_type = ShaderType::Invalid;
+            return;
+        }
+        const uint8_t column = static_cast<uint8_t>(current_.number);
+        advance();
+        expect_punctuation(']');
+        ShaderInstruction instruction = {};
+        instruction.op = ShaderOp::LoadMatrixColumn;
+        instruction.type = vector_type(dimension);
+        instruction.index = column;
+        emit(instruction);
+        result_type = instruction.type;
+        expression_lvalue_ = {};
     }
 
     ShaderType parse_call(const char *name)
@@ -2901,6 +3109,26 @@ static void apply_binary(
                 break;
         }
     }
+}
+
+/* Resolve a dynamic array index to a local slot. GLSL ES leaves
+   out-of-range indexing undefined; the VM fails the invocation instead of
+   touching a neighboring variable. */
+static bool array_element_slot(
+    const ShaderInstruction& instruction,
+    const ShaderValue& index,
+    size_t& slot,
+    size_t slot_limit = GLSL_MAX_LOCALS)
+{
+    if (index.type != ShaderType::Int)
+        return false;
+    const float element = index.data[0];
+    if (!(element >= 0.0f) ||
+        element >= static_cast<float>(instruction.argument_count))
+        return false;
+    slot = static_cast<size_t>(instruction.index) +
+           static_cast<size_t>(element);
+    return slot < slot_limit;
 }
 
 static bool finite_value(const ShaderValue& value)
@@ -4173,6 +4401,39 @@ bool execute_glsl(
                     sampler_value.ddy[i] = 0.0f;
                 }
                 --stack_size;
+                break;
+            }
+
+            case ShaderOp::LoadLocalIndexed:
+            {
+                size_t slot = 0;
+                if (!pop_value(stack, stack_size, a) ||
+                    !array_element_slot(instruction, a, slot) ||
+                    locals[slot].type != instruction.type ||
+                    !push_value(stack, stack_size, locals[slot]))
+                    return false;
+                break;
+            }
+
+            case ShaderOp::StoreLocalIndexed:
+            {
+                size_t slot = 0;
+                if (!pop_value(stack, stack_size, a) ||
+                    !pop_value(stack, stack_size, b) ||
+                    a.type != instruction.type ||
+                    !array_element_slot(instruction, b, slot))
+                    return false;
+                copy_shader_value(locals[slot], a);
+                break;
+            }
+
+            case ShaderOp::LoadUniformIndexed:
+            {
+                size_t slot = 0;
+                if (!pop_value(stack, stack_size, a) ||
+                    !array_element_slot(instruction, a, slot, GLSL_MAX_UNIFORMS) ||
+                    !push_value(stack, stack_size, runtime.uniforms[slot]))
+                    return false;
                 break;
             }
         }

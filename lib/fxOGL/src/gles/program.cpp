@@ -49,6 +49,11 @@ struct ProgramObject
     fxgl::ShaderValue uniform_values[fxgl::GLSL_MAX_UNIFORMS] = {};
     uint8_t vertex_uniform_map[fxgl::GLSL_MAX_UNIFORMS] = {};
     uint8_t fragment_uniform_map[fxgl::GLSL_MAX_UNIFORMS] = {};
+    /* Per location: elements from it to the end of its array (1 for a
+       non-array uniform) and whether it belongs to an array. An array of N
+       elements uses N consecutive locations; only the first is named. */
+    uint8_t uniform_remaining[fxgl::GLSL_MAX_UNIFORMS] = {};
+    bool uniform_in_array[fxgl::GLSL_MAX_UNIFORMS] = {};
 
     uint8_t attribute_locations[fxgl::GLSL_MAX_ATTRIBUTES] = {};
     uint8_t vertex_varying_offsets[fxgl::GLSL_MAX_VARYINGS] = {};
@@ -156,9 +161,71 @@ static void copy_name(
 
 static int find_uniform(const ProgramObject& program, const char *name)
 {
+    if (name[0] == '\0')
+        return -1;
     for (size_t i = 0; i < program.uniform_count; ++i)
         if (std::strcmp(program.uniforms[i].name, name) == 0)
             return static_cast<int>(i);
+    return -1;
+}
+
+/* Resolve a glGetUniformLocation name: `u`, or `u[k]` for an array
+   element. `u[0]` addresses the first element, like `u`. */
+static int find_uniform_location(const ProgramObject& program, const char *name)
+{
+    const size_t length = std::strlen(name);
+    if (length == 0 || name[length - 1] != ']')
+        return find_uniform(program, name);
+
+    const char *open = std::strrchr(name, '[');
+    if (!open || open == name || open + 2 > name + length - 1)
+        return -1;
+    size_t element = 0;
+    for (const char *digit = open + 1; digit < name + length - 1; ++digit)
+    {
+        if (*digit < '0' || *digit > '9')
+            return -1;
+        // Reject leading zeros ("u[01]") as the GLSL name would not match.
+        if (digit == open + 1 && *digit == '0' && digit + 1 < name + length - 1)
+            return -1;
+        element = element * 10 + static_cast<size_t>(*digit - '0');
+        if (element >= fxgl::GLSL_MAX_UNIFORMS)
+            return -1;
+    }
+
+    char base[fxgl::GLSL_NAME_BYTES];
+    const size_t base_length = static_cast<size_t>(open - name);
+    if (base_length >= sizeof(base))
+        return -1;
+    std::memcpy(base, name, base_length);
+    base[base_length] = '\0';
+    const int location = find_uniform(program, base);
+    if (location < 0 ||
+        element >= program.uniforms[location].array_size)
+        return -1;
+    return location + static_cast<int>(element);
+}
+
+/* Active uniforms are the named locations; array elements after the first
+   are not separately enumerated. */
+static size_t active_uniform_count(const ProgramObject& program)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < program.uniform_count; ++i)
+        if (program.uniforms[i].name[0] != '\0')
+            ++count;
+    return count;
+}
+
+static int active_uniform_location(const ProgramObject& program, size_t index)
+{
+    for (size_t i = 0; i < program.uniform_count; ++i)
+    {
+        if (program.uniforms[i].name[0] == '\0')
+            continue;
+        if (index-- == 0)
+            return static_cast<int>(i);
+    }
     return -1;
 }
 
@@ -178,21 +245,54 @@ static bool add_uniform(
     const int existing = find_uniform(program, variable.name);
     if (existing >= 0)
     {
-        if (program.uniforms[existing].type != variable.type)
+        // Both stages must declare the same type and array size.
+        if (program.uniforms[existing].type != variable.type ||
+            program.uniforms[existing].array_size != variable.array_size)
             return false;
         location = static_cast<uint8_t>(existing);
         return true;
     }
 
-    if (program.uniform_count >= fxgl::GLSL_MAX_UNIFORMS)
+    const size_t slots = variable.array_size == 0 ? 1 : variable.array_size;
+    if (program.uniform_count + slots > fxgl::GLSL_MAX_UNIFORMS)
         return false;
 
-    const size_t index = program.uniform_count++;
-    program.uniforms[index] = variable;
-    program.uniforms[index].index = static_cast<uint8_t>(index);
-    program.uniform_values[index] = {};
-    program.uniform_values[index].type = variable.type;
-    location = static_cast<uint8_t>(index);
+    location = static_cast<uint8_t>(program.uniform_count);
+    for (size_t slot = 0; slot < slots; ++slot)
+    {
+        const size_t index = program.uniform_count++;
+        program.uniforms[index] = {};
+        if (slot == 0)
+            program.uniforms[index] = variable;
+        program.uniforms[index].type = variable.type;
+        program.uniforms[index].index = static_cast<uint8_t>(index);
+        program.uniform_values[index] = {};
+        program.uniform_values[index].type = variable.type;
+        program.uniform_remaining[index] = static_cast<uint8_t>(slots - slot);
+        program.uniform_in_array[index] = variable.array_size != 0;
+    }
+    return true;
+}
+
+/* Map every uniform slot of one stage's module, including unnamed array
+   element slots, to program locations. */
+static bool map_stage_uniforms(
+    ProgramObject& program,
+    const fxgl::ShaderModule& module,
+    uint8_t *map)
+{
+    for (size_t i = 0; i < module.uniform_count;)
+    {
+        const fxgl::ShaderVariable& variable = module.uniforms[i];
+        const size_t slots = variable.array_size == 0 ? 1 : variable.array_size;
+        uint8_t location = 0;
+        if (variable.name[0] == '\0' || i + slots > module.uniform_count ||
+            !add_uniform(program, variable, location))
+            return false;
+        for (size_t slot = 0; slot < slots; ++slot)
+            map[i + slot] = static_cast<uint8_t>(location + slot);
+        i += slots;
+    }
     return true;
 }
 
@@ -267,28 +367,14 @@ static bool link_program(ProgramObject& program)
     program.vertex_module = vertex->module;
     program.fragment_module = fragment->module;
 
-    for (size_t i = 0; i < program.vertex_module.uniform_count; ++i)
+    if (!map_stage_uniforms(program, program.vertex_module,
+                            program.vertex_uniform_map) ||
+        !map_stage_uniforms(program, program.fragment_module,
+                            program.fragment_uniform_map))
     {
-        uint8_t location = 0;
-        if (!add_uniform(program, program.vertex_module.uniforms[i], location))
-        {
-            set_log(program.info_log, sizeof(program.info_log),
-                    "Link failed: uniform type mismatch or uniform limit exceeded");
-            return false;
-        }
-        program.vertex_uniform_map[i] = location;
-    }
-
-    for (size_t i = 0; i < program.fragment_module.uniform_count; ++i)
-    {
-        uint8_t location = 0;
-        if (!add_uniform(program, program.fragment_module.uniforms[i], location))
-        {
-            set_log(program.info_log, sizeof(program.info_log),
-                    "Link failed: uniform type mismatch or uniform limit exceeded");
-            return false;
-        }
-        program.fragment_uniform_map[i] = location;
+        set_log(program.info_log, sizeof(program.info_log),
+                "Link failed: uniform type mismatch or uniform limit exceeded");
+        return false;
     }
 
     for (size_t i = 0; i < program.vertex_module.attribute_count; ++i)
@@ -445,10 +531,29 @@ static bool valid_uniform_location(
            shader_component_count(type) == components;
 }
 
+/* Elements a glUniform* call with `count` writes from a valid location:
+   count > 1 requires an array, and values past the array's end are
+   ignored. Returns 0 after reporting GL_INVALID_OPERATION otherwise. */
+static size_t uniform_write_count(
+    const ProgramObject& program,
+    GLint location,
+    GLsizei count)
+{
+    if (count > 1 && !program.uniform_in_array[location])
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return 0;
+    }
+    const size_t remaining = program.uniform_remaining[location];
+    return static_cast<size_t>(count) < remaining
+        ? static_cast<size_t>(count) : remaining;
+}
+
 static void set_uniform_integer(
     GLint location,
     const GLint *values,
-    size_t components)
+    size_t components,
+    GLsizei count = 1)
 {
     if (!fxglHasCurrentContext())
         return;
@@ -501,19 +606,25 @@ static void set_uniform_integer(
         return;
     }
 
-    fxgl::ShaderValue& destination = program->uniform_values[location];
-    destination = {};
-    destination.type = expected;
-    for (size_t i = 0; i < components; ++i)
+    const size_t elements = uniform_write_count(*program, location, count);
+    for (size_t element = 0; element < elements; ++element)
     {
-        const float value = static_cast<float>(values[i]);
-        destination.data[i] =
-            (expected == fxgl::ShaderType::Bool ||
-             expected == fxgl::ShaderType::BVec2 ||
-             expected == fxgl::ShaderType::BVec3 ||
-             expected == fxgl::ShaderType::BVec4)
-                ? (value != 0.0f ? 1.0f : 0.0f)
-                : value;
+        fxgl::ShaderValue& destination =
+            program->uniform_values[location + element];
+        destination = {};
+        destination.type = expected;
+        for (size_t i = 0; i < components; ++i)
+        {
+            const float value =
+                static_cast<float>(values[element * components + i]);
+            destination.data[i] =
+                (expected == fxgl::ShaderType::Bool ||
+                 expected == fxgl::ShaderType::BVec2 ||
+                 expected == fxgl::ShaderType::BVec3 ||
+                 expected == fxgl::ShaderType::BVec4)
+                    ? (value != 0.0f ? 1.0f : 0.0f)
+                    : value;
+        }
     }
 }
 
@@ -521,7 +632,8 @@ static void set_uniform(
     GLint location,
     fxgl::ShaderType type,
     const GLfloat *values,
-    size_t components)
+    size_t components,
+    GLsizei count = 1)
 {
     if (!fxglHasCurrentContext())
         return;
@@ -540,11 +652,16 @@ static void set_uniform(
         return;
     }
 
-    fxgl::ShaderValue& destination = program->uniform_values[location];
-    destination = {};
-    destination.type = type;
-    for (size_t i = 0; i < components; ++i)
-        destination.data[i] = values[i];
+    const size_t elements = uniform_write_count(*program, location, count);
+    for (size_t element = 0; element < elements; ++element)
+    {
+        fxgl::ShaderValue& destination =
+            program->uniform_values[location + element];
+        destination = {};
+        destination.type = type;
+        for (size_t i = 0; i < components; ++i)
+            destination.data[i] = values[element * components + i];
+    }
 }
 
 } // namespace
@@ -954,7 +1071,7 @@ void glGetProgramiv(GLuint program_name, GLenum pname, GLint *params)
             break;
         case GL_ACTIVE_UNIFORMS:
             *params = program->linked
-                ? static_cast<GLint>(program->uniform_count) : 0;
+                ? static_cast<GLint>(active_uniform_count(*program)) : 0;
             break;
         default:
             fxgl::report_error(GL_INVALID_ENUM);
@@ -1073,7 +1190,7 @@ GLint glGetUniformLocation(GLuint program_name, const GLchar *name)
         fxgl::report_error(GL_INVALID_OPERATION);
         return -1;
     }
-    return find_uniform(*program, name);
+    return find_uniform_location(*program, name);
 }
 
 void glGetAttachedShaders(
@@ -1161,15 +1278,20 @@ void glGetActiveUniform(
         fxgl::report_error(GL_INVALID_OPERATION);
         return;
     }
-    if (index >= program->uniform_count || bufsize < 0)
+    const int location = active_uniform_location(*program, index);
+    if (location < 0 || bufsize < 0)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    const fxgl::ShaderVariable& variable = program->uniforms[index];
-    if (size) *size = 1;
+    const fxgl::ShaderVariable& variable = program->uniforms[location];
+    if (size) *size = variable.array_size == 0 ? 1 : variable.array_size;
     if (type) *type = gl_type_for_shader_type(variable.type);
-    copy_name(variable.name, bufsize, length, name);
+    // GLES 2.0 reports an active uniform array by its name with "[0]".
+    char reported[fxgl::GLSL_NAME_BYTES + 3];
+    std::snprintf(reported, sizeof(reported),
+                  variable.array_size != 0 ? "%s[0]" : "%s", variable.name);
+    copy_name(reported, bufsize, length, name);
 }
 
 void glValidateProgram(GLuint program_name)
@@ -1250,48 +1372,48 @@ void glUniform1fv(GLint location, GLsizei count, const GLfloat *value)
 {
     if (!fxglHasCurrentContext()) return;
     if (location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform(location, fxgl::ShaderType::Float, value, 1);
+    set_uniform(location, fxgl::ShaderType::Float, value, 1, count);
 }
 
 void glUniform2fv(GLint location, GLsizei count, const GLfloat *value)
 {
     if (!fxglHasCurrentContext()) return;
     if (location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform(location, fxgl::ShaderType::Vec2, value, 2);
+    set_uniform(location, fxgl::ShaderType::Vec2, value, 2, count);
 }
 
 void glUniform3fv(GLint location, GLsizei count, const GLfloat *value)
 {
     if (!fxglHasCurrentContext()) return;
     if (location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform(location, fxgl::ShaderType::Vec3, value, 3);
+    set_uniform(location, fxgl::ShaderType::Vec3, value, 3, count);
 }
 
 void glUniform4fv(GLint location, GLsizei count, const GLfloat *value)
 {
     if (!fxglHasCurrentContext()) return;
     if (location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform(location, fxgl::ShaderType::Vec4, value, 4);
+    set_uniform(location, fxgl::ShaderType::Vec4, value, 4, count);
 }
 
 void glGetUniformfv(GLuint program_name, GLint location, GLfloat *params)
@@ -1357,45 +1479,45 @@ void glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3)
 void glUniform1iv(GLint location, GLsizei count, const GLint *value)
 {
     if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform_integer(location, value, 1);
+    set_uniform_integer(location, value, 1, count);
 }
 
 void glUniform2iv(GLint location, GLsizei count, const GLint *value)
 {
     if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform_integer(location, value, 2);
+    set_uniform_integer(location, value, 2, count);
 }
 
 void glUniform3iv(GLint location, GLsizei count, const GLint *value)
 {
     if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform_integer(location, value, 3);
+    set_uniform_integer(location, value, 3, count);
 }
 
 void glUniform4iv(GLint location, GLsizei count, const GLint *value)
 {
     if (!fxglHasCurrentContext() || location == -1 || count == 0) return;
-    if (count != 1 || !value)
+    if (count < 0 || !value)
     {
         fxgl::report_error(GL_INVALID_VALUE);
         return;
     }
-    set_uniform_integer(location, value, 4);
+    set_uniform_integer(location, value, 4, count);
 }
 
 void glUniformMatrix2fv(
@@ -1418,7 +1540,7 @@ void glUniformMatrix2fv(
         return;
     }
     if (count == 0) return;
-    if (count != 1 || transpose != GL_FALSE || location < 0 ||
+    if (transpose != GL_FALSE || location < 0 ||
         static_cast<size_t>(location) >= program->uniform_count ||
         program->uniforms[location].type != fxgl::ShaderType::Mat2)
     {
@@ -1426,10 +1548,16 @@ void glUniformMatrix2fv(
         return;
     }
 
-    fxgl::ShaderValue& destination = program->uniform_values[location];
-    destination = {};
-    destination.type = fxgl::ShaderType::Mat2;
-    std::memcpy(destination.data, value, 4 * sizeof(GLfloat));
+    const size_t elements = uniform_write_count(*program, location, count);
+    for (size_t element = 0; element < elements; ++element)
+    {
+        fxgl::ShaderValue& destination =
+            program->uniform_values[location + element];
+        destination = {};
+        destination.type = fxgl::ShaderType::Mat2;
+        std::memcpy(destination.data, value + element * 4,
+                    4 * sizeof(GLfloat));
+    }
 }
 
 void glUniformMatrix3fv(
@@ -1452,7 +1580,7 @@ void glUniformMatrix3fv(
         return;
     }
     if (count == 0) return;
-    if (count != 1 || transpose != GL_FALSE || location < 0 ||
+    if (transpose != GL_FALSE || location < 0 ||
         static_cast<size_t>(location) >= program->uniform_count ||
         program->uniforms[location].type != fxgl::ShaderType::Mat3)
     {
@@ -1460,10 +1588,16 @@ void glUniformMatrix3fv(
         return;
     }
 
-    fxgl::ShaderValue& destination = program->uniform_values[location];
-    destination = {};
-    destination.type = fxgl::ShaderType::Mat3;
-    std::memcpy(destination.data, value, 9 * sizeof(GLfloat));
+    const size_t elements = uniform_write_count(*program, location, count);
+    for (size_t element = 0; element < elements; ++element)
+    {
+        fxgl::ShaderValue& destination =
+            program->uniform_values[location + element];
+        destination = {};
+        destination.type = fxgl::ShaderType::Mat3;
+        std::memcpy(destination.data, value + element * 9,
+                    9 * sizeof(GLfloat));
+    }
 }
 
 void glUniformMatrix4fv(
@@ -1489,7 +1623,7 @@ void glUniformMatrix4fv(
     }
     if (count == 0)
         return;
-    if (count != 1 || transpose != GL_FALSE ||
+    if (transpose != GL_FALSE ||
         location < 0 || static_cast<size_t>(location) >= program->uniform_count ||
         program->uniforms[location].type != fxgl::ShaderType::Mat4)
     {
@@ -1497,10 +1631,16 @@ void glUniformMatrix4fv(
         return;
     }
 
-    fxgl::ShaderValue& destination = program->uniform_values[location];
-    destination = {};
-    destination.type = fxgl::ShaderType::Mat4;
-    std::memcpy(destination.data, value, 16 * sizeof(GLfloat));
+    const size_t elements = uniform_write_count(*program, location, count);
+    for (size_t element = 0; element < elements; ++element)
+    {
+        fxgl::ShaderValue& destination =
+            program->uniform_values[location + element];
+        destination = {};
+        destination.type = fxgl::ShaderType::Mat4;
+        std::memcpy(destination.data, value + element * 16,
+                    16 * sizeof(GLfloat));
+    }
 }
 
 } // extern "C"
