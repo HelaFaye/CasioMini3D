@@ -18,6 +18,8 @@
 #define GL_SAMPLE_COVERAGE_VALUE          0x80AA
 #define GL_SAMPLE_COVERAGE_INVERT         0x80AB
 #define GL_POLYGON_OFFSET_FILL            0x8037
+#define GL_POLYGON_OFFSET_FACTOR          0x8038
+#define GL_POLYGON_OFFSET_UNITS           0x2A00
 #define GL_NUM_COMPRESSED_TEXTURE_FORMATS 0x86A2
 #define GL_COMPRESSED_TEXTURE_FORMATS     0x86A3
 #define GL_SHADER_BINARY_FORMATS          0x8DF8
@@ -446,11 +448,14 @@ GLenum glGetError(void);
    glReleaseShaderCompiler do nothing, glShaderBinary and the compressed
    texture uploads report GL_INVALID_ENUM, lines are 1 pixel wide
    (GL_ALIASED_LINE_WIDTH_RANGE is [1, 1]) and sample coverage is stored
-   state only. glPolygonOffset is not implemented yet. */
+   state only. */
 void glFlush(void);
 void glFinish(void);
 void glHint(GLenum target, GLenum mode);
 void glLineWidth(GLfloat width);
+/* Offsets filled triangles' window depth by factor * max depth slope +
+   units / 65535 (one step of the 16-bit depth buffer). */
+void glPolygonOffset(GLfloat factor, GLfloat units);
 void glSampleCoverage(GLclampf value, GLboolean invert);
 void glReleaseShaderCompiler(void);
 void glShaderBinary(GLsizei n, const GLuint *shaders, GLenum binaryformat,

@@ -1922,6 +1922,114 @@ void test_copy_tex_image_from_framebuffer()
     fxglReleaseCurrent();
 }
 
+void test_polygon_offset()
+{
+    uint16_t color[16] = {};
+    uint16_t depth[16] = {};
+    fxgl_surface_t surface = {color, depth, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "attribute vec4 a_position; uniform vec4 u_color; varying vec4 v_color;\n"
+        "void main() { gl_Position = a_position; v_color = u_color; gl_PointSize = 1.0; }\n";
+    static const GLchar fragment_source[] =
+        "precision mediump float; varying vec4 v_color;\n"
+        "void main() { gl_FragColor = v_color; }\n";
+    const GLchar *vertex_parts[] = {vertex_source};
+    const GLchar *fragment_parts[] = {fragment_source};
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, vertex_parts, nullptr);
+    glShaderSource(fs, 1, fragment_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glBindAttribLocation(program, 0, "a_position");
+    glLinkProgram(program);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    assert(linked == GL_TRUE);
+    glUseProgram(program);
+    const GLint color_location = glGetUniformLocation(program, "u_color");
+    glEnableVertexAttribArray(0);
+    glViewport(0, 0, 4, 4);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+
+    // Two full-screen triangles at z = 0 (flat quad).
+    const GLfloat flat[] = {
+        -1, -1, 0, 1,   1, -1, 0, 1,   -1, 1, 0, 1,
+         1, -1, 0, 1,   1,  1, 0, 1,   -1, 1, 0, 1
+    };
+    const auto draw = [&](const GLfloat *vertices, GLfloat r, GLfloat b)
+    {
+        glUniform4f(color_location, r, 0.0f, b, 1.0f);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        assert(glGetError() == GL_NO_ERROR);
+    };
+
+    glClearDepthf(1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    draw(flat, 1.0f, 0.0f);
+    assert(color[5] == 0xf800 && depth[5] == 32768);
+
+    // Coplanar redraw loses with GL_LESS; a pushed-away offset still loses.
+    draw(flat, 0.0f, 1.0f);
+    assert(color[5] == 0xf800);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(0.0f, 1.0f);
+    draw(flat, 0.0f, 1.0f);
+    assert(color[5] == 0xf800 && depth[5] == 32768);
+
+    // Pulling it one depth step closer wins, and stores depth - 1.
+    glPolygonOffset(0.0f, -1.0f);
+    draw(flat, 0.0f, 1.0f);
+    assert(color[5] == 0x001f && depth[5] == 32767);
+
+    GLfloat value = 0.0f;
+    glGetFloatv(GL_POLYGON_OFFSET_UNITS, &value);
+    assert(value == -1.0f);
+    glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &value);
+    assert(value == 0.0f);
+    assert(glIsEnabled(GL_POLYGON_OFFSET_FILL) == GL_TRUE);
+
+    // Slope term: NDC z goes from -0.5 at x = -1 to 0.5 at x = 1, i.e. 0.25
+    // NDC per pixel across the 4-pixel viewport, so window depth
+    // (ndc * 0.5 + 0.5) rises 0.125 per pixel.
+    const GLfloat sloped[] = {
+        -1, -1, -0.5f, 1,   1, -1, 0.5f, 1,   -1, 1, -0.5f, 1,
+         1, -1,  0.5f, 1,   1,  1, 0.5f, 1,   -1, 1, -0.5f, 1
+    };
+    glDepthFunc(GL_ALWAYS);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    draw(sloped, 1.0f, 0.0f);
+    const uint16_t plain = depth[5];
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.0f, 0.0f);
+    draw(sloped, 1.0f, 0.0f);
+    const int shifted = static_cast<int>(depth[5]) - static_cast<int>(plain);
+    if (shifted < 8191 || shifted > 8193) std::fprintf(stderr, "polygon offset slope shift %d\n", shifted);
+    assert(shifted >= 8191 && shifted <= 8193); // 0.125 * 65535
+
+    // Points are not offset.
+    glPolygonOffset(0.0f, -1000.0f);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    const GLfloat point[] = {-0.25f, -0.25f, 0.0f, 1.0f};
+    glUniform4f(color_location, 1.0f, 1.0f, 1.0f, 1.0f);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, point);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(depth[5] == 32768);
+
+    glDeleteProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -2031,6 +2139,7 @@ int main()
     test_uniform_array_api_and_draw();
     test_remaining_gles2_entry_points();
     test_copy_tex_image_from_framebuffer();
+    test_polygon_offset();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

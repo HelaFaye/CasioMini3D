@@ -143,10 +143,11 @@ struct Context
     bool dither = true;
     bool scissor_test = false;
     bool stencil_test = false;
-    /* No multisample buffers or polygon offset: these capabilities and the
-       sample coverage parameters are stored and queryable but cannot change
-       rendering (polygon offset factor and units are always zero). */
+    /* No multisample buffers: the sample coverage capabilities and
+       parameters are stored and queryable but cannot change rendering. */
     bool polygon_offset_fill = false;
+    GLfloat polygon_offset_factor = 0.0f;
+    GLfloat polygon_offset_units = 0.0f;
     bool sample_alpha_to_coverage = false;
     bool sample_coverage = false;
     GLfloat sample_coverage_value = 1.0f;
@@ -3964,6 +3965,12 @@ void glGetIntegerv(GLenum pname, GLint *data)
         case GL_SAMPLE_COVERAGE_VALUE:
             data[0] = static_cast<GLint>(floorf(g_context.sample_coverage_value + 0.5f));
             break;
+        case GL_POLYGON_OFFSET_FACTOR:
+            data[0] = static_cast<GLint>(floorf(g_context.polygon_offset_factor + 0.5f));
+            break;
+        case GL_POLYGON_OFFSET_UNITS:
+            data[0] = static_cast<GLint>(floorf(g_context.polygon_offset_units + 0.5f));
+            break;
         default:
             set_error(GL_INVALID_ENUM);
             break;
@@ -4028,6 +4035,16 @@ void glGetFloatv(GLenum pname, GLfloat *data)
     if (pname == GL_SAMPLE_COVERAGE_VALUE)
     {
         data[0] = g_context.sample_coverage_value;
+        return;
+    }
+    if (pname == GL_POLYGON_OFFSET_FACTOR)
+    {
+        data[0] = g_context.polygon_offset_factor;
+        return;
+    }
+    if (pname == GL_POLYGON_OFFSET_UNITS)
+    {
+        data[0] = g_context.polygon_offset_units;
         return;
     }
 
@@ -4107,6 +4124,13 @@ void glLineWidth(GLfloat width)
     // Stored as specified and queried back unchanged; rasterization clamps
     // to the aliased range [1, 1], so lines stay one pixel wide.
     g_context.line_width = width;
+}
+
+void glPolygonOffset(GLfloat factor, GLfloat units)
+{
+    if (!has_context()) return;
+    g_context.polygon_offset_factor = factor;
+    g_context.polygon_offset_units = units;
 }
 
 void glSampleCoverage(GLclampf value, GLboolean invert)
@@ -4380,6 +4404,9 @@ static void build_pipeline_context(
     state.depth_write = g_context.depth_mask;
     state.depth_near = g_context.depth_near;
     state.depth_far = g_context.depth_far;
+    state.polygon_offset_fill = g_context.polygon_offset_fill;
+    state.polygon_offset_factor = g_context.polygon_offset_factor;
+    state.polygon_offset_units = g_context.polygon_offset_units;
     state.stencil_enabled = g_context.stencil_test;
     state.stencil_front = convert_stencil_face(g_context.stencil_front);
     state.stencil_back = convert_stencil_face(g_context.stencil_back);
