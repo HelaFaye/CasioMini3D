@@ -207,6 +207,13 @@ static bool top_left_edge(const ScreenVertex& a, const ScreenVertex& b)
     return dy > 0.0f || (dy == 0.0f && dx < 0.0f);
 }
 
+/* isfinite(value) && value > 0.0f: positive finite patterns are
+   0x00000001..0x7f7fffff. */
+static inline bool finite_positive(float value)
+{
+    return float_bits(value) - 1u < FLOAT_EXPONENT - 1u;
+}
+
 /* value > 0.0f || (value == 0.0f && top_left), on the IEEE bit pattern:
    positive values (including +inf) are 0x00000001..0x7f800000, NaN is never
    covered, and both zeros defer to the top-left rule. */
@@ -766,7 +773,7 @@ static bool rasterize_one(
                 if (has_varyings)
                 {
                     interpolation_valid =
-                        isfinite(reciprocal_w) && reciprocal_w > 0.0f;
+                        finite_positive(reciprocal_w);
                     if (interpolation_valid)
                     {
                         const float inverse_reciprocal_w = 1.0f / reciprocal_w;
@@ -781,10 +788,8 @@ static bool rasterize_one(
                                 reciprocal_w + reciprocal_w_dx;
                             const float reciprocal_w_y =
                                 reciprocal_w + reciprocal_w_dy;
-                            valid_x = isfinite(reciprocal_w_x) &&
-                                      reciprocal_w_x > 0.0f;
-                            valid_y = isfinite(reciprocal_w_y) &&
-                                      reciprocal_w_y > 0.0f;
+                            valid_x = finite_positive(reciprocal_w_x);
+                            valid_y = finite_positive(reciprocal_w_y);
                             if (valid_x)
                                 inverse_x = 1.0f / reciprocal_w_x;
                             if (valid_y)
@@ -1265,7 +1270,7 @@ bool draw_line(
 
         const float reciprocal_w =
             a.inverse_w + (b.inverse_w - a.inverse_w) * t;
-        if (!isfinite(reciprocal_w) || reciprocal_w <= 0.0f)
+        if (!finite_positive(reciprocal_w))
             continue;
         for (size_t i = 0; i < varying_count; ++i)
         {
