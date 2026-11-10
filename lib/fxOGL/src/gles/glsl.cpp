@@ -149,8 +149,8 @@ public:
         }
 
         token.kind = TokenKind::Invalid;
-        token.text[0] = c;
-        token.text[1] = '\0';
+        std::snprintf(token.text, sizeof(token.text),
+                      "unexpected character '%c'", c);
         ++offset_;
         return token;
     }
@@ -492,8 +492,9 @@ private:
     void advance()
     {
         current_ = lexer_.next();
+        // The lexer leaves a reason (e.g. "identifier too long") in the text.
         if (current_.kind == TokenKind::Invalid && !failed_)
-            fail("invalid token");
+            fail(current_.text[0] != '\0' ? current_.text : "invalid token");
     }
 
     bool is_identifier(const char *name) const

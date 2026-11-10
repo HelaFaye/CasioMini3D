@@ -1470,6 +1470,28 @@ static void test_uniform_array_reads()
     }
 }
 
+static void test_lexer_errors_report_their_reason()
+{
+    const struct
+    {
+        const char *source;
+        const char *reason;
+    } cases[] = {
+        {"void main() { float this_identifier_is_longer_than_31_chars = 1.0; }",
+         "identifier too long"},
+        {"void main() { float a = 1.0 ? 2.0 : 3.0; }", "unexpected character '?'"},
+        {"void main() { float a = 1e; }", "invalid exponent"},
+    };
+    for (const auto& c : cases)
+    {
+        ShaderModule rejected = {};
+        assert(!fxgl::compile_glsl(ShaderStage::Fragment, c.source, rejected));
+        if (!std::strstr(rejected.info_log, c.reason))
+            std::fprintf(stderr, "unexpected log: %s\n", rejected.info_log);
+        assert(std::strstr(rejected.info_log, c.reason) != nullptr);
+    }
+}
+
 } // namespace
 
 
@@ -1507,6 +1529,7 @@ int main()
     test_local_array_dynamic_index_bounds_fail_invocation();
     test_local_array_rejections();
     test_uniform_array_reads();
+    test_lexer_errors_report_their_reason();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;
