@@ -143,6 +143,16 @@ struct Context
     bool dither = true;
     bool scissor_test = false;
     bool stencil_test = false;
+    /* No multisample buffers or polygon offset: these capabilities and the
+       sample coverage parameters are stored and queryable but cannot change
+       rendering (polygon offset factor and units are always zero). */
+    bool polygon_offset_fill = false;
+    bool sample_alpha_to_coverage = false;
+    bool sample_coverage = false;
+    GLfloat sample_coverage_value = 1.0f;
+    bool sample_coverage_invert = false;
+    GLfloat line_width = 1.0f;
+    GLenum generate_mipmap_hint = GL_DONT_CARE;
 
     GLenum depth_func = GL_LESS;
     bool depth_mask = true;
@@ -173,6 +183,22 @@ static void set_error(GLenum error)
 {
     if (g_context.current && g_context.error == GL_NO_ERROR)
         g_context.error = error;
+}
+
+/* Run a query that reports failure through the error state and say whether
+   it succeeded. GLES latches only the first error until glGetError, so an
+   earlier pending error is set aside and then restored (a failure inside
+   the query is dropped in that case, as the first error wins). */
+template <typename Query>
+static bool query_succeeds(Query query)
+{
+    const GLenum pending = g_context.error;
+    g_context.error = GL_NO_ERROR;
+    query();
+    const bool succeeded = g_context.error == GL_NO_ERROR;
+    if (pending != GL_NO_ERROR)
+        g_context.error = pending;
+    return succeeded;
 }
 
 static bool has_context()
@@ -676,6 +702,9 @@ static bool *capability(GLenum cap)
         case GL_DITHER: return &g_context.dither;
         case GL_SCISSOR_TEST: return &g_context.scissor_test;
         case GL_STENCIL_TEST: return &g_context.stencil_test;
+        case GL_POLYGON_OFFSET_FILL: return &g_context.polygon_offset_fill;
+        case GL_SAMPLE_ALPHA_TO_COVERAGE: return &g_context.sample_alpha_to_coverage;
+        case GL_SAMPLE_COVERAGE: return &g_context.sample_coverage;
         default: return nullptr;
     }
 }
@@ -2145,6 +2174,10 @@ void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params)
             break;
         case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
             *params = static_cast<GLint>(attribute.buffer_binding);
+            break;
+        case GL_CURRENT_VERTEX_ATTRIB:
+            for (int i = 0; i < 4; ++i)
+                params[i] = static_cast<GLint>(floorf(attribute.current[i] + 0.5f));
             break;
         default:
             set_error(GL_INVALID_ENUM);
@@ -3762,6 +3795,35 @@ void glGetIntegerv(GLenum pname, GLint *data)
             data[0] = 1;
             data[1] = static_cast<GLint>(fxgl::MAX_POINT_SIZE);
             break;
+        case GL_ALIASED_LINE_WIDTH_RANGE:
+            data[0] = 1;
+            data[1] = 1;
+            break;
+        case GL_LINE_WIDTH:
+            // Integer queries of float state round to the nearest integer.
+            data[0] = static_cast<GLint>(floorf(g_context.line_width + 0.5f));
+            break;
+        case GL_GENERATE_MIPMAP_HINT:
+            data[0] = static_cast<GLint>(g_context.generate_mipmap_hint);
+            break;
+        case GL_SAMPLE_BUFFERS:
+        case GL_SAMPLES:
+        case GL_NUM_COMPRESSED_TEXTURE_FORMATS:
+        case GL_NUM_SHADER_BINARY_FORMATS:
+            data[0] = 0;
+            break;
+        case GL_COMPRESSED_TEXTURE_FORMATS:
+        case GL_SHADER_BINARY_FORMATS:
+            break; /* Empty lists: nothing is written. */
+        case GL_SHADER_COMPILER:
+            data[0] = GL_TRUE;
+            break;
+        case GL_SAMPLE_COVERAGE_INVERT:
+            data[0] = g_context.sample_coverage_invert ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_SAMPLE_COVERAGE_VALUE:
+            data[0] = static_cast<GLint>(floorf(g_context.sample_coverage_value + 0.5f));
+            break;
         default:
             set_error(GL_INVALID_ENUM);
             break;
@@ -3778,14 +3840,16 @@ void glGetBooleanv(GLenum pname, GLboolean *data)
     }
 
     GLint values[4] = {};
-    glGetIntegerv(pname, values);
-    if (g_context.error != GL_NO_ERROR)
+    if (!query_succeeds([&] { glGetIntegerv(pname, values); }))
         return;
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
                       (pname == GL_MAX_VIEWPORT_DIMS ||
-                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ||
+                       pname == GL_ALIASED_LINE_WIDTH_RANGE ? 2 :
+                       (pname == GL_COMPRESSED_TEXTURE_FORMATS ||
+                        pname == GL_SHADER_BINARY_FORMATS ? 0 : 1));
     for (int i = 0; i < count; ++i)
         data[i] = values[i] ? GL_TRUE : GL_FALSE;
 }
@@ -3816,16 +3880,28 @@ void glGetFloatv(GLenum pname, GLfloat *data)
             data[i] = g_context.blend_color[i];
         return;
     }
+    if (pname == GL_LINE_WIDTH)
+    {
+        data[0] = g_context.line_width;
+        return;
+    }
+    if (pname == GL_SAMPLE_COVERAGE_VALUE)
+    {
+        data[0] = g_context.sample_coverage_value;
+        return;
+    }
 
     GLint values[4] = {};
-    glGetIntegerv(pname, values);
-    if (g_context.error != GL_NO_ERROR)
+    if (!query_succeeds([&] { glGetIntegerv(pname, values); }))
         return;
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
                       (pname == GL_MAX_VIEWPORT_DIMS ||
-                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ||
+                       pname == GL_ALIASED_LINE_WIDTH_RANGE ? 2 :
+                       (pname == GL_COMPRESSED_TEXTURE_FORMATS ||
+                        pname == GL_SHADER_BINARY_FORMATS ? 0 : 1));
     for (int i = 0; i < count; ++i)
         data[i] = static_cast<GLfloat>(values[i]);
 }
@@ -3857,6 +3933,209 @@ GLenum glGetError(void)
     const GLenum error = g_context.error;
     g_context.error = GL_NO_ERROR;
     return error;
+}
+
+void glFlush(void)
+{
+    // Commands execute synchronously; there is nothing to flush.
+}
+
+void glFinish(void)
+{
+}
+
+void glHint(GLenum target, GLenum mode)
+{
+    if (!has_context()) return;
+    if (target != GL_GENERATE_MIPMAP_HINT ||
+        (mode != GL_DONT_CARE && mode != GL_FASTEST && mode != GL_NICEST))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    g_context.generate_mipmap_hint = mode;
+}
+
+void glLineWidth(GLfloat width)
+{
+    if (!has_context()) return;
+    if (!(width > 0.0f))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    // Stored as specified and queried back unchanged; rasterization clamps
+    // to the aliased range [1, 1], so lines stay one pixel wide.
+    g_context.line_width = width;
+}
+
+void glSampleCoverage(GLclampf value, GLboolean invert)
+{
+    if (!has_context()) return;
+    g_context.sample_coverage_value = clamp01(value);
+    g_context.sample_coverage_invert = invert != GL_FALSE;
+}
+
+void glReleaseShaderCompiler(void)
+{
+}
+
+void glShaderBinary(GLsizei n, const GLuint *, GLenum, const GLvoid *, GLsizei length)
+{
+    if (!has_context()) return;
+    if (n < 0 || length < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    // GL_NUM_SHADER_BINARY_FORMATS is zero: no binary format is accepted.
+    set_error(GL_INVALID_ENUM);
+}
+
+void glGetShaderPrecisionFormat(
+    GLenum shadertype, GLenum precisiontype, GLint *range, GLint *precision)
+{
+    if (!has_context()) return;
+    if (shadertype != GL_VERTEX_SHADER && shadertype != GL_FRAGMENT_SHADER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!range || !precision)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    switch (precisiontype)
+    {
+        case GL_LOW_FLOAT:
+        case GL_MEDIUM_FLOAT:
+        case GL_HIGH_FLOAT:
+            // Every precision executes as IEEE-754 single precision.
+            range[0] = 127;
+            range[1] = 127;
+            *precision = 23;
+            break;
+        case GL_LOW_INT:
+        case GL_MEDIUM_INT:
+        case GL_HIGH_INT:
+            // Integers are held in floats and stay exact up to 2^24.
+            range[0] = 24;
+            range[1] = 24;
+            *precision = 0;
+            break;
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
+    }
+}
+
+void glCompressedTexImage2D(GLenum, GLint, GLenum, GLsizei, GLsizei, GLint,
+    GLsizei, const GLvoid *)
+{
+    if (!has_context()) return;
+    // GL_NUM_COMPRESSED_TEXTURE_FORMATS is zero: no format is accepted.
+    set_error(GL_INVALID_ENUM);
+}
+
+void glCompressedTexSubImage2D(GLenum, GLint, GLint, GLint, GLsizei, GLsizei,
+    GLenum, GLsizei, const GLvoid *)
+{
+    if (!has_context()) return;
+    set_error(GL_INVALID_ENUM);
+}
+
+void glTexParameterf(GLenum target, GLenum pname, GLfloat param)
+{
+    // Every GLES 2.0 texture parameter is an enum, exact in a float.
+    glTexParameteri(target, pname, static_cast<GLint>(param));
+}
+
+void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glTexParameteri(target, pname, static_cast<GLint>(params[0]));
+}
+
+void glTexParameteriv(GLenum target, GLenum pname, const GLint *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glTexParameteri(target, pname, params[0]);
+}
+
+void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    GLint value = 0;
+    if (query_succeeds([&] { glGetTexParameteriv(target, pname, &value); }))
+        params[0] = static_cast<GLfloat>(value);
+}
+
+void glVertexAttrib1fv(GLuint index, const GLfloat *values)
+{
+    if (!has_context()) return;
+    if (!values)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glVertexAttrib1f(index, values[0]);
+}
+
+void glVertexAttrib2fv(GLuint index, const GLfloat *values)
+{
+    if (!has_context()) return;
+    if (!values)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glVertexAttrib2f(index, values[0], values[1]);
+}
+
+void glVertexAttrib3fv(GLuint index, const GLfloat *values)
+{
+    if (!has_context()) return;
+    if (!values)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glVertexAttrib3f(index, values[0], values[1], values[2]);
+}
+
+void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat *params)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS || !params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (pname == GL_CURRENT_VERTEX_ATTRIB)
+    {
+        for (int i = 0; i < 4; ++i)
+            params[i] = g_context.attributes[index].current[i];
+        return;
+    }
+    GLint value = 0;
+    if (query_succeeds([&] { glGetVertexAttribiv(index, pname, &value); }))
+        params[0] = static_cast<GLfloat>(value);
 }
 
 } // extern "C"

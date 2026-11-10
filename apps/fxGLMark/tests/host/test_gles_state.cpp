@@ -1692,6 +1692,154 @@ void test_uniform_array_api_and_draw()
     fxglReleaseCurrent();
 }
 
+void test_remaining_gles2_entry_points()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    glFlush();
+    glFinish();
+    glReleaseShaderCompiler();
+    assert(glGetError() == GL_NO_ERROR);
+
+    // glHint: only GL_GENERATE_MIPMAP_HINT with a valid mode.
+    GLint value = -1;
+    glGetIntegerv(GL_GENERATE_MIPMAP_HINT, &value);
+    assert(value == GL_DONT_CARE);
+    glHint(GL_GENERATE_MIPMAP_HINT, GL_NICEST);
+    glGetIntegerv(GL_GENERATE_MIPMAP_HINT, &value);
+    assert(value == GL_NICEST && glGetError() == GL_NO_ERROR);
+    glHint(GL_GENERATE_MIPMAP_HINT, GL_ZERO);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glHint(GL_DEPTH_TEST, GL_FASTEST);
+    assert(glGetError() == GL_INVALID_ENUM);
+
+    // glLineWidth: stored as given, lines rasterize within [1, 1].
+    GLfloat floats[4] = {};
+    glGetFloatv(GL_LINE_WIDTH, floats);
+    assert(floats[0] == 1.0f);
+    glLineWidth(2.5f);
+    glGetFloatv(GL_LINE_WIDTH, floats);
+    assert(floats[0] == 2.5f && glGetError() == GL_NO_ERROR);
+    glLineWidth(0.0f);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glLineWidth(-1.0f);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, floats);
+    assert(floats[0] == 1.0f && floats[1] == 1.0f);
+
+    // Sample coverage is clamped and stored; there are no sample buffers.
+    glSampleCoverage(1.5f, GL_TRUE);
+    glGetFloatv(GL_SAMPLE_COVERAGE_VALUE, floats);
+    assert(floats[0] == 1.0f);
+    GLboolean flag = GL_FALSE;
+    glGetBooleanv(GL_SAMPLE_COVERAGE_INVERT, &flag);
+    assert(flag == GL_TRUE);
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
+    assert(value == 0);
+    glEnable(GL_SAMPLE_COVERAGE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    assert(glIsEnabled(GL_SAMPLE_COVERAGE) == GL_TRUE);
+    assert(glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) == GL_FALSE);
+    assert(glIsEnabled(GL_POLYGON_OFFSET_FILL) == GL_TRUE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // No compressed or binary shader formats exist.
+    glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &value);
+    assert(value == 0);
+    glGetIntegerv(GL_NUM_SHADER_BINARY_FORMATS, &value);
+    assert(value == 0);
+    glGetIntegerv(GL_SHADER_COMPILER, &value);
+    assert(value == GL_TRUE);
+    GLint sentinel = 1234;
+    glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, &sentinel);
+    assert(sentinel == 1234 && glGetError() == GL_NO_ERROR);
+    const uint8_t blob[4] = {};
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, 4, blob);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGB, 4, blob);
+    assert(glGetError() == GL_INVALID_ENUM);
+    const GLuint shader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderBinary(1, &shader, 0, blob, 4);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glShaderBinary(-1, &shader, 0, blob, 4);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glDeleteShader(shader);
+
+    // Shader precision: IEEE single floats, integers exact to 2^24.
+    GLint range[2] = {};
+    GLint precision = -1;
+    glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, range, &precision);
+    assert(range[0] == 127 && range[1] == 127 && precision == 23);
+    glGetShaderPrecisionFormat(GL_VERTEX_SHADER, GL_LOW_INT, range, &precision);
+    assert(range[0] == 24 && range[1] == 24 && precision == 0);
+    glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_FLOAT, range, &precision);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glGetShaderPrecisionFormat(GL_TEXTURE_2D, GL_HIGH_FLOAT, range, &precision);
+    assert(glGetError() == GL_INVALID_ENUM);
+
+    // Float/vector texture parameter forms route through glTexParameteri.
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLfloat>(GL_LINEAR));
+    const GLint wrap = GL_MIRRORED_REPEAT;
+    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrap);
+    const GLfloat clamp = static_cast<GLfloat>(GL_CLAMP_TO_EDGE);
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &clamp);
+    assert(glGetError() == GL_NO_ERROR);
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, floats);
+    assert(floats[0] == static_cast<GLfloat>(GL_LINEAR));
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &value);
+    assert(value == GL_MIRRORED_REPEAT);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &value);
+    assert(value == GL_CLAMP_TO_EDGE);
+    floats[0] = 42.0f;
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_DEPTH_TEST, floats);
+    assert(glGetError() == GL_INVALID_ENUM && floats[0] == 42.0f);
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glDeleteTextures(1, &texture);
+
+    // Vertex attribute vector setters and float queries.
+    const GLfloat v3[3] = {1.0f, 2.0f, 3.0f};
+    glVertexAttrib1fv(1, v3);
+    glGetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(floats[0] == 1.0f && floats[1] == 0.0f && floats[2] == 0.0f && floats[3] == 1.0f);
+    glVertexAttrib2fv(1, v3);
+    glGetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(floats[0] == 1.0f && floats[1] == 2.0f && floats[2] == 0.0f);
+    glVertexAttrib3fv(1, v3);
+    glGetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(floats[2] == 3.0f && floats[3] == 1.0f);
+    GLint ints[4] = {};
+    glGetVertexAttribiv(1, GL_CURRENT_VERTEX_ATTRIB, ints);
+    assert(ints[0] == 1 && ints[1] == 2 && ints[2] == 3 && ints[3] == 1);
+    glGetVertexAttribfv(1, GL_VERTEX_ATTRIB_ARRAY_ENABLED, floats);
+    assert(floats[0] == 0.0f);
+    glVertexAttrib3fv(1, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glGetVertexAttribfv(99, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(glGetError() == GL_INVALID_VALUE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // With an earlier error still pending, valid float/boolean queries
+    // still answer, and the first error is what glGetError reports.
+    glLineWidth(-3.0f);
+    floats[0] = 0.0f;
+    glGetFloatv(GL_DEPTH_FUNC, floats);
+    assert(floats[0] == static_cast<GLfloat>(GL_LESS));
+    flag = GL_FALSE;
+    glGetBooleanv(GL_SHADER_COMPILER, &flag);
+    assert(flag == GL_TRUE);
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_DEPTH_TEST, floats);
+    assert(glGetError() == GL_INVALID_VALUE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -1799,6 +1947,7 @@ int main()
     test_mat2_mat3_uniform_api_and_introspection();
     test_integer_and_boolean_vector_uniform_api();
     test_uniform_array_api_and_draw();
+    test_remaining_gles2_entry_points();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

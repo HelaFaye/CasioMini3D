@@ -3,6 +3,34 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Constants for the remaining GLES 2.0 state and queries. */
+#define GL_UNSIGNED_INT                   0x1405
+#define GL_LINE_WIDTH                     0x0B21
+#define GL_ALIASED_LINE_WIDTH_RANGE       0x846E
+#define GL_DONT_CARE                      0x1100
+#define GL_FASTEST                        0x1101
+#define GL_NICEST                         0x1102
+#define GL_GENERATE_MIPMAP_HINT           0x8192
+#define GL_SAMPLE_ALPHA_TO_COVERAGE       0x809E
+#define GL_SAMPLE_COVERAGE                0x80A0
+#define GL_SAMPLE_BUFFERS                 0x80A8
+#define GL_SAMPLES                        0x80A9
+#define GL_SAMPLE_COVERAGE_VALUE          0x80AA
+#define GL_SAMPLE_COVERAGE_INVERT         0x80AB
+#define GL_POLYGON_OFFSET_FILL            0x8037
+#define GL_NUM_COMPRESSED_TEXTURE_FORMATS 0x86A2
+#define GL_COMPRESSED_TEXTURE_FORMATS     0x86A3
+#define GL_SHADER_BINARY_FORMATS          0x8DF8
+#define GL_NUM_SHADER_BINARY_FORMATS      0x8DF9
+#define GL_SHADER_COMPILER                0x8DFA
+#define GL_LOW_FLOAT                      0x8DF0
+#define GL_MEDIUM_FLOAT                   0x8DF1
+#define GL_HIGH_FLOAT                     0x8DF2
+#define GL_LOW_INT                        0x8DF3
+#define GL_MEDIUM_INT                     0x8DF4
+#define GL_HIGH_INT                       0x8DF5
+#define GL_CURRENT_VERTEX_ATTRIB          0x8626
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -408,6 +436,39 @@ void glGetBooleanv(GLenum pname, GLboolean *data);
 void glGetFloatv(GLenum pname, GLfloat *data);
 const GLubyte *glGetString(GLenum name);
 GLenum glGetError(void);
+
+/* Remaining GLES 2.0 entry points. fxOGL renders synchronously in software
+   with no multisample buffers and no compressed or binary shader formats,
+   so these follow the specification for those limits: glFlush/glFinish and
+   glReleaseShaderCompiler do nothing, glShaderBinary and the compressed
+   texture uploads report GL_INVALID_ENUM, lines are 1 pixel wide
+   (GL_ALIASED_LINE_WIDTH_RANGE is [1, 1]) and sample coverage is stored
+   state only. glPolygonOffset, glCopyTexImage2D and glCopyTexSubImage2D
+   are not implemented yet. */
+void glFlush(void);
+void glFinish(void);
+void glHint(GLenum target, GLenum mode);
+void glLineWidth(GLfloat width);
+void glSampleCoverage(GLclampf value, GLboolean invert);
+void glReleaseShaderCompiler(void);
+void glShaderBinary(GLsizei n, const GLuint *shaders, GLenum binaryformat,
+    const GLvoid *binary, GLsizei length);
+void glGetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype,
+    GLint *range, GLint *precision);
+void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
+    GLsizei width, GLsizei height, GLint border, GLsizei image_size,
+    const GLvoid *data);
+void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset,
+    GLint yoffset, GLsizei width, GLsizei height, GLenum format,
+    GLsizei image_size, const GLvoid *data);
+void glTexParameterf(GLenum target, GLenum pname, GLfloat param);
+void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params);
+void glTexParameteriv(GLenum target, GLenum pname, const GLint *params);
+void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params);
+void glVertexAttrib1fv(GLuint index, const GLfloat *values);
+void glVertexAttrib2fv(GLuint index, const GLfloat *values);
+void glVertexAttrib3fv(GLuint index, const GLfloat *values);
+void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat *params);
 
 #ifdef __cplusplus
 }
