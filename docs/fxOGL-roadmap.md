@@ -82,14 +82,41 @@ Recent measured optimizations include:
   replacement reproduces the original float result exactly (checked over
   all 2^32 inputs) and fxGLMark frames are bit-identical.
 
-A host profiling build that routes float operations through cost-weighted
-soft-float shims reproduces the device's relative scene costs within a few
-percent (linear/build 1.453 vs 1.445 measured). In that model, one frame
-costs 37% less for build and Gouraud, 50% less for nearest texturing and
-58% less for linear texturing. These are modelled figures pending an fx-CG50
-measurement.
+Measured on a physical fx-CG50 with the optimized build (commit `67ac1cd`),
+against the preceding `52798af` run (24 frames of 144 triangles):
 
-The latest user-supplied physical fx-CG50 runs measured two builds of the
+| fxGLMark scene | `52798af` | `67ac1cd` | Change | Host model |
+|---|---|---|---|---|
+| `build:use-vbo=true` (two runs each) | 3.194779 s | 2.292015 s | -28.3% (1.39x) | -36.7% |
+| `build:use-vbo=false` | 3.188029 s | 2.284665 s | -28.3% (1.40x) | |
+| `texture:texture-filter=nearest` (two runs each) | 3.163459 s | 1.913667 s | -39.5% (1.65x) | -49.9% |
+| `texture:texture-filter=linear` | 4.616741 s | 2.322774 s | -49.7% (1.99x) | -58.3% |
+| `shading:shading=gouraud` | 3.194158 s | 2.292590 s | -28.2% (1.39x) | -36.7% |
+| `clear` (no triangles) | 38.242 ms | 34.373 ms | -10.1% | 0% |
+
+| F4 microbenchmark stage | `52798af` | `67ac1cd` | Change |
+|---|---|---|---|
+| `texture-sample-fixed` | 8.215 µs | 8.681 µs | +5.7% |
+| `texture-nearest-clamp` | 18.011 µs | 17.911 µs | -0.6% |
+| `texture-nearest-repeat` | 10.992 µs | 5.630 µs | -48.8% |
+| `triangle-raster` | 264.724 ms | 126.269 ms | -52.3% |
+| `shader-vm` | 124.059 µs | 124.352 µs | +0.2% |
+| `texture2d-vm` | 34.812 µs | 29.526 µs | -15.2% |
+| `framebuffer-present` | 10.997 ms | 10.997 ms | +0.0% |
+
+The host profiling model (float operations routed through cost-weighted
+soft-float shims) ranked the hot paths correctly but overstated the savings
+by about a quarter, so its software-float costs are weighted somewhat higher
+than the SH-4 libgcc routines actually cost. Two results are attributed to
+code placement rather than to logic: `clear`, whose code did not change,
+became 10% faster, and `texture-sample-fixed` (the fixed-point
+`sample_texture_validated` path, unused by fxGLMark scenes, whose only
+change replaced a 64-bit division and remainder by a shift and mask) became
+5.7% slower. Tight loops on this device therefore move by up to about 10%
+with layout alone; only larger or consistent changes are treated as
+performance results.
+
+The two preceding physical fx-CG50 runs measured two builds of the
 GLSL array work: commit `11d1320` (array opcodes inserted mid-enum) and commit
 `52798af` (the same opcodes appended to the end of the enum and interpreter
 switch). No measured scene uses arrays. Each scene is 24 frames of 144
