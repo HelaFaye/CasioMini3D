@@ -139,7 +139,7 @@ public:
             return token;
         }
 
-        if (std::strchr("{}();,[]=.+-*/.", c))
+        if (std::strchr("{}();,[]=.+-*/?:", c))
         {
             token.kind = TokenKind::Punctuation;
             token.text[0] = c;
@@ -1950,8 +1950,45 @@ private:
             expression_lvalue_ = {};
         }
 
+        // The conditional operator binds more loosely than || and groups to
+        // the right, so it is only recognized at full-expression level. Only
+        // the selected operand is evaluated, as GLSL ES requires.
+        if (!failed_ && minimum_precedence <= 1 && is_punctuation('?'))
+            left_type = parse_conditional_tail(left_type);
+
         --recursion_depth_;
         return left_type;
+    }
+
+    ShaderType parse_conditional_tail(ShaderType condition_type)
+    {
+        advance(); /* ? */
+        expression_lvalue_ = {};
+        if (condition_type != ShaderType::Bool)
+        {
+            fail("conditional operator requires a bool condition");
+            return ShaderType::Invalid;
+        }
+        const size_t branch_index = module_.instruction_count;
+        emit_simple(ShaderOp::BranchIfFalse, ShaderType::Bool);
+        const ShaderType true_type = parse_expression(1);
+        if (failed_ || !expect_punctuation(':'))
+            return ShaderType::Invalid;
+        const size_t end_jump_index = module_.instruction_count;
+        emit_simple(ShaderOp::Jump, ShaderType::Invalid);
+        patch_branch_target(branch_index, module_.instruction_count);
+        const ShaderType false_type = parse_expression(1);
+        patch_branch_target(end_jump_index, module_.instruction_count);
+        expression_lvalue_ = {};
+        if (failed_)
+            return ShaderType::Invalid;
+        if (true_type != false_type || true_type == ShaderType::Invalid ||
+            true_type == ShaderType::Sampler2D)
+        {
+            fail("conditional operator operands must have the same type");
+            return ShaderType::Invalid;
+        }
+        return true_type;
     }
 
     static ShaderType result_of_binary(

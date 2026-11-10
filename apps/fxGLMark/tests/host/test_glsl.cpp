@@ -1479,7 +1479,7 @@ static void test_lexer_errors_report_their_reason()
     } cases[] = {
         {"void main() { float this_identifier_is_longer_than_31_chars = 1.0; }",
          "identifier too long"},
-        {"void main() { float a = 1.0 ? 2.0 : 3.0; }", "unexpected character '?'"},
+        {"void main() { float a = 1.0 # 2.0; }", "unexpected character '#'"},
         {"void main() { float a = 1e; }", "invalid exponent"},
     };
     for (const auto& c : cases)
@@ -1489,6 +1489,64 @@ static void test_lexer_errors_report_their_reason()
         if (!std::strstr(rejected.info_log, c.reason))
             std::fprintf(stderr, "unexpected log: %s\n", rejected.info_log);
         assert(std::strstr(rejected.info_log, c.reason) != nullptr);
+    }
+}
+
+static void test_conditional_operator()
+{
+    static const char source[] =
+        "uniform float u_x;\n"
+        "float bump(inout float counter) { counter = counter + 1.0; return counter; }\n"
+        "void main() {\n"
+        "  float calls = 0.0;\n"
+        "  float pick = u_x > 0.0 ? 2.0 : 3.0;\n"
+        "  float unused = u_x > 0.0 ? 5.0 : bump(calls);\n"
+        "  float nested = u_x < 0.0 ? 10.0 : u_x < 1.0 ? 20.0 : 30.0;\n"
+        "  vec2 v = (u_x < 0.0 || u_x > 0.0 ? true : false) ? vec2(1.0, 2.0) : vec2(0.0);\n"
+        "  float loops = 0.0;\n"
+        "  for (int i = 0; i < (u_x > 0.0 ? 3 : 5); i++) { loops = loops + 1.0; }\n"
+        "  gl_FragColor = vec4(pick + unused + calls, nested, v.y + loops,\n"
+        "                      max(u_x > 0.0 ? 4.0 : 1.0, 2.0));\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module, "conditional operator");
+
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Float, 0.5f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    // pick 2 + unused 5 + calls 0 (bump not evaluated); nested picks 20;
+    // v.y 2 + three loop iterations; max(4, 2).
+    assert(near(runtime.fragment_color.data[0], 7.0f));
+    assert(near(runtime.fragment_color.data[1], 20.0f));
+    assert(near(runtime.fragment_color.data[2], 5.0f));
+    assert(near(runtime.fragment_color.data[3], 4.0f));
+
+    runtime.uniforms[0] = value(ShaderType::Float, -1.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    // pick 3 + unused bump() = 1 + calls 1; nested 10; v.y 2 + 5 loops; max(1, 2).
+    assert(near(runtime.fragment_color.data[0], 5.0f));
+    assert(near(runtime.fragment_color.data[1], 10.0f));
+    assert(near(runtime.fragment_color.data[2], 7.0f));
+    assert(near(runtime.fragment_color.data[3], 2.0f));
+
+    const char *invalid[] = {
+        "void main() { float a = 1.0 ? 2.0 : 3.0; gl_FragColor = vec4(a); }",
+        "void main() { float a = true ? 2.0 : 3; gl_FragColor = vec4(a); }",
+        "void main() { vec2 a = true ? vec2(1.0) : vec3(1.0); gl_FragColor = vec4(1.0); }",
+        "void main() { float a = true ? 2.0; gl_FragColor = vec4(a); }",
+        "void main() { float a = true ? 2.0 : ; gl_FragColor = vec4(a); }",
+        "void main() { float a = 1.0; (true ? a : a) = 2.0; gl_FragColor = vec4(a); }",
+        "uniform sampler2D s; uniform sampler2D t; void main() { gl_FragColor = texture2D(true ? s : t, vec2(0.0)); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
     }
 }
 
@@ -1530,6 +1588,7 @@ int main()
     test_local_array_rejections();
     test_uniform_array_reads();
     test_lexer_errors_report_their_reason();
+    test_conditional_operator();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;

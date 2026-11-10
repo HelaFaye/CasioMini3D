@@ -217,6 +217,8 @@ using TextureSampleFunction = bool (*)(
    global outputs are not supported as copy-out targets. Input/output aliases
    follow value-return semantics; overlapping output destinations are rejected.
    Built-in function dispatch remains on its existing fixed-signature path.
+   The ?: conditional operator takes a bool condition and two operands of
+   the same non-sampler type and evaluates only the selected operand.
    One-dimensional local arrays (`float a[4];`, no initializer) of any
    non-sampler type are supported. Elements are read and written with
    constant integer indices, including element swizzles, matrix columns and
