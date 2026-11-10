@@ -1456,7 +1456,8 @@ static void test_uniform_array_reads()
         "uniform vec4 u[0]; void main() { gl_FragColor = vec4(1.0); }",
         "uniform vec4 u[17]; void main() { gl_FragColor = vec4(1.0); }",
         "uniform vec4 u[12]; uniform vec4 v[5]; void main() { gl_FragColor = u[0]; }",
-        "uniform sampler2D u_textures[2]; void main() { gl_FragColor = vec4(1.0); }",
+        "uniform sampler2D u_textures[2]; uniform int u_i; void main() { gl_FragColor = texture2D(u_textures[u_i], vec2(0.0)); }",
+        "void main() { sampler2D local_samplers[2]; gl_FragColor = vec4(1.0); }",
         "varying vec4 v_colors[2]; void main() { gl_FragColor = v_colors[0]; }"
     };
     for (const char *bad : invalid)
@@ -1479,7 +1480,7 @@ static void test_lexer_errors_report_their_reason()
     } cases[] = {
         {"void main() { float this_identifier_is_longer_than_31_chars = 1.0; }",
          "identifier too long"},
-        {"void main() { float a = 1.0 ? 2.0 : 3.0; }", "unexpected character '?'"},
+        {"void main() { float a = 1.0 # 2.0; }", "unexpected character '#'"},
         {"void main() { float a = 1e; }", "invalid exponent"},
     };
     for (const auto& c : cases)
@@ -1489,6 +1490,132 @@ static void test_lexer_errors_report_their_reason()
         if (!std::strstr(rejected.info_log, c.reason))
             std::fprintf(stderr, "unexpected log: %s\n", rejected.info_log);
         assert(std::strstr(rejected.info_log, c.reason) != nullptr);
+    }
+}
+
+static void test_conditional_operator()
+{
+    static const char source[] =
+        "uniform float u_x;\n"
+        "float bump(inout float counter) { counter = counter + 1.0; return counter; }\n"
+        "void main() {\n"
+        "  float calls = 0.0;\n"
+        "  float pick = u_x > 0.0 ? 2.0 : 3.0;\n"
+        "  float unused = u_x > 0.0 ? 5.0 : bump(calls);\n"
+        "  float nested = u_x < 0.0 ? 10.0 : u_x < 1.0 ? 20.0 : 30.0;\n"
+        "  vec2 v = (u_x < 0.0 || u_x > 0.0 ? true : false) ? vec2(1.0, 2.0) : vec2(0.0);\n"
+        "  float loops = 0.0;\n"
+        "  for (int i = 0; i < (u_x > 0.0 ? 3 : 5); i++) { loops = loops + 1.0; }\n"
+        "  gl_FragColor = vec4(pick + unused + calls, nested, v.y + loops,\n"
+        "                      max(u_x > 0.0 ? 4.0 : 1.0, 2.0));\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module, "conditional operator");
+
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Float, 0.5f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    // pick 2 + unused 5 + calls 0 (bump not evaluated); nested picks 20;
+    // v.y 2 + three loop iterations; max(4, 2).
+    assert(near(runtime.fragment_color.data[0], 7.0f));
+    assert(near(runtime.fragment_color.data[1], 20.0f));
+    assert(near(runtime.fragment_color.data[2], 5.0f));
+    assert(near(runtime.fragment_color.data[3], 4.0f));
+
+    runtime.uniforms[0] = value(ShaderType::Float, -1.0f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    // pick 3 + unused bump() = 1 + calls 1; nested 10; v.y 2 + 5 loops; max(1, 2).
+    assert(near(runtime.fragment_color.data[0], 5.0f));
+    assert(near(runtime.fragment_color.data[1], 10.0f));
+    assert(near(runtime.fragment_color.data[2], 7.0f));
+    assert(near(runtime.fragment_color.data[3], 2.0f));
+
+    const char *invalid[] = {
+        "void main() { float a = 1.0 ? 2.0 : 3.0; gl_FragColor = vec4(a); }",
+        "void main() { float a = true ? 2.0 : 3; gl_FragColor = vec4(a); }",
+        "void main() { vec2 a = true ? vec2(1.0) : vec3(1.0); gl_FragColor = vec4(1.0); }",
+        "void main() { float a = true ? 2.0; gl_FragColor = vec4(a); }",
+        "void main() { float a = true ? 2.0 : ; gl_FragColor = vec4(a); }",
+        "void main() { float a = 1.0; (true ? a : a) = 2.0; gl_FragColor = vec4(a); }",
+        "uniform sampler2D s; uniform sampler2D t; void main() { gl_FragColor = texture2D(true ? s : t, vec2(0.0)); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
+    }
+}
+
+static void test_array_function_parameters()
+{
+    static const char source[] =
+        "uniform float u_weights[3];\n"
+        "float sum3(float values[3]);\n"
+        "float pick(float a[2]) { return a[1]; }\n"
+        "float pick(float x, float y) { return x; }\n"
+        "void fill(out float result[2], float base) {\n"
+        "  for (int i = 0; i < 2; i++) { result[i] = base + float(i); }\n"
+        "}\n"
+        "void scale(inout vec2 points[2]) { points[0] = points[0] * 2.0; points[1].y = -1.0; }\n"
+        "void main() {\n"
+        "  float local_values[3];\n"
+        "  local_values[0] = 1.0; local_values[1] = 2.0; local_values[2] = 4.0;\n"
+        "  float pair[2];\n"
+        "  fill(pair, 10.0);\n"
+        "  vec2 points[2];\n"
+        "  points[0] = vec2(1.0, 3.0); points[1] = vec2(5.0, 7.0);\n"
+        "  scale(points);\n"
+        "  gl_FragColor = vec4(sum3(local_values) + sum3(u_weights),\n"
+        "                      pick(pair) + pick(pair[0], 100.0),\n"
+        "                      points[0].y + points[1].x, points[1].y);\n"
+        "}\n"
+        "float sum3(float values[3]) {\n"
+        "  float total = 0.0;\n"
+        "  for (int i = 0; i < 3; i++) { total = total + values[i]; }\n"
+        "  values[0] = 99.0;\n"
+        "  return total;\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module, "array parameters");
+    ShaderRuntime runtime = {};
+    runtime.uniforms[0] = value(ShaderType::Float, 0.5f);
+    runtime.uniforms[1] = value(ShaderType::Float, 0.25f);
+    runtime.uniforms[2] = value(ShaderType::Float, 0.125f);
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    // sum3: 7 + 0.875 (callee writes to its copy do not leak back);
+    // pick(array) -> pair[1] = 11, pick(x, y) -> pair[0] = 10;
+    // scale doubles points[0] (y = 6) and sets points[1].y = -1.
+    assert(near(runtime.fragment_color.data[0], 7.875f));
+    assert(near(runtime.fragment_color.data[1], 21.0f));
+    assert(near(runtime.fragment_color.data[2], 11.0f));
+    assert(near(runtime.fragment_color.data[3], -1.0f));
+
+    const char *invalid[] = {
+        "float f(float a[2]) { return a[0]; } void main() { float b[3]; gl_FragColor = vec4(f(b)); }",
+        "float f(float a[2]) { return a[0]; } void main() { gl_FragColor = vec4(f(1.0)); }",
+        "float f(float a, float b) { return a; } void main() { float c[2]; gl_FragColor = vec4(f(c)); }",
+        "void main() { float a[2]; gl_FragColor = vec4(max(a)); }",
+        "void main() { float a[2]; gl_FragColor = vec4(vec2(a), 0.0, 1.0); }",
+        "uniform float u[2]; void f(out float a[2]) { a[0] = 1.0; } void main() { f(u); gl_FragColor = vec4(1.0); }",
+        "float f(float a[3], float b[2]) { return a[0]; } void main() { gl_FragColor = vec4(1.0); }",
+        "float f(float a[0]) { return 1.0; } void main() { gl_FragColor = vec4(1.0); }",
+        "uniform sampler2D s; float f(sampler2D t[2]) { return 1.0; } void main() { gl_FragColor = vec4(1.0); }",
+        "float f(float a[2]); float f(float a[3]) { return a[0]; } void main() { float b[2]; gl_FragColor = vec4(f(b)); }",
+        "float f(float a[2]) { return a[2]; } void main() { gl_FragColor = vec4(1.0); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
     }
 }
 
@@ -1530,6 +1657,8 @@ int main()
     test_local_array_rejections();
     test_uniform_array_reads();
     test_lexer_errors_report_their_reason();
+    test_conditional_operator();
+    test_array_function_parameters();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;

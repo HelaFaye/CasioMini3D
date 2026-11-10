@@ -217,15 +217,22 @@ using TextureSampleFunction = bool (*)(
    global outputs are not supported as copy-out targets. Input/output aliases
    follow value-return semantics; overlapping output destinations are rejected.
    Built-in function dispatch remains on its existing fixed-signature path.
+   The ?: conditional operator takes a bool condition and two operands of
+   the same non-sampler type and evaluates only the selected operand.
    One-dimensional local arrays (`float a[4];`, no initializer) of any
    non-sampler type are supported. Elements are read and written with
    constant integer indices, including element swizzles, matrix columns and
    out/inout arguments, or with int index expressions for whole-element
    reads and writes. Dynamic indices are bounds-checked at run time and an
    out-of-range access fails the invocation. Each element uses one local
-   slot. Uniform arrays (`uniform vec4 u[3];`, non-sampler) follow the same
-   read rules and use one uniform slot per element. Arrays as function
-   parameters or return values, whole-array assignment, attribute/varying
+   slot. Uniform arrays (`uniform vec4 u[3];`) follow the same read rules
+   and use one uniform slot per element; sampler arrays
+   (`uniform sampler2D s[2];`) take constant indices only, as GLSL ES 1.00
+   requires. Array function
+   parameters (`float f(inout float a[3])`) take a whole local or uniform
+   array of the same element type and size by value, with copy-out for
+   out/inout; each element counts toward the four-parameter limit. Array
+   return values, whole-array assignment, attribute/varying
    arrays, structs, do-while, switch, preprocessor directives and precision
    qualifiers other than ordinary precision statements remain unsupported. */
 bool compile_glsl(

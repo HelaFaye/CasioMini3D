@@ -430,7 +430,8 @@ static bool process_fragment(
     FragmentShader fragment_shader,
     void *user_data,
     RasterStats& stats,
-    bool scissor_preclipped = false)
+    bool scissor_preclipped = false,
+    float depth_offset = 0.0f)
 {
     // Triangle bounds are intersected with the scissor rectangle before the
     // raster loop. Keep the check for points/lines, whose paths are not
@@ -448,15 +449,18 @@ static bool process_fragment(
     if (depth_active)
     {
         const float window_depth = ndc_depth * 0.5f + 0.5f;
-        float mapped_depth = 0.0f;
         // With the default glDepthRangef(0, 1), near + window * (far - near)
         // is exactly window (a -0.0f result is clamped to +0.0f below).
-        if (float_bits(state.depth_near) == 0 &&
-            float_bits(state.depth_far) == FLOAT_ONE)
-            mapped_depth = clamp01(window_depth);
-        else
-            mapped_depth = clamp01(state.depth_near + window_depth *
-                (state.depth_far - state.depth_near));
+        float unclamped_depth = window_depth;
+        if (float_bits(state.depth_near) != 0 ||
+            float_bits(state.depth_far) != FLOAT_ONE)
+            unclamped_depth = state.depth_near + window_depth *
+                (state.depth_far - state.depth_near);
+        // A polygon offset applies before clamping; a zero offset leaves
+        // the value exactly as computed without it.
+        if ((float_bits(depth_offset) & ~FLOAT_SIGN) != 0)
+            unclamped_depth = unclamped_depth + depth_offset;
+        const float mapped_depth = clamp01(unclamped_depth);
         incoming_depth = static_cast<uint16_t>(
             mapped_depth * 65535.0f + 0.5f);
     }
@@ -649,6 +653,7 @@ static bool rasterize_one(
     float reciprocal_w_dx = 0.0f;
     float reciprocal_w_dy = 0.0f;
     float depth_dx = 0.0f;
+    float depth_offset = 0.0f;
     float numerator_dx[MAX_VARYINGS] = {};
     float numerator_dy[MAX_VARYINGS] = {};
 
@@ -664,6 +669,22 @@ static bool rasterize_one(
                 lambda0_dx * vertices[0].z_over_w +
                 lambda1_dx * vertices[1].z_over_w +
                 lambda2_dx * vertices[2].z_over_w;
+
+            if (state.polygon_offset_fill)
+            {
+                // o = factor * m + r * units, where m is the larger window
+                // depth slope; window depth is (far - near) / 2 per NDC unit.
+                const float depth_dy =
+                    ((vertices[2].x - vertices[1].x) / area) * vertices[0].z_over_w +
+                    ((vertices[0].x - vertices[2].x) / area) * vertices[1].z_over_w +
+                    ((vertices[1].x - vertices[0].x) / area) * vertices[2].z_over_w;
+                const float window_scale =
+                    0.5f * fabsf(state.depth_far - state.depth_near);
+                const float slope = std::max(fabsf(depth_dx), fabsf(depth_dy)) *
+                                    window_scale;
+                depth_offset = state.polygon_offset_factor * slope +
+                               state.polygon_offset_units * (1.0f / 65535.0f);
+            }
         }
 
         if (has_varyings)
@@ -844,7 +865,8 @@ static bool rasterize_one(
                             static_cast<int>(x), static_cast<int>(y),
                             varyings, varyings_dx, varyings_dy,
                             varying_count, ndc_depth, front,
-                            fragment_shader, user_data, stats, true))
+                            fragment_shader, user_data, stats, true,
+                            depth_offset))
                     {
                         wrote_any = true;
                     }

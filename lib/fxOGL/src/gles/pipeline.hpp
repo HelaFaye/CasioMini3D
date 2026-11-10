@@ -58,6 +58,12 @@ struct PipelineState
     bool depth_write;
     float depth_near;
     float depth_far;
+    /* glPolygonOffset for filled triangles: window depth is offset by
+       factor * max depth slope + units * (1 / 65535) before clamping and
+       the depth test. Points and lines are not offset. */
+    bool polygon_offset_fill;
+    float polygon_offset_factor;
+    float polygon_offset_units;
 
     bool stencil_enabled;
     StencilFaceState stencil_front;

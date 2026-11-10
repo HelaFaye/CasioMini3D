@@ -1692,6 +1692,422 @@ void test_uniform_array_api_and_draw()
     fxglReleaseCurrent();
 }
 
+void test_remaining_gles2_entry_points()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    glFlush();
+    glFinish();
+    glReleaseShaderCompiler();
+    assert(glGetError() == GL_NO_ERROR);
+
+    // glHint: only GL_GENERATE_MIPMAP_HINT with a valid mode.
+    GLint value = -1;
+    glGetIntegerv(GL_GENERATE_MIPMAP_HINT, &value);
+    assert(value == GL_DONT_CARE);
+    glHint(GL_GENERATE_MIPMAP_HINT, GL_NICEST);
+    glGetIntegerv(GL_GENERATE_MIPMAP_HINT, &value);
+    assert(value == GL_NICEST && glGetError() == GL_NO_ERROR);
+    glHint(GL_GENERATE_MIPMAP_HINT, GL_ZERO);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glHint(GL_DEPTH_TEST, GL_FASTEST);
+    assert(glGetError() == GL_INVALID_ENUM);
+
+    // glLineWidth: stored as given, lines rasterize within [1, 1].
+    GLfloat floats[4] = {};
+    glGetFloatv(GL_LINE_WIDTH, floats);
+    assert(floats[0] == 1.0f);
+    glLineWidth(2.5f);
+    glGetFloatv(GL_LINE_WIDTH, floats);
+    assert(floats[0] == 2.5f && glGetError() == GL_NO_ERROR);
+    glLineWidth(0.0f);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glLineWidth(-1.0f);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, floats);
+    assert(floats[0] == 1.0f && floats[1] == 1.0f);
+
+    // Sample coverage is clamped and stored; there are no sample buffers.
+    glSampleCoverage(1.5f, GL_TRUE);
+    glGetFloatv(GL_SAMPLE_COVERAGE_VALUE, floats);
+    assert(floats[0] == 1.0f);
+    GLboolean flag = GL_FALSE;
+    glGetBooleanv(GL_SAMPLE_COVERAGE_INVERT, &flag);
+    assert(flag == GL_TRUE);
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
+    assert(value == 0);
+    glEnable(GL_SAMPLE_COVERAGE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    assert(glIsEnabled(GL_SAMPLE_COVERAGE) == GL_TRUE);
+    assert(glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) == GL_FALSE);
+    assert(glIsEnabled(GL_POLYGON_OFFSET_FILL) == GL_TRUE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // No compressed or binary shader formats exist.
+    glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &value);
+    assert(value == 0);
+    glGetIntegerv(GL_NUM_SHADER_BINARY_FORMATS, &value);
+    assert(value == 0);
+    glGetIntegerv(GL_SHADER_COMPILER, &value);
+    assert(value == GL_TRUE);
+    GLint sentinel = 1234;
+    glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, &sentinel);
+    assert(sentinel == 1234 && glGetError() == GL_NO_ERROR);
+    const uint8_t blob[4] = {};
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, 4, blob);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGB, 4, blob);
+    assert(glGetError() == GL_INVALID_ENUM);
+    const GLuint shader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderBinary(1, &shader, 0, blob, 4);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glShaderBinary(-1, &shader, 0, blob, 4);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glDeleteShader(shader);
+
+    // Shader precision: IEEE single floats, integers exact to 2^24.
+    GLint range[2] = {};
+    GLint precision = -1;
+    glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, range, &precision);
+    assert(range[0] == 127 && range[1] == 127 && precision == 23);
+    glGetShaderPrecisionFormat(GL_VERTEX_SHADER, GL_LOW_INT, range, &precision);
+    assert(range[0] == 24 && range[1] == 24 && precision == 0);
+    glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_FLOAT, range, &precision);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glGetShaderPrecisionFormat(GL_TEXTURE_2D, GL_HIGH_FLOAT, range, &precision);
+    assert(glGetError() == GL_INVALID_ENUM);
+
+    // Float/vector texture parameter forms route through glTexParameteri.
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLfloat>(GL_LINEAR));
+    const GLint wrap = GL_MIRRORED_REPEAT;
+    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrap);
+    const GLfloat clamp = static_cast<GLfloat>(GL_CLAMP_TO_EDGE);
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &clamp);
+    assert(glGetError() == GL_NO_ERROR);
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, floats);
+    assert(floats[0] == static_cast<GLfloat>(GL_LINEAR));
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &value);
+    assert(value == GL_MIRRORED_REPEAT);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &value);
+    assert(value == GL_CLAMP_TO_EDGE);
+    floats[0] = 42.0f;
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_DEPTH_TEST, floats);
+    assert(glGetError() == GL_INVALID_ENUM && floats[0] == 42.0f);
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glDeleteTextures(1, &texture);
+
+    // Vertex attribute vector setters and float queries.
+    const GLfloat v3[3] = {1.0f, 2.0f, 3.0f};
+    glVertexAttrib1fv(1, v3);
+    glGetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(floats[0] == 1.0f && floats[1] == 0.0f && floats[2] == 0.0f && floats[3] == 1.0f);
+    glVertexAttrib2fv(1, v3);
+    glGetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(floats[0] == 1.0f && floats[1] == 2.0f && floats[2] == 0.0f);
+    glVertexAttrib3fv(1, v3);
+    glGetVertexAttribfv(1, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(floats[2] == 3.0f && floats[3] == 1.0f);
+    GLint ints[4] = {};
+    glGetVertexAttribiv(1, GL_CURRENT_VERTEX_ATTRIB, ints);
+    assert(ints[0] == 1 && ints[1] == 2 && ints[2] == 3 && ints[3] == 1);
+    glGetVertexAttribfv(1, GL_VERTEX_ATTRIB_ARRAY_ENABLED, floats);
+    assert(floats[0] == 0.0f);
+    glVertexAttrib3fv(1, nullptr);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glGetVertexAttribfv(99, GL_CURRENT_VERTEX_ATTRIB, floats);
+    assert(glGetError() == GL_INVALID_VALUE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // With an earlier error still pending, valid float/boolean queries
+    // still answer, and the first error is what glGetError reports.
+    glLineWidth(-3.0f);
+    floats[0] = 0.0f;
+    glGetFloatv(GL_DEPTH_FUNC, floats);
+    assert(floats[0] == static_cast<GLfloat>(GL_LESS));
+    flag = GL_FALSE;
+    glGetBooleanv(GL_SHADER_COMPILER, &flag);
+    assert(flag == GL_TRUE);
+    glGetTexParameterfv(GL_TEXTURE_2D, GL_DEPTH_TEST, floats);
+    assert(glGetError() == GL_INVALID_VALUE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    fxglReleaseCurrent();
+}
+
+void test_copy_tex_image_from_framebuffer()
+{
+    uint16_t color[16] = {};
+    for (uint16_t i = 0; i < 16; ++i)
+        color[i] = static_cast<uint16_t>(0x1000 + i); // pixel (x, y) = 0x1000 + y * 4 + x
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 8);
+
+    // A 3x2 region starting at (2, 1) runs past the right edge: the
+    // outside column reads as zero.
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 1, 3, 2, 0);
+    assert(glGetError() == GL_NO_ERROR);
+    gfx::Texture2DView view = {};
+    gfx::TextureSampler sampler = {};
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.width == 3 && view.height == 2);
+    const uint16_t expected[6] = {0x1006, 0x1007, 0, 0x100a, 0x100b, 0};
+    for (size_t i = 0; i < 6; ++i)
+        assert(view.pixels[i] == expected[i]);
+    GLint alignment = 0;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+    assert(alignment == 8);
+
+    // Sub-copy (0, 3)..(1, 3) into texel (1, 0).
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 0, 3, 2, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.pixels[0] == 0x1006 && view.pixels[1] == 0x100c &&
+           view.pixels[2] == 0x100d && view.pixels[3] == 0x100a);
+
+    // Errors: destination overflow, formats, border, target, sizes.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 2, 0, 0, 0, 2, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 0, 0, 1, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 2, 2, 0);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 0, 0, 2, 2, 0);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, 2, 2, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexImage2D(GL_DEPTH_TEST, 0, GL_RGB, 0, 0, 2, 2, 0);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, -1, 2, 0);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 100000, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    // An empty sub-copy still requires the destination level to exist.
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 0, 0);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // Feedback: copy level 0 of a texture attached to the bound framebuffer
+    // onto itself. The source is read before the level is replaced.
+    uint16_t base[4] = {0x0001, 0x0002, 0x0003, 0x0004};
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, base);
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 0, 1, 2, 0);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.width == 1 && view.height == 2);
+    assert(view.pixels[0] == 0x0002 && view.pixels[1] == 0x0004);
+
+    // An incomplete framebuffer cannot be read.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, 1, 1, 0);
+    assert(glGetError() == GL_INVALID_FRAMEBUFFER_OPERATION);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &texture);
+    fxglReleaseCurrent();
+}
+
+void test_polygon_offset()
+{
+    uint16_t color[16] = {};
+    uint16_t depth[16] = {};
+    fxgl_surface_t surface = {color, depth, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "attribute vec4 a_position; uniform vec4 u_color; varying vec4 v_color;\n"
+        "void main() { gl_Position = a_position; v_color = u_color; gl_PointSize = 1.0; }\n";
+    static const GLchar fragment_source[] =
+        "precision mediump float; varying vec4 v_color;\n"
+        "void main() { gl_FragColor = v_color; }\n";
+    const GLchar *vertex_parts[] = {vertex_source};
+    const GLchar *fragment_parts[] = {fragment_source};
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, vertex_parts, nullptr);
+    glShaderSource(fs, 1, fragment_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glBindAttribLocation(program, 0, "a_position");
+    glLinkProgram(program);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    assert(linked == GL_TRUE);
+    glUseProgram(program);
+    const GLint color_location = glGetUniformLocation(program, "u_color");
+    glEnableVertexAttribArray(0);
+    glViewport(0, 0, 4, 4);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+
+    // Two full-screen triangles at z = 0 (flat quad).
+    const GLfloat flat[] = {
+        -1, -1, 0, 1,   1, -1, 0, 1,   -1, 1, 0, 1,
+         1, -1, 0, 1,   1,  1, 0, 1,   -1, 1, 0, 1
+    };
+    const auto draw = [&](const GLfloat *vertices, GLfloat r, GLfloat b)
+    {
+        glUniform4f(color_location, r, 0.0f, b, 1.0f);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        assert(glGetError() == GL_NO_ERROR);
+    };
+
+    glClearDepthf(1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    draw(flat, 1.0f, 0.0f);
+    assert(color[5] == 0xf800 && depth[5] == 32768);
+
+    // Coplanar redraw loses with GL_LESS; a pushed-away offset still loses.
+    draw(flat, 0.0f, 1.0f);
+    assert(color[5] == 0xf800);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(0.0f, 1.0f);
+    draw(flat, 0.0f, 1.0f);
+    assert(color[5] == 0xf800 && depth[5] == 32768);
+
+    // Pulling it one depth step closer wins, and stores depth - 1.
+    glPolygonOffset(0.0f, -1.0f);
+    draw(flat, 0.0f, 1.0f);
+    assert(color[5] == 0x001f && depth[5] == 32767);
+
+    GLfloat value = 0.0f;
+    glGetFloatv(GL_POLYGON_OFFSET_UNITS, &value);
+    assert(value == -1.0f);
+    glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &value);
+    assert(value == 0.0f);
+    assert(glIsEnabled(GL_POLYGON_OFFSET_FILL) == GL_TRUE);
+
+    // Slope term: NDC z goes from -0.5 at x = -1 to 0.5 at x = 1, i.e. 0.25
+    // NDC per pixel across the 4-pixel viewport, so window depth
+    // (ndc * 0.5 + 0.5) rises 0.125 per pixel.
+    const GLfloat sloped[] = {
+        -1, -1, -0.5f, 1,   1, -1, 0.5f, 1,   -1, 1, -0.5f, 1,
+         1, -1,  0.5f, 1,   1,  1, 0.5f, 1,   -1, 1, -0.5f, 1
+    };
+    glDepthFunc(GL_ALWAYS);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    draw(sloped, 1.0f, 0.0f);
+    const uint16_t plain = depth[5];
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.0f, 0.0f);
+    draw(sloped, 1.0f, 0.0f);
+    const int shifted = static_cast<int>(depth[5]) - static_cast<int>(plain);
+    if (shifted < 8191 || shifted > 8193) std::fprintf(stderr, "polygon offset slope shift %d\n", shifted);
+    assert(shifted >= 8191 && shifted <= 8193); // 0.125 * 65535
+
+    // Points are not offset.
+    glPolygonOffset(0.0f, -1000.0f);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    const GLfloat point[] = {-0.25f, -0.25f, 0.0f, 1.0f};
+    glUniform4f(color_location, 1.0f, 1.0f, 1.0f, 1.0f);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, point);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(depth[5] == 32768);
+
+    glDeleteProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    fxglReleaseCurrent();
+}
+
+void test_sampler_array_uniforms()
+{
+    uint16_t color[1] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 1, 1, 1};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    static const GLchar vertex_source[] =
+        "attribute vec4 a_position; varying vec2 v_uv;\n"
+        "void main() { gl_Position = a_position; v_uv = vec2(0.5); gl_PointSize = 1.0; }\n";
+    static const GLchar fragment_source[] =
+        "precision mediump float; uniform sampler2D u_textures[2]; varying vec2 v_uv;\n"
+        "void main() { gl_FragColor = texture2D(u_textures[1], v_uv); }\n";
+    const GLchar *vertex_parts[] = {vertex_source};
+    const GLchar *fragment_parts[] = {fragment_source};
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, vertex_parts, nullptr);
+    glShaderSource(fs, 1, fragment_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+    GLint status = GL_FALSE;
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    assert(status == GL_TRUE);
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glBindAttribLocation(program, 0, "a_position");
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &status);
+    assert(status == GL_TRUE);
+
+    GLchar name[32] = {};
+    GLint size = 0;
+    GLenum type = 0;
+    glGetActiveUniform(program, 0, sizeof(name), nullptr, &size, &type, name);
+    assert(std::strcmp(name, "u_textures[0]") == 0 && size == 2 && type == GL_SAMPLER_2D);
+
+    // Unit 0 holds red, unit 1 holds green.
+    GLuint textures[2] = {};
+    glGenTextures(2, textures);
+    const uint16_t texels[2] = {0xf800, 0x07e0};
+    for (int unit = 0; unit < 2; ++unit)
+    {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, textures[unit]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB,
+                     GL_UNSIGNED_SHORT_5_6_5, &texels[unit]);
+    }
+    glUseProgram(program);
+    const GLint location = glGetUniformLocation(program, "u_textures");
+    assert(location >= 0);
+    assert(glGetUniformLocation(program, "u_textures[1]") == location + 1);
+
+    const GLfloat point[] = {0.0f, 0.0f, 0.0f, 1.0f};
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, point);
+    glViewport(0, 0, 1, 1);
+
+    // The shader reads element 1: unit 1 (green), then unit 0 (red).
+    const GLint units[2] = {0, 1};
+    glUniform1iv(location, 2, units);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0x07e0);
+
+    const GLint swapped[2] = {1, 0};
+    glUniform1iv(location, 2, swapped);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0xf800);
+
+    glDeleteTextures(2, textures);
+    glDeleteProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -1799,6 +2215,10 @@ int main()
     test_mat2_mat3_uniform_api_and_introspection();
     test_integer_and_boolean_vector_uniform_api();
     test_uniform_array_api_and_draw();
+    test_remaining_gles2_entry_points();
+    test_copy_tex_image_from_framebuffer();
+    test_polygon_offset();
+    test_sampler_array_uniforms();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

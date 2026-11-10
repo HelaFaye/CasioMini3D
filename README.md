@@ -58,10 +58,11 @@ current compatibility boundary is documented in
 ## Hardware measurements
 
 fxGLMark has been measured on a physical fx-CG50. The latest supplied run
-(commit `52798af`, 24 frames of 144 triangles) averaged 3.163 seconds per
-frame for the nearest-texture scene, 3.195 seconds for the VBO build scene,
-3.194 seconds for Gouraud shading and 4.617 seconds for linear texture
-filtering. These are calculator-specific software-rendering measurements, not
+(commit `ea02e8c`, 24 frames of 144 triangles) averaged 1.893 seconds per
+frame for the nearest-texture scene, 2.272 seconds for the VBO build scene,
+2.272 seconds for Gouraud shading and 2.306 seconds for linear texture
+filtering. The soft-float optimizations (commit `67ac1cd`) made these scenes
+1.39x to 1.99x faster than the build before them. These are calculator-specific software-rendering measurements, not
 glmark2 scores comparable with desktop/mobile GPUs. Per-scene and
 microbenchmark figures are recorded in
 [`docs/fxOGL-roadmap.md`](docs/fxOGL-roadmap.md#performance-work).

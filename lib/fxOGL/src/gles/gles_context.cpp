@@ -143,6 +143,17 @@ struct Context
     bool dither = true;
     bool scissor_test = false;
     bool stencil_test = false;
+    /* No multisample buffers: the sample coverage capabilities and
+       parameters are stored and queryable but cannot change rendering. */
+    bool polygon_offset_fill = false;
+    GLfloat polygon_offset_factor = 0.0f;
+    GLfloat polygon_offset_units = 0.0f;
+    bool sample_alpha_to_coverage = false;
+    bool sample_coverage = false;
+    GLfloat sample_coverage_value = 1.0f;
+    bool sample_coverage_invert = false;
+    GLfloat line_width = 1.0f;
+    GLenum generate_mipmap_hint = GL_DONT_CARE;
 
     GLenum depth_func = GL_LESS;
     bool depth_mask = true;
@@ -173,6 +184,22 @@ static void set_error(GLenum error)
 {
     if (g_context.current && g_context.error == GL_NO_ERROR)
         g_context.error = error;
+}
+
+/* Run a query that reports failure through the error state and say whether
+   it succeeded. GLES latches only the first error until glGetError, so an
+   earlier pending error is set aside and then restored (a failure inside
+   the query is dropped in that case, as the first error wins). */
+template <typename Query>
+static bool query_succeeds(Query query)
+{
+    const GLenum pending = g_context.error;
+    g_context.error = GL_NO_ERROR;
+    query();
+    const bool succeeded = g_context.error == GL_NO_ERROR;
+    if (pending != GL_NO_ERROR)
+        g_context.error = pending;
+    return succeeded;
 }
 
 static bool has_context()
@@ -676,6 +703,9 @@ static bool *capability(GLenum cap)
         case GL_DITHER: return &g_context.dither;
         case GL_SCISSOR_TEST: return &g_context.scissor_test;
         case GL_STENCIL_TEST: return &g_context.stencil_test;
+        case GL_POLYGON_OFFSET_FILL: return &g_context.polygon_offset_fill;
+        case GL_SAMPLE_ALPHA_TO_COVERAGE: return &g_context.sample_alpha_to_coverage;
+        case GL_SAMPLE_COVERAGE: return &g_context.sample_coverage;
         default: return nullptr;
     }
 }
@@ -2146,6 +2176,10 @@ void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params)
         case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
             *params = static_cast<GLint>(attribute.buffer_binding);
             break;
+        case GL_CURRENT_VERTEX_ATTRIB:
+            for (int i = 0; i < 4; ++i)
+                params[i] = static_cast<GLint>(floorf(attribute.current[i] + 0.5f));
+            break;
         default:
             set_error(GL_INVALID_ENUM);
             break;
@@ -3042,6 +3076,146 @@ void glTexSubImage2D(
     }
 }
 
+/* Shared validation and readback for glCopyTex(Sub)Image2D. The region is
+   first copied into temporary RGB565 storage: the framebuffer's color
+   attachment may be the very texture level being redefined, which the
+   upload frees and replaces. Returns nullptr (after reporting an error)
+   on failure; the caller frees the buffer. */
+static uint16_t *read_copy_source(
+    GLint x, GLint y, GLsizei width, GLsizei height, bool& empty)
+{
+    empty = width == 0 || height == 0;
+    fxgl_surface_t surface = {};
+    if (!resolve_draw_surface(surface) || !surface.color)
+    {
+        set_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return nullptr;
+    }
+    if (empty)
+        return nullptr;
+
+    const size_t count = static_cast<size_t>(width) * static_cast<size_t>(height);
+    uint16_t *copy = static_cast<uint16_t *>(::malloc(count * sizeof(uint16_t)));
+    if (!copy)
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return nullptr;
+    }
+    for (GLsizei row = 0; row < height; ++row)
+    {
+        const int64_t source_y = static_cast<int64_t>(y) + row;
+        for (GLsizei column = 0; column < width; ++column)
+        {
+            const int64_t source_x = static_cast<int64_t>(x) + column;
+            uint16_t pixel = 0;
+            if (source_x >= 0 && source_y >= 0 &&
+                source_x < surface.width && source_y < surface.height)
+                pixel = surface.color[static_cast<size_t>(source_y) * surface.stride +
+                                      static_cast<size_t>(source_x)];
+            copy[static_cast<size_t>(row) * width + column] = pixel;
+        }
+    }
+    return copy;
+}
+
+/* Upload tightly packed RGB565 rows regardless of GL_UNPACK_ALIGNMENT:
+   uint16_t rows are always 2-byte aligned. */
+struct PackedRgb565Unpack
+{
+    GLint saved_alignment = g_context.unpack_alignment;
+    PackedRgb565Unpack() { g_context.unpack_alignment = 2; }
+    ~PackedRgb565Unpack() { g_context.unpack_alignment = saved_alignment; }
+};
+
+void glCopyTexImage2D(
+    GLenum target,
+    GLint level,
+    GLenum internalformat,
+    GLint x,
+    GLint y,
+    GLsizei width,
+    GLsizei height,
+    GLint border)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (internalformat == GL_RGBA || internalformat == GL_ALPHA ||
+        internalformat == GL_LUMINANCE_ALPHA)
+    {
+        // The RGB565 color buffer has no alpha component to copy.
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (internalformat != GL_RGB)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (level < 0 || level >= static_cast<GLint>(FXGL_MAX_TEXTURE_LEVELS) ||
+        width < 0 || height < 0 || border != 0 ||
+        width > FXGL_MAX_TEXTURE_SIZE || height > FXGL_MAX_TEXTURE_SIZE)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    bool empty = false;
+    uint16_t *copy = read_copy_source(x, y, width, height, empty);
+    if (!copy && !empty)
+        return;
+    {
+        const PackedRgb565Unpack packed;
+        glTexImage2D(target, level, GL_RGB, width, height, 0,
+                     GL_RGB, GL_UNSIGNED_SHORT_5_6_5, copy);
+    }
+    ::free(copy);
+}
+
+void glCopyTexSubImage2D(
+    GLenum target,
+    GLint level,
+    GLint xoffset,
+    GLint yoffset,
+    GLint x,
+    GLint y,
+    GLsizei width,
+    GLsizei height)
+{
+    if (!has_context()) return;
+    if (target != GL_TEXTURE_2D)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    // Any region larger than the maximum texture size cannot fit a level;
+    // reject it before allocating the temporary copy.
+    if (level < 0 || level >= static_cast<GLint>(FXGL_MAX_TEXTURE_LEVELS) ||
+        xoffset < 0 || yoffset < 0 || width < 0 || height < 0 ||
+        width > FXGL_MAX_TEXTURE_SIZE || height > FXGL_MAX_TEXTURE_SIZE)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    bool empty = false;
+    uint16_t *copy = read_copy_source(x, y, width, height, empty);
+    if (!copy && !empty)
+        return;
+    // glTexSubImage2D validates the destination level and region. An empty
+    // region still needs an existing level, so pass a non-null placeholder.
+    static const uint16_t no_pixels = 0;
+    {
+        const PackedRgb565Unpack packed;
+        glTexSubImage2D(target, level, xoffset, yoffset, width, height,
+                        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, copy ? copy : &no_pixels);
+    }
+    ::free(copy);
+}
+
 void glGenerateMipmap(GLenum target)
 {
     if (!has_context()) return;
@@ -3762,6 +3936,41 @@ void glGetIntegerv(GLenum pname, GLint *data)
             data[0] = 1;
             data[1] = static_cast<GLint>(fxgl::MAX_POINT_SIZE);
             break;
+        case GL_ALIASED_LINE_WIDTH_RANGE:
+            data[0] = 1;
+            data[1] = 1;
+            break;
+        case GL_LINE_WIDTH:
+            // Integer queries of float state round to the nearest integer.
+            data[0] = static_cast<GLint>(floorf(g_context.line_width + 0.5f));
+            break;
+        case GL_GENERATE_MIPMAP_HINT:
+            data[0] = static_cast<GLint>(g_context.generate_mipmap_hint);
+            break;
+        case GL_SAMPLE_BUFFERS:
+        case GL_SAMPLES:
+        case GL_NUM_COMPRESSED_TEXTURE_FORMATS:
+        case GL_NUM_SHADER_BINARY_FORMATS:
+            data[0] = 0;
+            break;
+        case GL_COMPRESSED_TEXTURE_FORMATS:
+        case GL_SHADER_BINARY_FORMATS:
+            break; /* Empty lists: nothing is written. */
+        case GL_SHADER_COMPILER:
+            data[0] = GL_TRUE;
+            break;
+        case GL_SAMPLE_COVERAGE_INVERT:
+            data[0] = g_context.sample_coverage_invert ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_SAMPLE_COVERAGE_VALUE:
+            data[0] = static_cast<GLint>(floorf(g_context.sample_coverage_value + 0.5f));
+            break;
+        case GL_POLYGON_OFFSET_FACTOR:
+            data[0] = static_cast<GLint>(floorf(g_context.polygon_offset_factor + 0.5f));
+            break;
+        case GL_POLYGON_OFFSET_UNITS:
+            data[0] = static_cast<GLint>(floorf(g_context.polygon_offset_units + 0.5f));
+            break;
         default:
             set_error(GL_INVALID_ENUM);
             break;
@@ -3778,14 +3987,16 @@ void glGetBooleanv(GLenum pname, GLboolean *data)
     }
 
     GLint values[4] = {};
-    glGetIntegerv(pname, values);
-    if (g_context.error != GL_NO_ERROR)
+    if (!query_succeeds([&] { glGetIntegerv(pname, values); }))
         return;
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
                       (pname == GL_MAX_VIEWPORT_DIMS ||
-                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ||
+                       pname == GL_ALIASED_LINE_WIDTH_RANGE ? 2 :
+                       (pname == GL_COMPRESSED_TEXTURE_FORMATS ||
+                        pname == GL_SHADER_BINARY_FORMATS ? 0 : 1));
     for (int i = 0; i < count; ++i)
         data[i] = values[i] ? GL_TRUE : GL_FALSE;
 }
@@ -3816,16 +4027,38 @@ void glGetFloatv(GLenum pname, GLfloat *data)
             data[i] = g_context.blend_color[i];
         return;
     }
+    if (pname == GL_LINE_WIDTH)
+    {
+        data[0] = g_context.line_width;
+        return;
+    }
+    if (pname == GL_SAMPLE_COVERAGE_VALUE)
+    {
+        data[0] = g_context.sample_coverage_value;
+        return;
+    }
+    if (pname == GL_POLYGON_OFFSET_FACTOR)
+    {
+        data[0] = g_context.polygon_offset_factor;
+        return;
+    }
+    if (pname == GL_POLYGON_OFFSET_UNITS)
+    {
+        data[0] = g_context.polygon_offset_units;
+        return;
+    }
 
     GLint values[4] = {};
-    glGetIntegerv(pname, values);
-    if (g_context.error != GL_NO_ERROR)
+    if (!query_succeeds([&] { glGetIntegerv(pname, values); }))
         return;
 
     const int count = (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ||
                        pname == GL_COLOR_WRITEMASK) ? 4 :
                       (pname == GL_MAX_VIEWPORT_DIMS ||
-                       pname == GL_ALIASED_POINT_SIZE_RANGE ? 2 : 1);
+                       pname == GL_ALIASED_POINT_SIZE_RANGE ||
+                       pname == GL_ALIASED_LINE_WIDTH_RANGE ? 2 :
+                       (pname == GL_COMPRESSED_TEXTURE_FORMATS ||
+                        pname == GL_SHADER_BINARY_FORMATS ? 0 : 1));
     for (int i = 0; i < count; ++i)
         data[i] = static_cast<GLfloat>(values[i]);
 }
@@ -3857,6 +4090,216 @@ GLenum glGetError(void)
     const GLenum error = g_context.error;
     g_context.error = GL_NO_ERROR;
     return error;
+}
+
+void glFlush(void)
+{
+    // Commands execute synchronously; there is nothing to flush.
+}
+
+void glFinish(void)
+{
+}
+
+void glHint(GLenum target, GLenum mode)
+{
+    if (!has_context()) return;
+    if (target != GL_GENERATE_MIPMAP_HINT ||
+        (mode != GL_DONT_CARE && mode != GL_FASTEST && mode != GL_NICEST))
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    g_context.generate_mipmap_hint = mode;
+}
+
+void glLineWidth(GLfloat width)
+{
+    if (!has_context()) return;
+    if (!(width > 0.0f))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    // Stored as specified and queried back unchanged; rasterization clamps
+    // to the aliased range [1, 1], so lines stay one pixel wide.
+    g_context.line_width = width;
+}
+
+void glPolygonOffset(GLfloat factor, GLfloat units)
+{
+    if (!has_context()) return;
+    g_context.polygon_offset_factor = factor;
+    g_context.polygon_offset_units = units;
+}
+
+void glSampleCoverage(GLclampf value, GLboolean invert)
+{
+    if (!has_context()) return;
+    g_context.sample_coverage_value = clamp01(value);
+    g_context.sample_coverage_invert = invert != GL_FALSE;
+}
+
+void glReleaseShaderCompiler(void)
+{
+}
+
+void glShaderBinary(GLsizei n, const GLuint *, GLenum, const GLvoid *, GLsizei length)
+{
+    if (!has_context()) return;
+    if (n < 0 || length < 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    // GL_NUM_SHADER_BINARY_FORMATS is zero: no binary format is accepted.
+    set_error(GL_INVALID_ENUM);
+}
+
+void glGetShaderPrecisionFormat(
+    GLenum shadertype, GLenum precisiontype, GLint *range, GLint *precision)
+{
+    if (!has_context()) return;
+    if (shadertype != GL_VERTEX_SHADER && shadertype != GL_FRAGMENT_SHADER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (!range || !precision)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    switch (precisiontype)
+    {
+        case GL_LOW_FLOAT:
+        case GL_MEDIUM_FLOAT:
+        case GL_HIGH_FLOAT:
+            // Every precision executes as IEEE-754 single precision.
+            range[0] = 127;
+            range[1] = 127;
+            *precision = 23;
+            break;
+        case GL_LOW_INT:
+        case GL_MEDIUM_INT:
+        case GL_HIGH_INT:
+            // Integers are held in floats and stay exact up to 2^24.
+            range[0] = 24;
+            range[1] = 24;
+            *precision = 0;
+            break;
+        default:
+            set_error(GL_INVALID_ENUM);
+            break;
+    }
+}
+
+void glCompressedTexImage2D(GLenum, GLint, GLenum, GLsizei, GLsizei, GLint,
+    GLsizei, const GLvoid *)
+{
+    if (!has_context()) return;
+    // GL_NUM_COMPRESSED_TEXTURE_FORMATS is zero: no format is accepted.
+    set_error(GL_INVALID_ENUM);
+}
+
+void glCompressedTexSubImage2D(GLenum, GLint, GLint, GLint, GLsizei, GLsizei,
+    GLenum, GLsizei, const GLvoid *)
+{
+    if (!has_context()) return;
+    set_error(GL_INVALID_ENUM);
+}
+
+void glTexParameterf(GLenum target, GLenum pname, GLfloat param)
+{
+    // Every GLES 2.0 texture parameter is an enum, exact in a float.
+    glTexParameteri(target, pname, static_cast<GLint>(param));
+}
+
+void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glTexParameteri(target, pname, static_cast<GLint>(params[0]));
+}
+
+void glTexParameteriv(GLenum target, GLenum pname, const GLint *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glTexParameteri(target, pname, params[0]);
+}
+
+void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    GLint value = 0;
+    if (query_succeeds([&] { glGetTexParameteriv(target, pname, &value); }))
+        params[0] = static_cast<GLfloat>(value);
+}
+
+void glVertexAttrib1fv(GLuint index, const GLfloat *values)
+{
+    if (!has_context()) return;
+    if (!values)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glVertexAttrib1f(index, values[0]);
+}
+
+void glVertexAttrib2fv(GLuint index, const GLfloat *values)
+{
+    if (!has_context()) return;
+    if (!values)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glVertexAttrib2f(index, values[0], values[1]);
+}
+
+void glVertexAttrib3fv(GLuint index, const GLfloat *values)
+{
+    if (!has_context()) return;
+    if (!values)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glVertexAttrib3f(index, values[0], values[1], values[2]);
+}
+
+void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat *params)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS || !params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (pname == GL_CURRENT_VERTEX_ATTRIB)
+    {
+        for (int i = 0; i < 4; ++i)
+            params[i] = g_context.attributes[index].current[i];
+        return;
+    }
+    GLint value = 0;
+    if (query_succeeds([&] { glGetVertexAttribiv(index, pname, &value); }))
+        params[0] = static_cast<GLfloat>(value);
 }
 
 } // extern "C"
@@ -3961,6 +4404,9 @@ static void build_pipeline_context(
     state.depth_write = g_context.depth_mask;
     state.depth_near = g_context.depth_near;
     state.depth_far = g_context.depth_far;
+    state.polygon_offset_fill = g_context.polygon_offset_fill;
+    state.polygon_offset_factor = g_context.polygon_offset_factor;
+    state.polygon_offset_units = g_context.polygon_offset_units;
     state.stencil_enabled = g_context.stencil_test;
     state.stencil_front = convert_stencil_face(g_context.stencil_front);
     state.stencil_back = convert_stencil_face(g_context.stencil_back);
