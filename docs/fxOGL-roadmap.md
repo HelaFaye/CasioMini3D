@@ -57,7 +57,15 @@ The implementation budgets are currently eight vertex attributes, two texture
 units, eight varying scalar components, eight local slots per function and
 sixteen uniform slots per program (each array element uses one slot), bounded shader/resource pools, a
 128x128 texture dimension limit and a 64 KiB aggregate RGB565 texture budget.
-These are software limits, not hardware capability claims.
+These are software limits, not hardware capability claims. The queries
+report them as they are: MAX_VERTEX_UNIFORM_VECTORS and
+MAX_FRAGMENT_UNIFORM_VECTORS report 8 each (half the shared program table, so
+any program within both limits links), MAX_VARYING_VECTORS reports 2, and
+MAX_CUBE_MAP_TEXTURE_SIZE reports 0 because cube maps are not implemented.
+These are below the GLES 2.0 minimums (128, 16, 8 and 16), one of the
+reasons fxOGL is a subset and makes no conformance claim. Color bits are
+5/6/5/0, depth 16 and stencil 8 when the bound framebuffer has that buffer;
+the implementation read format is RGB / UNSIGNED_SHORT_5_6_5.
 
 ## Performance work
 
@@ -186,7 +194,7 @@ Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
 
 ## Priorities
 
-1. Report the remaining required GLES 2.0 implementation limits and make the Gouraud scene a distinct workload.
+1. Make the Gouraud scene a distinct workload.
 2. Add additional texture formats and close remaining texture-completeness and pixel-store edge cases.
 3. Increase coverage of GLES state, queries, errors and resource lifetime.
 4. Add differential tests for every new shader and pipeline optimization.

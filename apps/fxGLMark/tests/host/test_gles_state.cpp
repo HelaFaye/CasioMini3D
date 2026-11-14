@@ -2311,6 +2311,62 @@ void test_fragment_builtin_inputs()
     fxglReleaseCurrent();
 }
 
+void test_implementation_limits()
+{
+    uint16_t color[16] = {};
+    uint16_t depth[16] = {};
+    fxgl_surface_t surface = {color, depth, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    const struct { GLenum pname; GLint value; } limits[] = {
+        {GL_MAX_VERTEX_UNIFORM_VECTORS, 8}, {GL_MAX_FRAGMENT_UNIFORM_VECTORS, 8},
+        {GL_MAX_VARYING_VECTORS, 2}, {GL_MAX_CUBE_MAP_TEXTURE_SIZE, 0},
+        {GL_SUBPIXEL_BITS, 4}, {GL_RED_BITS, 5}, {GL_GREEN_BITS, 6},
+        {GL_BLUE_BITS, 5}, {GL_ALPHA_BITS, 0}, {GL_DEPTH_BITS, 16},
+        {GL_STENCIL_BITS, 0},
+        {GL_IMPLEMENTATION_COLOR_READ_FORMAT, GL_RGB},
+        {GL_IMPLEMENTATION_COLOR_READ_TYPE, GL_UNSIGNED_SHORT_5_6_5},
+    };
+    for (const auto& limit : limits)
+    {
+        GLint value = -1;
+        glGetIntegerv(limit.pname, &value);
+        assert(value == limit.value);
+        GLfloat float_value = -1.0f;
+        glGetFloatv(limit.pname, &float_value);
+        assert(float_value == static_cast<GLfloat>(limit.value));
+    }
+    assert(glGetError() == GL_NO_ERROR);
+
+    // The implementation read format is accepted by glReadPixels.
+    uint16_t pixel = 0xffff;
+    glReadPixels(0, 0, 1, 1, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &pixel);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // Bit depths follow the bound framebuffer's attachments.
+    GLuint framebuffer = 0;
+    GLuint stencil = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    GLint bits = -1;
+    glGetIntegerv(GL_RED_BITS, &bits);
+    assert(bits == 0);
+    glGenRenderbuffers(1, &stencil);
+    glBindRenderbuffer(GL_RENDERBUFFER, stencil);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, 4, 4);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+        GL_RENDERBUFFER, stencil);
+    glGetIntegerv(GL_STENCIL_BITS, &bits);
+    assert(bits == 8);
+    glGetIntegerv(GL_DEPTH_BITS, &bits);
+    assert(bits == 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteRenderbuffers(1, &stencil);
+    assert(glGetError() == GL_NO_ERROR);
+    fxglMakeCurrent(nullptr);
+}
+
 void test_texture_lookup_variants()
 {
     uint16_t color[16] = {};
@@ -2549,6 +2605,7 @@ int main()
     test_varying_arrays();
     test_fragment_builtin_inputs();
     test_texture_lookup_variants();
+    test_implementation_limits();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

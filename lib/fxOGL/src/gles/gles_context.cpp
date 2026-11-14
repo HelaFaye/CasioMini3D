@@ -450,6 +450,37 @@ static bool attachment_dimensions(
     return false;
 }
 
+/* Bit depth of one channel of the bound framebuffer. Every color buffer is
+   RGB565, depth is 16-bit and stencil 8-bit; a missing buffer reports 0. */
+static GLint framebuffer_bits(GLenum pname)
+{
+    bool color = false;
+    bool depth = false;
+    bool stencil = false;
+    if (g_context.framebuffer_binding == 0)
+    {
+        color = g_context.surface.color != nullptr;
+        depth = g_context.surface.depth != nullptr;
+        stencil = g_context.surface.stencil != nullptr;
+    }
+    else if (const FramebufferObject *framebuffer =
+                 find_framebuffer(g_context.framebuffer_binding))
+    {
+        color = framebuffer->color.object_type != GL_NONE;
+        depth = framebuffer->depth.object_type != GL_NONE;
+        stencil = framebuffer->stencil.object_type != GL_NONE;
+    }
+    switch (pname)
+    {
+        case GL_RED_BITS: return color ? 5 : 0;
+        case GL_GREEN_BITS: return color ? 6 : 0;
+        case GL_BLUE_BITS: return color ? 5 : 0;
+        case GL_DEPTH_BITS: return depth ? 16 : 0;
+        case GL_STENCIL_BITS: return stencil ? 8 : 0;
+        default: return 0; /* GL_ALPHA_BITS: no alpha channel. */
+    }
+}
+
 static GLenum framebuffer_status()
 {
     if (g_context.framebuffer_binding == 0)
@@ -3966,6 +3997,39 @@ void glGetIntegerv(GLenum pname, GLint *data)
             break;
         case GL_MAX_TEXTURE_SIZE:
             data[0] = FXGL_MAX_TEXTURE_SIZE;
+            break;
+        case GL_MAX_VERTEX_UNIFORM_VECTORS:
+        case GL_MAX_FRAGMENT_UNIFORM_VECTORS:
+            /* Both stages share one program table of uniform slots, each
+               holding up to a vec4; half each always links. Below the
+               GLES 2.0 minimums (128 and 16): a documented subset limit. */
+            data[0] = static_cast<GLint>(fxgl::GLSL_MAX_UNIFORMS / 2);
+            break;
+        case GL_MAX_VARYING_VECTORS:
+            /* Varyings pack into GLSL_MAX_VARYINGS scalar components. */
+            data[0] = static_cast<GLint>(fxgl::GLSL_MAX_VARYINGS / 4);
+            break;
+        case GL_MAX_CUBE_MAP_TEXTURE_SIZE:
+            data[0] = 0; /* Cube-map textures are not implemented. */
+            break;
+        case GL_SUBPIXEL_BITS:
+            /* Edges are evaluated in float; at the 396x224 surface size
+               at least 4 fractional bits are always exact. */
+            data[0] = 4;
+            break;
+        case GL_RED_BITS:
+        case GL_GREEN_BITS:
+        case GL_BLUE_BITS:
+        case GL_ALPHA_BITS:
+        case GL_DEPTH_BITS:
+        case GL_STENCIL_BITS:
+            data[0] = framebuffer_bits(pname);
+            break;
+        case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
+            data[0] = GL_RGB;
+            break;
+        case GL_IMPLEMENTATION_COLOR_READ_TYPE:
+            data[0] = GL_UNSIGNED_SHORT_5_6_5;
             break;
         case GL_MAX_VIEWPORT_DIMS:
             data[0] = g_context.surface.width;
