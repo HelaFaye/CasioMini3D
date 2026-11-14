@@ -33,6 +33,11 @@ struct BufferObject
     uint8_t *data = nullptr;
     size_t size = 0;
     GLenum usage = GL_STATIC_DRAW;
+    /* glMapBufferRange state. The mapping points straight into `data`. */
+    bool mapped = false;
+    GLbitfield map_access = 0;
+    size_t map_offset = 0;
+    size_t map_length = 0;
     bool reserved = false;
     bool alive = false;
 };
@@ -942,8 +947,8 @@ static bool fetch_vertex_attribute(
     if (attribute.buffer_binding != 0)
     {
         BufferObject *buffer = find_buffer(attribute.buffer_binding);
-        if (!buffer)
-            return false;
+        if (!buffer || buffer->mapped)
+            return false; // Drawing from a mapped buffer is an error.
 
         const uintptr_t base_offset =
             reinterpret_cast<uintptr_t>(attribute.pointer);
@@ -1985,6 +1990,11 @@ void glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usa
     object->data = new_data;
     object->size = new_size;
     object->usage = usage;
+    // Respecifying the store ends any mapping of the old one.
+    object->mapped = false;
+    object->map_access = 0;
+    object->map_offset = 0;
+    object->map_length = 0;
     g_context.buffer_bytes = retained + new_size;
 }
 
@@ -2007,8 +2017,122 @@ void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvo
         set_error(GL_INVALID_VALUE);
         return;
     }
+    if (object->mapped)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
     if (count > 0)
         std::memcpy(object->data + start, data, count);
+}
+
+constexpr GLbitfield MAP_ACCESS_BITS = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT |
+    GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT |
+    GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
+
+void *glMapBufferRange(
+    GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access)
+{
+    if (!has_context()) return nullptr;
+    if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return nullptr;
+    }
+    BufferObject *object = bound_buffer(target);
+    if (!object) return nullptr;
+    if (offset < 0 || length < 0 ||
+        static_cast<size_t>(offset) > object->size ||
+        static_cast<size_t>(length) > object->size - static_cast<size_t>(offset) ||
+        (access & ~MAP_ACCESS_BITS) != 0)
+    {
+        set_error(GL_INVALID_VALUE);
+        return nullptr;
+    }
+    const bool read = (access & GL_MAP_READ_BIT) != 0;
+    const bool write = (access & GL_MAP_WRITE_BIT) != 0;
+    if (length == 0 || object->mapped || (!read && !write) ||
+        (read && (access & (GL_MAP_INVALIDATE_RANGE_BIT |
+                            GL_MAP_INVALIDATE_BUFFER_BIT |
+                            GL_MAP_UNSYNCHRONIZED_BIT)) != 0) ||
+        ((access & GL_MAP_FLUSH_EXPLICIT_BIT) != 0 && !write))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+    // Rendering is synchronous and the store is ordinary memory, so the
+    // mapping is the store itself; invalidation keeps the old contents.
+    object->mapped = true;
+    object->map_access = access;
+    object->map_offset = static_cast<size_t>(offset);
+    object->map_length = static_cast<size_t>(length);
+    return object->data + object->map_offset;
+}
+
+void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length)
+{
+    if (!has_context()) return;
+    if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    BufferObject *object = bound_buffer(target);
+    if (!object) return;
+    if (offset < 0 || length < 0 ||
+        static_cast<size_t>(offset) > object->map_length ||
+        static_cast<size_t>(length) > object->map_length - static_cast<size_t>(offset))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (!object->mapped || (object->map_access & GL_MAP_FLUSH_EXPLICIT_BIT) == 0)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    // Writes already landed in the store; nothing to copy.
+}
+
+GLboolean glUnmapBuffer(GLenum target)
+{
+    if (!has_context()) return GL_FALSE;
+    if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return GL_FALSE;
+    }
+    BufferObject *object = bound_buffer(target);
+    if (!object) return GL_FALSE;
+    if (!object->mapped)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return GL_FALSE;
+    }
+    object->mapped = false;
+    object->map_access = 0;
+    object->map_offset = 0;
+    object->map_length = 0;
+    return GL_TRUE; // The store cannot be lost while mapped.
+}
+
+void glGetBufferPointerv(GLenum target, GLenum pname, GLvoid **params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if ((target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) ||
+        pname != GL_BUFFER_MAP_POINTER)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    BufferObject *object = bound_buffer(target);
+    if (!object) return;
+    *params = object->mapped ? object->data + object->map_offset : nullptr;
 }
 
 void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
@@ -2029,6 +2153,18 @@ void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params)
             break;
         case GL_BUFFER_USAGE:
             *params = static_cast<GLint>(object->usage);
+            break;
+        case GL_BUFFER_MAPPED:
+            *params = object->mapped ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_BUFFER_ACCESS_FLAGS:
+            *params = static_cast<GLint>(object->map_access);
+            break;
+        case GL_BUFFER_MAP_OFFSET:
+            *params = static_cast<GLint>(object->map_offset);
+            break;
+        case GL_BUFFER_MAP_LENGTH:
+            *params = static_cast<GLint>(object->map_length);
             break;
         default:
             set_error(GL_INVALID_ENUM);
@@ -2301,7 +2437,7 @@ static void draw_elements(
     if (g_context.element_buffer_binding != 0)
     {
         BufferObject *buffer = find_buffer(g_context.element_buffer_binding);
-        if (!buffer)
+        if (!buffer || buffer->mapped)
         {
             set_error(GL_INVALID_OPERATION);
             return;

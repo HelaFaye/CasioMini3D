@@ -2870,6 +2870,114 @@ void test_instancing_and_primitive_restart()
     fxglReleaseCurrent();
 }
 
+void test_buffer_mapping()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 2, 2);
+
+    GLuint buffer = 0;
+    glGenBuffers(1, &buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    const GLfloat placeholder[6] = {};
+    glBufferData(GL_ARRAY_BUFFER, sizeof(placeholder), placeholder, GL_DYNAMIC_DRAW);
+
+    // Write a full-surface triangle through a mapping.
+    void *mapped = glMapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(placeholder),
+        GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+    assert(mapped && glGetError() == GL_NO_ERROR);
+    GLint value = 0;
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_MAPPED, &value);
+    assert(value == GL_TRUE);
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_ACCESS_FLAGS, &value);
+    assert(value == (GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
+    GLvoid *pointer = nullptr;
+    glGetBufferPointerv(GL_ARRAY_BUFFER, GL_BUFFER_MAP_POINTER, &pointer);
+    assert(pointer == mapped);
+    const GLfloat triangle[6] = {-1, -1, 3, -1, -1, 3};
+    std::memcpy(mapped, triangle, sizeof(triangle));
+
+    static const GLchar vertex[] =
+        "attribute vec4 a_position; void main() { gl_Position = a_position; }\n";
+    static const GLchar fragment[] =
+        "precision mediump float; void main() { gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0); }\n";
+    const GLuint program = build_test_program(vertex, fragment);
+    glBindAttribLocation(program, 0, "a_position");
+    glLinkProgram(program);
+    glUseProgram(program);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    // Mapped buffers cannot be drawn from or updated.
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, 4, triangle);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    assert(glMapBufferRange(GL_ARRAY_BUFFER, 0, 4, GL_MAP_READ_BIT) == nullptr);
+    assert(glGetError() == GL_INVALID_OPERATION); // Already mapped.
+
+    assert(glUnmapBuffer(GL_ARRAY_BUFFER) == GL_TRUE);
+    assert(glUnmapBuffer(GL_ARRAY_BUFFER) == GL_FALSE);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    std::memset(color, 0, sizeof(color));
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(glGetError() == GL_NO_ERROR);
+    for (uint16_t pixel : color)
+        assert(pixel == 0x001f);
+
+    // A read mapping of a subrange sees the store, offset and length report.
+    const GLfloat *read = static_cast<const GLfloat *>(glMapBufferRange(
+        GL_ARRAY_BUFFER, 8, 8, GL_MAP_READ_BIT));
+    assert(read && read[0] == 3.0f && read[1] == -1.0f);
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_MAP_OFFSET, &value);
+    assert(value == 8);
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_MAP_LENGTH, &value);
+    assert(value == 8);
+    glFlushMappedBufferRange(GL_ARRAY_BUFFER, 0, 4);
+    assert(glGetError() == GL_INVALID_OPERATION); // Not FLUSH_EXPLICIT.
+    glUnmapBuffer(GL_ARRAY_BUFFER);
+
+    // Explicit flushes within the mapped range.
+    assert(glMapBufferRange(GL_ARRAY_BUFFER, 4, 8,
+        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    glFlushMappedBufferRange(GL_ARRAY_BUFFER, 4, 4);
+    assert(glGetError() == GL_NO_ERROR);
+    glFlushMappedBufferRange(GL_ARRAY_BUFFER, 4, 8);
+    assert(glGetError() == GL_INVALID_VALUE);
+    // glBufferData respecifies the store and ends the mapping.
+    glBufferData(GL_ARRAY_BUFFER, sizeof(triangle), triangle, GL_DYNAMIC_DRAW);
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_MAPPED, &value);
+    assert(value == GL_FALSE);
+
+    // Argument errors.
+    glMapBufferRange(GL_ARRAY_BUFFER, 0, 25, GL_MAP_WRITE_BIT);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glMapBufferRange(GL_ARRAY_BUFFER, -1, 4, GL_MAP_WRITE_BIT);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glMapBufferRange(GL_ARRAY_BUFFER, 0, 4, GL_MAP_WRITE_BIT | 0x100);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glMapBufferRange(GL_ARRAY_BUFFER, 0, 0, GL_MAP_WRITE_BIT);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glMapBufferRange(GL_ARRAY_BUFFER, 0, 4, GL_MAP_INVALIDATE_RANGE_BIT);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glMapBufferRange(GL_ARRAY_BUFFER, 0, 4, GL_MAP_READ_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glMapBufferRange(GL_ARRAY_BUFFER, 0, 4, GL_MAP_READ_BIT | GL_MAP_FLUSH_EXPLICIT_BIT);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glMapBufferRange(GL_TEXTURE_2D, 0, 4, GL_MAP_WRITE_BIT);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glMapBufferRange(GL_ARRAY_BUFFER, 0, 4, GL_MAP_WRITE_BIT);
+    assert(glGetError() == GL_INVALID_OPERATION); // No buffer bound.
+
+    glUseProgram(0);
+    glDeleteProgram(program);
+    glDeleteBuffers(1, &buffer);
+    assert(glGetError() == GL_NO_ERROR);
+    fxglReleaseCurrent();
+}
+
 void test_texture_lookup_variants()
 {
     uint16_t color[16] = {};
@@ -3113,6 +3221,7 @@ int main()
     test_vertex_array_objects();
     test_sampler_objects();
     test_instancing_and_primitive_restart();
+    test_buffer_mapping();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

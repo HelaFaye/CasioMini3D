@@ -17,6 +17,17 @@
 #define GL_COMPARE_REF_TO_TEXTURE 0x884E
 #define GL_VERTEX_ATTRIB_ARRAY_DIVISOR 0x88FE
 #define GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D69
+#define GL_MAP_READ_BIT 0x0001
+#define GL_MAP_WRITE_BIT 0x0002
+#define GL_MAP_INVALIDATE_RANGE_BIT 0x0004
+#define GL_MAP_INVALIDATE_BUFFER_BIT 0x0008
+#define GL_MAP_FLUSH_EXPLICIT_BIT 0x0010
+#define GL_MAP_UNSYNCHRONIZED_BIT 0x0020
+#define GL_BUFFER_ACCESS_FLAGS 0x911F
+#define GL_BUFFER_MAPPED 0x88BC
+#define GL_BUFFER_MAP_POINTER 0x88BD
+#define GL_BUFFER_MAP_LENGTH 0x9120
+#define GL_BUFFER_MAP_OFFSET 0x9121
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,6 +69,20 @@ void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count,
 void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
     const GLvoid *indices, GLsizei instancecount);
 void glVertexAttribDivisor(GLuint index, GLuint divisor);
+
+/* Buffer mapping for GL_ARRAY_BUFFER and GL_ELEMENT_ARRAY_BUFFER. The
+   pointer addresses the buffer's store directly (rendering is synchronous),
+   so invalidation keeps old contents and flushing copies nothing. Drawing
+   from or calling glBufferSubData on a mapped buffer is GL_INVALID_OPERATION;
+   glBufferData ends the mapping. GL_BUFFER_MAP_OFFSET and
+   GL_BUFFER_MAP_LENGTH are queried with glGetBufferParameteriv (there is no
+   glGetBufferParameteri64v). */
+void *glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length,
+    GLbitfield access);
+void glFlushMappedBufferRange(GLenum target, GLintptr offset,
+    GLsizeiptr length);
+GLboolean glUnmapBuffer(GLenum target);
+void glGetBufferPointerv(GLenum target, GLenum pname, GLvoid **params);
 
 #ifdef __cplusplus
 }
