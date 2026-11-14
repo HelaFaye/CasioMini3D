@@ -2755,6 +2755,121 @@ void test_sampler_objects()
     fxglReleaseCurrent();
 }
 
+void test_instancing_and_primitive_restart()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 1, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 4, 1);
+
+    static const GLchar vertex[] =
+        "attribute vec2 a_position; attribute vec2 a_offset; attribute vec3 a_color;\n"
+        "varying vec3 v_color;\n"
+        "void main() { gl_Position = vec4(a_position + a_offset, 0.0, 1.0);\n"
+        "  gl_PointSize = 1.0; v_color = a_color; }\n";
+    static const GLchar fragment[] =
+        "precision mediump float; varying vec3 v_color;\n"
+        "void main() { gl_FragColor = vec4(v_color, 1.0); }\n";
+    const GLuint program = build_test_program(vertex, fragment);
+    glBindAttribLocation(program, 0, "a_position");
+    glBindAttribLocation(program, 1, "a_offset");
+    glBindAttribLocation(program, 2, "a_color");
+    glLinkProgram(program);
+    glUseProgram(program);
+
+    // One point at pixel 0; four instances step it one pixel (0.5 in NDC)
+    // each. Colors advance every two instances.
+    const GLfloat position[] = {-0.75f, 0.0f};
+    const GLfloat offsets[] = {0.0f, 0.0f, 0.5f, 0.0f, 1.0f, 0.0f, 1.5f, 0.0f};
+    const GLfloat colors[] = {1, 0, 0, 0, 0, 1};
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, position);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, offsets);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, colors);
+    glVertexAttribDivisor(1, 1);
+    glVertexAttribDivisor(2, 2);
+    GLint value = -1;
+    glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_DIVISOR, &value);
+    assert(value == 2);
+    glDrawArraysInstanced(GL_POINTS, 0, 1, 4);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0xf800 && color[1] == 0xf800 &&
+           color[2] == 0x001f && color[3] == 0x001f);
+
+    // Elements, with 32-bit indices: instances 0 and 1 only.
+    std::memset(color, 0, sizeof(color));
+    const GLuint index32 = 0;
+    glDrawElementsInstanced(GL_POINTS, 1, GL_UNSIGNED_INT, &index32, 2);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0xf800 && color[1] == 0xf800 && color[2] == 0 && color[3] == 0);
+
+    glDrawArraysInstanced(GL_POINTS, 0, 1, -1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glDrawElementsInstanced(GL_POINTS, 1, GL_UNSIGNED_INT, &index32, -1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glVertexAttribDivisor(8, 1);
+    assert(glGetError() == GL_INVALID_VALUE);
+    // Divisors are vertex array state.
+    GLuint array = 0;
+    glGenVertexArrays(1, &array);
+    glBindVertexArray(array);
+    glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_DIVISOR, &value);
+    assert(value == 0);
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &array);
+    glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_DIVISOR, &value);
+    assert(value == 1);
+    glVertexAttribDivisor(1, 0);
+    glVertexAttribDivisor(2, 0);
+
+    // Primitive restart: four points from a buffer object; the maximum
+    // index of each type ends the primitive and draws nothing itself.
+    const GLfloat points[] = {-0.75f, 0.0f, -0.25f, 0.0f, 0.25f, 0.0f, 0.75f, 0.0f};
+    const GLfloat zero_offsets[8] = {};
+    const GLfloat point_colors[] = {0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0};
+    GLuint buffer = 0;
+    glGenBuffers(1, &buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(points), points, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, zero_offsets);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, point_colors);
+
+    assert(glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX) == GL_FALSE);
+    const GLubyte byte_indices[] = {0, 0xff, 2};
+    std::memset(color, 0, sizeof(color));
+    glDrawElements(GL_POINTS, 3, GL_UNSIGNED_BYTE, byte_indices);
+    assert(glGetError() == GL_INVALID_OPERATION); // 255 is past the buffer.
+    glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+    assert(glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX) == GL_TRUE);
+    std::memset(color, 0, sizeof(color));
+    glDrawElements(GL_POINTS, 3, GL_UNSIGNED_BYTE, byte_indices);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0x07e0 && color[1] == 0 && color[2] == 0x07e0 && color[3] == 0);
+
+    // A line loop closes within each run: 0-1 and 2-3, never 1-2 or 3-0.
+    const GLushort short_indices[] = {0, 1, 0xffff, 3, 3, 0xffff};
+    std::memset(color, 0, sizeof(color));
+    glDrawElements(GL_LINE_LOOP, 6, GL_UNSIGNED_SHORT, short_indices);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[2] == 0);
+    const GLuint int_indices[] = {0xffffffffu, 1, 0xffffffffu};
+    std::memset(color, 0, sizeof(color));
+    glDrawElements(GL_POINTS, 3, GL_UNSIGNED_INT, int_indices);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0 && color[1] == 0x07e0 && color[2] == 0 && color[3] == 0);
+    glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+
+    glUseProgram(0);
+    glDeleteProgram(program);
+    glDeleteBuffers(1, &buffer);
+    assert(glGetError() == GL_NO_ERROR);
+    fxglReleaseCurrent();
+}
+
 void test_texture_lookup_variants()
 {
     uint16_t color[16] = {};
@@ -2997,6 +3112,7 @@ int main()
     test_texture_formats();
     test_vertex_array_objects();
     test_sampler_objects();
+    test_instancing_and_primitive_restart();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

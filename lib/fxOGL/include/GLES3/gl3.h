@@ -15,6 +15,8 @@
 #define GL_TEXTURE_COMPARE_MODE 0x884C
 #define GL_TEXTURE_COMPARE_FUNC 0x884D
 #define GL_COMPARE_REF_TO_TEXTURE 0x884E
+#define GL_VERTEX_ATTRIB_ARRAY_DIVISOR 0x88FE
+#define GL_PRIMITIVE_RESTART_FIXED_INDEX 0x8D69
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,6 +46,18 @@ void glSamplerParameterf(GLuint sampler, GLenum pname, GLfloat param);
 void glSamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat *param);
 void glGetSamplerParameteriv(GLuint sampler, GLenum pname, GLint *params);
 void glGetSamplerParameterfv(GLuint sampler, GLenum pname, GLfloat *params);
+
+/* Instanced drawing. Attributes with a nonzero divisor (vertex array
+   state) advance once per `divisor` instances. gl_InstanceID needs GLSL ES
+   3.00, which is not implemented; per-instance data comes from divisors.
+   glDrawElements and glDrawElementsInstanced also accept GL_UNSIGNED_INT
+   indices, and glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX) makes the type's
+   maximum index end the current primitive. */
+void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count,
+    GLsizei instancecount);
+void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
+    const GLvoid *indices, GLsizei instancecount);
+void glVertexAttribDivisor(GLuint index, GLuint divisor);
 
 #ifdef __cplusplus
 }

@@ -100,6 +100,9 @@ struct VertexAttribute
     GLsizei stride = 0;
     const GLvoid *pointer = nullptr;
     GLuint buffer_binding = 0;
+    /* Instanced draws advance this attribute once per `divisor` instances
+       instead of once per vertex; 0 is per vertex. */
+    GLuint divisor = 0;
     GLfloat current[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
@@ -186,6 +189,7 @@ struct Context
     /* No multisample buffers: the sample coverage capabilities and
        parameters are stored and queryable but cannot change rendering. */
     bool polygon_offset_fill = false;
+    bool primitive_restart_fixed_index = false;
     GLfloat polygon_offset_factor = 0.0f;
     GLfloat polygon_offset_units = 0.0f;
     bool sample_alpha_to_coverage = false;
@@ -778,6 +782,8 @@ static bool *capability(GLenum cap)
         case GL_SCISSOR_TEST: return &g_context.scissor_test;
         case GL_STENCIL_TEST: return &g_context.stencil_test;
         case GL_POLYGON_OFFSET_FILL: return &g_context.polygon_offset_fill;
+        case GL_PRIMITIVE_RESTART_FIXED_INDEX:
+            return &g_context.primitive_restart_fixed_index;
         case GL_SAMPLE_ALPHA_TO_COVERAGE: return &g_context.sample_alpha_to_coverage;
         case GL_SAMPLE_COVERAGE: return &g_context.sample_coverage;
         default: return nullptr;
@@ -1040,6 +1046,7 @@ struct DrawInvocation
     int texture_passthrough_unit;
     bool fragment_failed;
     bool varying_derivatives;
+    uint32_t instance; /* Instance being drawn, for attribute divisors. */
     CachedTextureBinding textures[FXGL_MAX_TEXTURE_UNITS];
     fxgl::ShaderRuntime fragment_runtime;
 };
@@ -1465,8 +1472,12 @@ static bool execute_vertex(
     for (size_t i = 0; i < module.attribute_count; ++i)
     {
         const uint8_t location = program.attribute_locations[i];
+        const GLuint divisor = location < FXGL_MAX_VERTEX_ATTRIBS
+            ? g_context.attributes[location].divisor : 0;
+        const uint32_t element = divisor != 0
+            ? invocation.instance / divisor : vertex_index;
         if (!fetch_vertex_attribute(
-                location, vertex_index, module.attributes[i].type,
+                location, element, module.attributes[i].type,
                 runtime.attributes[i]))
         {
             set_error(GL_INVALID_OPERATION);
@@ -2108,7 +2119,95 @@ void glVertexAttrib4fv(GLuint index, const GLfloat *values)
         attribute.current[i] = values[i];
 }
 
-void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+/* Where a draw's vertex indices come from: consecutive from `base`
+   (glDrawArrays) or read from index data starting at element `offset`. */
+struct VertexSource
+{
+    const uint8_t *indices; /* nullptr for array draws */
+    size_t index_bytes;
+    uint32_t base;
+    GLsizei offset;
+
+    uint32_t operator()(GLsizei i) const
+    {
+        if (!indices)
+            return base + static_cast<uint32_t>(i);
+        const uint8_t *element =
+            indices + static_cast<size_t>(offset + i) * index_bytes;
+        if (index_bytes == 1)
+            return element[0];
+        if (index_bytes == 2)
+        {
+            uint16_t value = 0;
+            std::memcpy(&value, element, sizeof(value));
+            return value;
+        }
+        uint32_t value = 0;
+        std::memcpy(&value, element, sizeof(value));
+        return value;
+    }
+};
+
+/* Assemble and draw the primitives of `mode` over `count` positions of the
+   vertex source. Returns false once a vertex or fragment fails (the error
+   is already set). */
+static bool assemble_primitives(
+    DrawInvocation& invocation, GLenum mode, GLsizei count,
+    const VertexSource& vertex_at)
+{
+    if (mode == GL_POINTS)
+    {
+        for (GLsizei i = 0; i < count; ++i)
+            if (!draw_vertex_point(invocation, vertex_at(i)))
+                return false;
+    }
+    else if (mode == GL_LINES)
+    {
+        for (GLsizei i = 0; i < count - 1; i += 2)
+            if (!draw_vertex_line(invocation, vertex_at(i), vertex_at(i + 1)))
+                return false;
+    }
+    else if (mode == GL_LINE_STRIP || mode == GL_LINE_LOOP)
+    {
+        for (GLsizei i = 0; i < count - 1; ++i)
+            if (!draw_vertex_line(invocation, vertex_at(i), vertex_at(i + 1)))
+                return false;
+        if (mode == GL_LINE_LOOP && count > 1 &&
+            !draw_vertex_line(invocation, vertex_at(count - 1), vertex_at(0)))
+            return false;
+    }
+    else if (mode == GL_TRIANGLES)
+    {
+        for (GLsizei i = 0; i < count - 2; i += 3)
+            if (!draw_vertex_triangle(invocation,
+                    vertex_at(i), vertex_at(i + 1), vertex_at(i + 2)))
+                return false;
+    }
+    else if (mode == GL_TRIANGLE_STRIP)
+    {
+        for (GLsizei i = 0; i < count - 2; ++i)
+        {
+            const uint32_t a = vertex_at(i);
+            const uint32_t b = vertex_at(i + 1);
+            const uint32_t d = vertex_at(i + 2);
+            // Odd triangles swap their first two vertices to keep winding.
+            if (!((i & 1) == 0 ? draw_vertex_triangle(invocation, a, b, d)
+                               : draw_vertex_triangle(invocation, b, a, d)))
+                return false;
+        }
+    }
+    else /* GL_TRIANGLE_FAN */
+    {
+        for (GLsizei i = 1; i < count - 1; ++i)
+            if (!draw_vertex_triangle(invocation,
+                    vertex_at(0), vertex_at(i), vertex_at(i + 1)))
+                return false;
+    }
+    return true;
+}
+
+static void draw_arrays(
+    GLenum mode, GLint first, GLsizei count, GLsizei instance_count)
 {
     if (!has_context()) return;
     if (!valid_draw_mode(mode))
@@ -2116,12 +2215,12 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
         set_error(GL_INVALID_ENUM);
         return;
     }
-    if (first < 0 || count < 0)
+    if (first < 0 || count < 0 || instance_count < 0)
     {
         set_error(GL_INVALID_VALUE);
         return;
     }
-    if (count == 0)
+    if (count == 0 || instance_count == 0)
         return;
 
     fxgl::LinkedProgramView program = {};
@@ -2143,84 +2242,21 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 
     DrawInvocation invocation = {};
     initialize_draw_invocation(invocation, program);
-
-    if (mode == GL_POINTS)
+    const VertexSource vertex_at = {nullptr, 0, base, 0};
+    for (GLsizei instance = 0; instance < instance_count; ++instance)
     {
-        for (GLsizei i = 0; i < count; ++i)
-            if (!draw_vertex_point(invocation, base + static_cast<uint32_t>(i)))
-                return;
-    }
-    else if (mode == GL_LINES)
-    {
-        for (GLsizei i = 0; i < count - 1; i += 2)
-        {
-            if (!draw_vertex_line(invocation,
-                    base + static_cast<uint32_t>(i),
-                    base + static_cast<uint32_t>(i + 1)))
-                return;
-        }
-    }
-    else if (mode == GL_LINE_STRIP || mode == GL_LINE_LOOP)
-    {
-        for (GLsizei i = 0; i < count - 1; ++i)
-        {
-            if (!draw_vertex_line(invocation,
-                    base + static_cast<uint32_t>(i),
-                    base + static_cast<uint32_t>(i + 1)))
-                return;
-        }
-        if (mode == GL_LINE_LOOP && count > 1)
-        {
-            if (!draw_vertex_line(invocation,
-                    base + static_cast<uint32_t>(count - 1), base))
-                return;
-        }
-    }
-    else if (mode == GL_TRIANGLES)
-    {
-        for (GLsizei i = 0; i < count - 2; i += 3)
-        {
-            if (!draw_vertex_triangle(invocation,
-                    base + static_cast<uint32_t>(i),
-                    base + static_cast<uint32_t>(i + 1),
-                    base + static_cast<uint32_t>(i + 2)))
-                return;
-        }
-    }
-    else if (mode == GL_TRIANGLE_STRIP)
-    {
-        for (GLsizei i = 0; i < count - 2; ++i)
-        {
-            const uint32_t a = base + static_cast<uint32_t>(i);
-            const uint32_t b = base + static_cast<uint32_t>(i + 1);
-            const uint32_t d = base + static_cast<uint32_t>(i + 2);
-            if ((i & 1) == 0)
-            {
-                if (!draw_vertex_triangle(invocation, a, b, d))
-                    return;
-            }
-            else if (!draw_vertex_triangle(invocation, b, a, d))
-                return;
-        }
-    }
-    else /* GL_TRIANGLE_FAN */
-    {
-        for (GLsizei i = 1; i < count - 1; ++i)
-        {
-            if (!draw_vertex_triangle(invocation,
-                    base,
-                    base + static_cast<uint32_t>(i),
-                    base + static_cast<uint32_t>(i + 1)))
-                return;
-        }
+        invocation.instance = static_cast<uint32_t>(instance);
+        if (!assemble_primitives(invocation, mode, count, vertex_at))
+            return;
     }
 }
 
-void glDrawElements(
+static void draw_elements(
     GLenum mode,
     GLsizei count,
     GLenum type,
-    const GLvoid *indices)
+    const GLvoid *indices,
+    GLsizei instance_count)
 {
     if (!has_context()) return;
     if (!valid_draw_mode(mode))
@@ -2228,20 +2264,22 @@ void glDrawElements(
         set_error(GL_INVALID_ENUM);
         return;
     }
-    if (count < 0)
+    if (count < 0 || instance_count < 0)
     {
         set_error(GL_INVALID_VALUE);
         return;
     }
+    // GL_UNSIGNED_INT indices are core in GLES 3.0.
     const size_t index_bytes =
         type == GL_UNSIGNED_BYTE ? 1 :
-        type == GL_UNSIGNED_SHORT ? 2 : 0;
+        type == GL_UNSIGNED_SHORT ? 2 :
+        type == GL_UNSIGNED_INT ? 4 : 0;
     if (index_bytes == 0)
     {
         set_error(GL_INVALID_ENUM);
         return;
     }
-    if (count == 0)
+    if (count == 0 || instance_count == 0)
         return;
 
     fxgl::LinkedProgramView program = {};
@@ -2287,74 +2325,78 @@ void glDrawElements(
         index_data = static_cast<const uint8_t *>(indices);
     }
 
-    const auto get_index = [index_data, index_bytes, type](GLsizei i) -> uint32_t
-    {
-        if (type == GL_UNSIGNED_BYTE)
-            return index_data[static_cast<size_t>(i)];
-        uint16_t value = 0;
-        std::memcpy(&value, index_data + static_cast<size_t>(i) * index_bytes,
-                    sizeof(value));
-        return value;
-    };
+    const VertexSource get_index = {index_data, index_bytes, 0, 0};
 
     DrawInvocation invocation = {};
     initialize_draw_invocation(invocation, program);
 
-    if (mode == GL_POINTS)
+    // With GL_PRIMITIVE_RESTART_FIXED_INDEX the type's maximum index ends
+    // the current primitive; each run between restarts is drawn on its own.
+    const bool restart = g_context.primitive_restart_fixed_index;
+    const uint32_t restart_index = index_bytes == 4
+        ? 0xffffffffu : (1u << (8 * index_bytes)) - 1u;
+    for (GLsizei instance = 0; instance < instance_count; ++instance)
     {
-        for (GLsizei i = 0; i < count; ++i)
-            if (!draw_vertex_point(invocation, get_index(i)))
-                return;
-    }
-    else if (mode == GL_LINES)
-    {
-        for (GLsizei i = 0; i < count - 1; i += 2)
+        invocation.instance = static_cast<uint32_t>(instance);
+        if (!restart)
         {
-            if (!draw_vertex_line(invocation, get_index(i), get_index(i + 1)))
+            if (!assemble_primitives(invocation, mode, count, get_index))
                 return;
+            continue;
+        }
+        GLsizei start = 0;
+        for (GLsizei i = 0; i <= count; ++i)
+        {
+            if (i < count && get_index(i) != restart_index)
+                continue;
+            const VertexSource run_index = {index_data, index_bytes, 0, start};
+            if (i > start &&
+                !assemble_primitives(invocation, mode, i - start, run_index))
+                return;
+            start = i + 1;
         }
     }
-    else if (mode == GL_LINE_STRIP || mode == GL_LINE_LOOP)
+}
+
+void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+{
+    draw_arrays(mode, first, count, 1);
+}
+
+void glDrawElements(
+    GLenum mode,
+    GLsizei count,
+    GLenum type,
+    const GLvoid *indices)
+{
+    draw_elements(mode, count, type, indices, 1);
+}
+
+void glDrawArraysInstanced(
+    GLenum mode, GLint first, GLsizei count, GLsizei instancecount)
+{
+    draw_arrays(mode, first, count, instancecount);
+}
+
+void glDrawElementsInstanced(
+    GLenum mode,
+    GLsizei count,
+    GLenum type,
+    const GLvoid *indices,
+    GLsizei instancecount)
+{
+    draw_elements(mode, count, type, indices, instancecount);
+}
+
+void glVertexAttribDivisor(GLuint index, GLuint divisor)
+{
+    if (!has_context()) return;
+    if (index >= FXGL_MAX_VERTEX_ATTRIBS)
     {
-        for (GLsizei i = 0; i < count - 1; ++i)
-            if (!draw_vertex_line(invocation, get_index(i), get_index(i + 1)))
-                return;
-        if (mode == GL_LINE_LOOP && count > 1)
-            if (!draw_vertex_line(invocation, get_index(count - 1), get_index(0)))
-                return;
+        set_error(GL_INVALID_VALUE);
+        return;
     }
-    else if (mode == GL_TRIANGLES)
-    {
-        for (GLsizei i = 0; i < count - 2; i += 3)
-        {
-            if (!draw_vertex_triangle(
-                    invocation, get_index(i), get_index(i + 1), get_index(i + 2)))
-                return;
-        }
-    }
-    else if (mode == GL_TRIANGLE_STRIP)
-    {
-        for (GLsizei i = 0; i < count - 2; ++i)
-        {
-            const uint32_t a = get_index(i);
-            const uint32_t b = get_index(i + 1);
-            const uint32_t d = get_index(i + 2);
-            if ((i & 1) == 0)
-            {
-                if (!draw_vertex_triangle(invocation, a, b, d))
-                    return;
-            }
-            else if (!draw_vertex_triangle(invocation, b, a, d))
-                return;
-        }
-    }
-    else /* GL_TRIANGLE_FAN */
-    {
-        for (GLsizei i = 1; i < count - 1; ++i)
-            if (!draw_vertex_triangle(
-                    invocation, get_index(0), get_index(i), get_index(i + 1)))
-                return;
-    }
+    g_context.attributes[index].divisor = divisor;
 }
 
 void glEnableVertexAttribArray(GLuint index)
@@ -2446,6 +2488,9 @@ void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params)
             break;
         case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
             *params = attribute.normalized ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
+            *params = static_cast<GLint>(attribute.divisor);
             break;
         case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
             *params = static_cast<GLint>(attribute.buffer_binding);
