@@ -228,13 +228,16 @@ using TextureSampleFunction = bool (*)(
    slot. Uniform arrays (`uniform vec4 u[3];`) follow the same read rules
    and use one uniform slot per element; sampler arrays
    (`uniform sampler2D s[2];`) take constant indices only, as GLSL ES 1.00
-   requires. Array function
-   parameters (`float f(inout float a[3])`) take a whole local or uniform
+   requires. Varying arrays (`varying vec2 v[2];`) are written per element
+   in the vertex stage and read in the fragment stage, with constant
+   indices only, also as GLSL ES 1.00 requires. Array function parameters
+   (`float f(inout float a[3])`) take a whole local, uniform or varying
    array of the same element type and size by value, with copy-out for
-   out/inout; each element counts toward the four-parameter limit. Array
-   return values, whole-array assignment, attribute/varying
-   arrays, structs, do-while, switch, preprocessor directives and precision
-   qualifiers other than ordinary precision statements remain unsupported. */
+   out/inout; each element counts toward the four-parameter limit.
+   Whole-array assignment, structs, do-while, switch, preprocessor
+   directives and precision qualifiers other than ordinary precision
+   statements remain unsupported. GLSL ES 1.00 has no array return types
+   and forbids attribute arrays. */
 bool compile_glsl(
     ShaderStage stage,
     const char *source,

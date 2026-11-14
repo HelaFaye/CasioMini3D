@@ -1458,7 +1458,8 @@ static void test_uniform_array_reads()
         "uniform vec4 u[12]; uniform vec4 v[5]; void main() { gl_FragColor = u[0]; }",
         "uniform sampler2D u_textures[2]; uniform int u_i; void main() { gl_FragColor = texture2D(u_textures[u_i], vec2(0.0)); }",
         "void main() { sampler2D local_samplers[2]; gl_FragColor = vec4(1.0); }",
-        "varying vec4 v_colors[2]; void main() { gl_FragColor = v_colors[0]; }"
+        "varying vec4 v_colors[2]; uniform int u_i; void main() { gl_FragColor = v_colors[u_i]; }",
+        "attribute vec4 a_positions[2]; void main() { gl_Position = a_positions[0]; }"
     };
     for (const char *bad : invalid)
     {

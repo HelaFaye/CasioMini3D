@@ -650,9 +650,9 @@ private:
         size_t array_size = 0;
         if (accept_punctuation('['))
         {
-            if (storage != Storage::Uniform)
+            if (storage == Storage::Attribute)
             {
-                fail("only uniform and local arrays are supported");
+                fail("attribute arrays are not allowed in GLSL ES");
                 return;
             }
             if (current_.kind != TokenKind::Number || !current_.integer ||
@@ -774,8 +774,12 @@ private:
         variable = find_variable(
             module_.varyings, module_.varying_count, name);
         if (variable)
-            return {Storage::Varying, variable->type, variable->index,
-                    stage_ == ShaderStage::Vertex};
+        {
+            ResolvedVariable resolved = {Storage::Varying, variable->type,
+                variable->index, stage_ == ShaderStage::Vertex};
+            resolved.array_size = variable->array_size;
+            return resolved;
+        }
 
         return {Storage::Local, ShaderType::Invalid, 0};
     }
@@ -923,6 +927,17 @@ private:
         return true;
     }
 
+    /* Load opcode for one element slot of a local, uniform or varying array. */
+    static ShaderOp element_load_op(Storage storage)
+    {
+        switch (storage)
+        {
+            case Storage::Uniform: return ShaderOp::LoadUniform;
+            case Storage::Varying: return ShaderOp::LoadVarying;
+            default: return ShaderOp::LoadLocal;
+        }
+    }
+
     /* Parse `[index]` after an array name; the '[' is current. A lone
        integer literal yields a constant element l-value without emitting
        code. Any other int expression is emitted for a dynamic access. */
@@ -964,10 +979,16 @@ private:
         }
         else
         {
-            // GLSL ES 1.00 only allows constant indices into sampler arrays.
+            // GLSL ES 1.00 only allows constant indices into sampler and
+            // varying arrays.
             if (array.type == ShaderType::Sampler2D)
             {
                 fail("sampler arrays require a constant integer index");
+                return false;
+            }
+            if (array.storage == Storage::Varying)
+            {
+                fail("varying arrays require a constant integer index");
                 return false;
             }
             if (parse_expression(1) != ShaderType::Int)
@@ -2216,7 +2237,7 @@ private:
                                     : ShaderOp::LoadLocalIndexed,
                             variable.type, variable.index, variable.array_size);
             else
-                emit_simple(uniform ? ShaderOp::LoadUniform : ShaderOp::LoadLocal,
+                emit_simple(element_load_op(variable.storage),
                             element.type, element.index);
             result_type = element.type;
             expression_lvalue_ = dynamic ? ResolvedVariable{} : element;
@@ -2449,8 +2470,7 @@ private:
                         slot.type = array.type;
                         slot.index = static_cast<uint8_t>(array.index + element);
                         slot.writable = array.writable;
-                        emit_simple(array.storage == Storage::Uniform
-                                        ? ShaderOp::LoadUniform : ShaderOp::LoadLocal,
+                        emit_simple(element_load_op(array.storage),
                                     slot.type, slot.index);
                         arguments[argument_count] = slot.type;
                         argument_lvalues[argument_count] = slot;

@@ -449,28 +449,37 @@ static bool link_program(ProgramObject& program)
     }
     program.varying_scalar_count = scalar_offset;
 
-    for (size_t i = 0; i < program.fragment_module.varying_count; ++i)
+    // Match fragment inputs to vertex outputs by name. An array matches as a
+    // whole (same type and size) and maps element by element; its unnamed
+    // element slots are skipped here and mapped with their array.
+    for (size_t i = 0; i < program.fragment_module.varying_count;)
     {
         const fxgl::ShaderVariable& fragment_varying =
             program.fragment_module.varyings[i];
+        const size_t slots =
+            fragment_varying.array_size == 0 ? 1 : fragment_varying.array_size;
         bool matched = false;
         for (size_t j = 0; j < program.vertex_module.varying_count; ++j)
         {
             const fxgl::ShaderVariable& vertex_varying =
                 program.vertex_module.varyings[j];
-            if (std::strcmp(fragment_varying.name, vertex_varying.name) == 0)
+            if (vertex_varying.name[0] == '\0' ||
+                std::strcmp(fragment_varying.name, vertex_varying.name) != 0)
+                continue;
+            if (fragment_varying.type != vertex_varying.type ||
+                fragment_varying.array_size != vertex_varying.array_size ||
+                i + slots > program.fragment_module.varying_count ||
+                j + slots > program.vertex_module.varying_count)
             {
-                if (fragment_varying.type != vertex_varying.type)
-                {
-                    set_log(program.info_log, sizeof(program.info_log),
-                            "Link failed: varying type mismatch");
-                    return false;
-                }
-                program.fragment_varying_offsets[i] =
-                    program.vertex_varying_offsets[j];
-                matched = true;
-                break;
+                set_log(program.info_log, sizeof(program.info_log),
+                        "Link failed: varying type or array size mismatch");
+                return false;
             }
+            for (size_t slot = 0; slot < slots; ++slot)
+                program.fragment_varying_offsets[i + slot] =
+                    program.vertex_varying_offsets[j + slot];
+            matched = true;
+            break;
         }
         if (!matched)
         {
@@ -478,6 +487,7 @@ static bool link_program(ProgramObject& program)
                     "Link failed: fragment varying has no vertex output");
             return false;
         }
+        i += slots;
     }
 
     program.linked = true;

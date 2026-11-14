@@ -2108,6 +2108,84 @@ void test_sampler_array_uniforms()
     fxglReleaseCurrent();
 }
 
+void test_varying_arrays()
+{
+    uint16_t color[1] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 1, 1, 1};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+
+    // The vertex stage writes each element differently: whole value,
+    // swizzle store and out argument. The fragment stage combines them.
+    static const GLchar vertex_source[] =
+        "attribute vec4 a_position;\n"
+        "varying vec2 v_pair[2];\n"
+        "varying float v_scale;\n"
+        "void put(out vec2 target) { target = vec2(0.0, 1.0); }\n"
+        "void main() {\n"
+        "  gl_Position = a_position; gl_PointSize = 1.0;\n"
+        "  v_pair[0] = vec2(1.0, 0.0);\n"
+        "  v_pair[0].y = 0.5;\n"
+        "  put(v_pair[1]);\n"
+        "  v_scale = 1.0;\n"
+        "}\n";
+    static const GLchar fragment_source[] =
+        "precision mediump float;\n"
+        "varying vec2 v_pair[2];\n"
+        "varying float v_scale;\n"
+        "void main() { gl_FragColor = vec4(v_pair[0].x, v_pair[1].y, v_pair[0].y - 0.5, 1.0) * v_scale; }\n";
+    const auto build = [](const GLchar *vertex, const GLchar *fragment, GLint& linked)
+    {
+        const GLchar *vertex_parts[] = {vertex};
+        const GLchar *fragment_parts[] = {fragment};
+        const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+        const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(vs, 1, vertex_parts, nullptr);
+        glShaderSource(fs, 1, fragment_parts, nullptr);
+        glCompileShader(vs);
+        glCompileShader(fs);
+        GLint compiled = GL_FALSE;
+        glGetShaderiv(vs, GL_COMPILE_STATUS, &compiled);
+        assert(compiled == GL_TRUE);
+        glGetShaderiv(fs, GL_COMPILE_STATUS, &compiled);
+        assert(compiled == GL_TRUE);
+        const GLuint program = glCreateProgram();
+        glAttachShader(program, vs);
+        glAttachShader(program, fs);
+        glBindAttribLocation(program, 0, "a_position");
+        glLinkProgram(program);
+        glGetProgramiv(program, GL_LINK_STATUS, &linked);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        return program;
+    };
+
+    GLint linked = GL_FALSE;
+    const GLuint program = build(vertex_source, fragment_source, linked);
+    assert(linked == GL_TRUE);
+    glUseProgram(program);
+    const GLfloat point[] = {0.0f, 0.0f, 0.0f, 1.0f};
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, point);
+    glViewport(0, 0, 1, 1);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    // red = v_pair[0].x = 1, green = v_pair[1].y = 1, blue = 0.5 - 0.5 = 0.
+    assert(color[0] == 0xffe0);
+    glDeleteProgram(program);
+
+    // A fragment array must match the vertex array's size.
+    static const GLchar mismatched_fragment[] =
+        "precision mediump float; varying vec2 v_pair[3];\n"
+        "void main() { gl_FragColor = vec4(v_pair[0], 0.0, 1.0); }\n";
+    static const GLchar plain_vertex[] =
+        "attribute vec4 a_position; varying vec2 v_pair[2];\n"
+        "void main() { gl_Position = a_position; v_pair[0] = vec2(0.0); v_pair[1] = vec2(0.0); }\n";
+    const GLuint mismatched = build(plain_vertex, mismatched_fragment, linked);
+    assert(linked == GL_FALSE);
+    glDeleteProgram(mismatched);
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -2219,6 +2297,7 @@ int main()
     test_copy_tex_image_from_framebuffer();
     test_polygon_offset();
     test_sampler_array_uniforms();
+    test_varying_arrays();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();
