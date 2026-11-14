@@ -11,7 +11,8 @@ The library currently contains:
 - A C-facing GLES-style API with one current context and bounded resource pools.
 - Client-array and VBO attribute fetching plus triangle, line and point paths.
 - Homogeneous clipping, perspective-correct varying interpolation and rasterization.
-- RGB565 texture storage and nearest/bilinear sampling with clamp, repeat and
+- 16-bit texture storage (RGB565, RGBA4444, RGBA5551, luminance-alpha,
+  luminance and alpha) with nearest/bilinear sampling and clamp, repeat and
   mirrored-repeat address modes.
 - Depth, stencil, scissor, blending, color masks and framebuffer objects.
 - A bounded GLSL ES 1.00 compiler and bytecode VM with conditional/loop control

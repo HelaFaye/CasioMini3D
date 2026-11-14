@@ -8,7 +8,7 @@ application, historical experiments and project documentation.
 ├── lib/
 │   └── fxOGL/
 │       ├── include/       # Public GLES/fxOGL API headers
-│       ├── src/gfx/       # RGB565 texture storage and sampling
+│       ├── src/gfx/       # 16-bit texture storage and sampling
 │       └── src/gles/      # Context, GLSL VM, program, math and pipeline
 ├── apps/
 │   └── fxGLMark/

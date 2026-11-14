@@ -220,12 +220,63 @@ static uint16_t interpolate_rgb565(uint16_t a, uint16_t b, uint32_t t)
 
     return static_cast<uint16_t>((red << 11) | (green << 5) | blue);
 }
+
+constexpr TexelLayout TEXEL_LAYOUTS[] = {
+    {3, {{11, 0x1f}, {5, 0x3f}, {0, 0x1f}, {0, 0}}},          // Rgb565
+    {4, {{12, 0x0f}, {8, 0x0f}, {4, 0x0f}, {0, 0x0f}}},       // Rgba4444
+    {4, {{11, 0x1f}, {6, 0x1f}, {1, 0x1f}, {0, 0x01}}},       // Rgba5551
+    {2, {{8, 0xff}, {0, 0xff}, {0, 0}, {0, 0}}},              // LuminanceAlpha88
+    {1, {{0, 0xff}, {0, 0}, {0, 0}, {0, 0}}},                 // Luminance8
+    {1, {{0, 0xff}, {0, 0}, {0, 0}, {0, 0}}},                 // Alpha8
+};
+
+static uint16_t interpolate_texel(
+    TextureFormat format, uint16_t a, uint16_t b, uint32_t t)
+{
+    if (format == TextureFormat::Rgb565)
+        return interpolate_rgb565(a, b, t);
+    const TexelLayout& layout = TEXEL_LAYOUTS[static_cast<size_t>(format)];
+    uint32_t result = 0;
+    for (size_t i = 0; i < layout.count; ++i)
+    {
+        const TexelField field = layout.fields[i];
+        result |= interpolate_channel((a >> field.shift) & field.mask,
+                                      (b >> field.shift) & field.mask, t)
+            << field.shift;
+    }
+    return static_cast<uint16_t>(result);
+}
 } // namespace
+
+const TexelLayout& texel_layout(TextureFormat format)
+{
+    const size_t index = static_cast<size_t>(format);
+    return TEXEL_LAYOUTS[index < sizeof(TEXEL_LAYOUTS) / sizeof(TEXEL_LAYOUTS[0])
+                         ? index : 0];
+}
+
+uint16_t average_texels(
+    TextureFormat format, uint16_t a, uint16_t b, uint16_t c, uint16_t d)
+{
+    const TexelLayout& layout = texel_layout(format);
+    uint32_t result = 0;
+    for (size_t i = 0; i < layout.count; ++i)
+    {
+        const TexelField field = layout.fields[i];
+        const uint32_t sum = ((a >> field.shift) & field.mask) +
+            ((b >> field.shift) & field.mask) +
+            ((c >> field.shift) & field.mask) +
+            ((d >> field.shift) & field.mask);
+        result |= ((sum + 2) / 4) << field.shift;
+    }
+    return static_cast<uint16_t>(result);
+}
 
 bool texture_valid(const Texture2DView& texture)
 {
     if (!texture.pixels || texture.width == 0 || texture.height == 0 ||
         texture.stride < texture.width ||
+        static_cast<size_t>(texture.format) > static_cast<size_t>(TextureFormat::Alpha8) ||
         texture.mip_level_count > 7 ||
         (texture.mip_level_count != 0 && !texture.mip_levels))
         return false;
@@ -289,9 +340,10 @@ static Texture2DView level_view(
 {
     if (level == 0)
         return {texture.pixels, texture.width, texture.height,
-                texture.stride, nullptr, 0};
+                texture.stride, nullptr, 0, texture.format};
     const TextureMipLevel& mip = texture.mip_levels[level - 1];
-    return {mip.pixels, mip.width, mip.height, mip.stride, nullptr, 0};
+    return {mip.pixels, mip.width, mip.height, mip.stride, nullptr, 0,
+            texture.format};
 }
 
 static int64_t scale_coordinate(
@@ -335,11 +387,20 @@ static uint16_t sample_level(
     const uint16_t bottom_left = texel(level, fixed_u.whole, fixed_v.whole + 1, sampler);
     const uint16_t bottom_right = texel(
         level, fixed_u.whole + 1, fixed_v.whole + 1, sampler);
-    const uint16_t top = interpolate_rgb565(
-        top_left, top_right, fixed_u.fraction);
-    const uint16_t bottom = interpolate_rgb565(
-        bottom_left, bottom_right, fixed_u.fraction);
-    return interpolate_rgb565(top, bottom, fixed_v.fraction);
+    if (level.format == TextureFormat::Rgb565)
+    {
+        // Decide the format once per sample on the common RGB565 path.
+        const uint16_t top = interpolate_rgb565(
+            top_left, top_right, fixed_u.fraction);
+        const uint16_t bottom = interpolate_rgb565(
+            bottom_left, bottom_right, fixed_u.fraction);
+        return interpolate_rgb565(top, bottom, fixed_v.fraction);
+    }
+    const uint16_t top = interpolate_texel(
+        level.format, top_left, top_right, fixed_u.fraction);
+    const uint16_t bottom = interpolate_texel(
+        level.format, bottom_left, bottom_right, fixed_u.fraction);
+    return interpolate_texel(level.format, top, bottom, fixed_v.fraction);
 }
 
 static uint16_t sample_texture_impl(
@@ -423,7 +484,8 @@ static uint16_t sample_texture_impl(
         sampler.address_u, sampler.address_v);
     const uint32_t fraction = static_cast<uint32_t>(
         (clamped_lod - static_cast<float>(selected_level)) * 65536.0f + 0.5f);
-    return interpolate_rgb565(first, second, std::min<uint32_t>(fraction, 65536u));
+    return interpolate_texel(texture.format, first, second,
+                             std::min<uint32_t>(fraction, 65536u));
 }
 
 bool texture_coordinate_16_16(

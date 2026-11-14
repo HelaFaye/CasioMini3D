@@ -31,6 +31,39 @@ enum class TextureMinFilter : uint8_t
     LinearMipmapLinear = 5
 };
 
+/* Every format stores one 16-bit texel; the sampler interpolates each
+   packed field and returns a texel in the texture's own format. */
+enum class TextureFormat : uint8_t
+{
+    Rgb565 = 0,
+    Rgba4444 = 1,
+    Rgba5551 = 2,
+    LuminanceAlpha88 = 3, /* luminance in the high byte */
+    Luminance8 = 4,       /* low byte */
+    Alpha8 = 5            /* low byte */
+};
+
+struct TexelField
+{
+    uint8_t shift;
+    uint8_t mask; /* applied after the shift */
+};
+
+/* Packed fields of a format, in R, G, B, A order (L, A for LuminanceAlpha88;
+   one field for Luminance8 and Alpha8). */
+struct TexelLayout
+{
+    uint8_t count;
+    TexelField fields[4];
+};
+
+const TexelLayout& texel_layout(TextureFormat format);
+
+/* Average 2x2 texels per field with round-to-nearest, as mipmap generation
+   does: (sum + 2) / 4. */
+uint16_t average_texels(
+    TextureFormat format, uint16_t a, uint16_t b, uint16_t c, uint16_t d);
+
 struct TextureMipLevel
 {
     const uint16_t *pixels;
@@ -47,6 +80,7 @@ struct Texture2DView
     uint16_t stride; /* Pixels between the start of adjacent rows. */
     const TextureMipLevel *mip_levels = nullptr; /* Levels 1..N-1. */
     uint8_t mip_level_count = 0;
+    TextureFormat format = TextureFormat::Rgb565; /* Shared by all levels. */
 };
 
 struct TextureSampler
@@ -130,10 +164,11 @@ bool sample_texture_nearest_validated(
     const TextureSampler& sampler,
     uint16_t& pixel);
 
-/* Sample an RGB565 texture using signed 16.16 texel-space coordinates.
+/* Sample a texture using signed 16.16 texel-space coordinates.
    Nearest uses floor(u), floor(v). Bilinear interpolates the four surrounding
    texels. Clamp and Repeat addressing are applied independently per axis.
-   Invalid texture or sampler input returns black (0). */
+   Invalid texture or sampler input returns 0. The result is a texel in the
+   texture's format. */
 uint16_t sample_texture(
     const Texture2DView& texture,
     int64_t u_16_16,

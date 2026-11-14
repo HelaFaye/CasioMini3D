@@ -46,11 +46,12 @@ physical calculator validation.
 
 fxOGL currently provides a programmable vertex/fragment pipeline, a bounded
 GLSL ES 1.00 compiler/VM, client arrays and VBOs, primitive clipping and
-rasterization, RGB565 nearest/bilinear texture sampling, common depth/stencil/
+rasterization, RGB, RGBA, luminance and alpha textures with nearest/bilinear
+sampling, common depth/stencil/
 blend/scissor state, and off-screen framebuffer support.
 
 The implementation remains a strict subset. Major gaps include broader GLSL
-control flow and functions, additional texture formats and mipmap behavior,
+control flow and functions, cube maps and further texture formats,
 complete GLES state/query semantics, and Khronos conformance testing. The
 current compatibility boundary is documented in
 [`docs/fxOGL-roadmap.md`](docs/fxOGL-roadmap.md).

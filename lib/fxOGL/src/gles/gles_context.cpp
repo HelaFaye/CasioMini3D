@@ -45,6 +45,10 @@ struct TextureMipObject
 struct TextureObject
 {
     uint16_t *pixels = nullptr;
+    /* Base internal format (GL_RGB, GL_RGBA, GL_LUMINANCE, GL_ALPHA or
+       GL_LUMINANCE_ALPHA) and the 16-bit layout every level is stored in. */
+    GLenum format = GL_RGB;
+    gfx::TextureFormat storage{}; // Rgb565
     TextureMipObject mip_levels[FXGL_MAX_TEXTURE_LEVELS - 1] = {};
     uint16_t width = 0;
     uint16_t height = 0;
@@ -426,8 +430,10 @@ static bool attachment_dimensions(
         if (attachment.texture_level != 0 || expected_format != GL_RGB565)
             return false;
         TextureObject *texture = find_texture(attachment.object_name);
+        // The color buffer is RGB565, so only RGB textures can be rendered to.
         if (!texture || !texture->pixels || texture->width == 0 ||
-            texture->height == 0)
+            texture->height == 0 ||
+            texture->storage != gfx::TextureFormat::Rgb565)
             return false;
         width = texture->width;
         height = texture->height;
@@ -556,7 +562,7 @@ static bool resolve_draw_surface(fxgl_surface_t& surface)
     if (framebuffer->color.object_type == GL_TEXTURE)
     {
         TextureObject *texture = find_texture(framebuffer->color.object_name);
-        if (!texture)
+        if (!texture || texture->storage != gfx::TextureFormat::Rgb565)
             return false;
         surface.color = texture->pixels;
         width = texture->width;
@@ -932,6 +938,50 @@ static bool fetch_vertex_attribute(
     return true;
 }
 
+inline constexpr fxgl::UnitFloatTable<15> UNIT_FROM_FOUR_BIT =
+    fxgl::make_unit_float_table<15>();
+inline constexpr fxgl::UnitFloatTable<255> UNIT_FROM_EIGHT_BIT =
+    fxgl::make_unit_float_table<255>();
+
+/* Expand a sampled texel to normalized RGBA. Luminance replicates into RGB
+   with alpha 1; alpha-only textures have black RGB, as GLES 2.0 defines. */
+static inline void texel_to_unit_float(
+    gfx::TextureFormat format, uint16_t texel, float rgba[4])
+{
+    if (format == gfx::TextureFormat::Rgb565)
+    {
+        fxgl::rgb565_to_unit_float(texel, rgba);
+        return;
+    }
+    switch (format)
+    {
+        case gfx::TextureFormat::Rgba4444:
+            rgba[0] = UNIT_FROM_FOUR_BIT.values[(texel >> 12) & 0xf];
+            rgba[1] = UNIT_FROM_FOUR_BIT.values[(texel >> 8) & 0xf];
+            rgba[2] = UNIT_FROM_FOUR_BIT.values[(texel >> 4) & 0xf];
+            rgba[3] = UNIT_FROM_FOUR_BIT.values[texel & 0xf];
+            break;
+        case gfx::TextureFormat::Rgba5551:
+            rgba[0] = fxgl::UNIT_FROM_FIVE_BIT.values[(texel >> 11) & 0x1f];
+            rgba[1] = fxgl::UNIT_FROM_FIVE_BIT.values[(texel >> 6) & 0x1f];
+            rgba[2] = fxgl::UNIT_FROM_FIVE_BIT.values[(texel >> 1) & 0x1f];
+            rgba[3] = (texel & 1) ? 1.0f : 0.0f;
+            break;
+        case gfx::TextureFormat::LuminanceAlpha88:
+            rgba[0] = rgba[1] = rgba[2] = UNIT_FROM_EIGHT_BIT.values[texel >> 8];
+            rgba[3] = UNIT_FROM_EIGHT_BIT.values[texel & 0xff];
+            break;
+        case gfx::TextureFormat::Luminance8:
+            rgba[0] = rgba[1] = rgba[2] = UNIT_FROM_EIGHT_BIT.values[texel & 0xff];
+            rgba[3] = 1.0f;
+            break;
+        default: // Alpha8
+            rgba[0] = rgba[1] = rgba[2] = 0.0f;
+            rgba[3] = UNIT_FROM_EIGHT_BIT.values[texel & 0xff];
+            break;
+    }
+}
+
 struct CachedTextureBinding
 {
     gfx::Texture2DView view;
@@ -1175,7 +1225,7 @@ static bool sample_bound_texture(
         if (gfx::sample_texture_nearest_repeat_pow2_cached(
                 cached.repeat_sampler, u, v, pixel))
         {
-            fxgl::rgb565_to_unit_float(pixel, rgba);
+            texel_to_unit_float(texture.format, pixel, rgba);
             return true;
         }
     }
@@ -1196,7 +1246,7 @@ static bool sample_bound_texture(
         if (!gfx::sample_texture_nearest_validated(
                 texture, u, v, sampler, pixel))
             return false;
-        fxgl::rgb565_to_unit_float(pixel, rgba);
+        texel_to_unit_float(texture.format, pixel, rgba);
         return true;
     }
 
@@ -1237,7 +1287,7 @@ static bool sample_bound_texture(
 
     const uint16_t pixel = gfx::sample_texture_validated(
         texture, scaled_u, scaled_v, sampler, lod);
-    fxgl::rgb565_to_unit_float(pixel, rgba);
+    texel_to_unit_float(texture.format, pixel, rgba);
     return true;
 }
 
@@ -2955,6 +3005,175 @@ void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params)
     }
 }
 
+/* Texture upload formats. GLES 2.0 pairs each format with its types:
+   RGB with UNSIGNED_BYTE or UNSIGNED_SHORT_5_6_5; RGBA with UNSIGNED_BYTE,
+   UNSIGNED_SHORT_4_4_4_4 or UNSIGNED_SHORT_5_5_5_1; LUMINANCE, ALPHA and
+   LUMINANCE_ALPHA with UNSIGNED_BYTE. Returns the error for a bad pair. */
+static GLenum texture_format_type_error(GLenum format, GLenum type)
+{
+    const bool format_ok = format == GL_RGB || format == GL_RGBA ||
+        format == GL_LUMINANCE || format == GL_ALPHA ||
+        format == GL_LUMINANCE_ALPHA;
+    const bool type_ok = type == GL_UNSIGNED_BYTE ||
+        type == GL_UNSIGNED_SHORT_5_6_5 || type == GL_UNSIGNED_SHORT_4_4_4_4 ||
+        type == GL_UNSIGNED_SHORT_5_5_5_1;
+    if (!format_ok || !type_ok)
+        return GL_INVALID_ENUM;
+    if ((type == GL_UNSIGNED_SHORT_5_6_5 && format != GL_RGB) ||
+        ((type == GL_UNSIGNED_SHORT_4_4_4_4 ||
+          type == GL_UNSIGNED_SHORT_5_5_5_1) && format != GL_RGBA))
+        return GL_INVALID_OPERATION;
+    return GL_NO_ERROR;
+}
+
+static size_t texture_source_pixel_bytes(GLenum format, GLenum type)
+{
+    if (type != GL_UNSIGNED_BYTE)
+        return 2;
+    switch (format)
+    {
+        case GL_RGB: return 3;
+        case GL_RGBA: return 4;
+        case GL_LUMINANCE_ALPHA: return 2;
+        default: return 1;
+    }
+}
+
+/* The 16-bit layout a new image is stored in. Eight-bit RGB and RGBA keep
+   the 16-bit texel size within the texture budget: RGB as RGB565 and RGBA
+   as RGBA4444 (GLES 2.0 lets an implementation choose the component
+   resolution of these unsized formats). */
+static gfx::TextureFormat texture_storage_for(GLenum format, GLenum type)
+{
+    switch (format)
+    {
+        case GL_RGB: return gfx::TextureFormat::Rgb565;
+        case GL_RGBA:
+            return type == GL_UNSIGNED_SHORT_5_5_5_1
+                ? gfx::TextureFormat::Rgba5551 : gfx::TextureFormat::Rgba4444;
+        case GL_LUMINANCE_ALPHA: return gfx::TextureFormat::LuminanceAlpha88;
+        case GL_LUMINANCE: return gfx::TextureFormat::Luminance8;
+        default: return gfx::TextureFormat::Alpha8;
+    }
+}
+
+/* The source type whose 16-bit texels are stored unchanged, or 0. */
+static GLenum texture_identity_type(gfx::TextureFormat storage)
+{
+    switch (storage)
+    {
+        case gfx::TextureFormat::Rgb565: return GL_UNSIGNED_SHORT_5_6_5;
+        case gfx::TextureFormat::Rgba4444: return GL_UNSIGNED_SHORT_4_4_4_4;
+        case gfx::TextureFormat::Rgba5551: return GL_UNSIGNED_SHORT_5_5_5_1;
+        default: return 0;
+    }
+}
+
+static inline uint32_t reduce_channel(uint32_t value, uint32_t maximum)
+{
+    return (value * maximum + 127) / 255;
+}
+
+/* Convert one source pixel to a stored texel. Luminance is carried in the
+   red channel. */
+static uint16_t encode_texel(
+    gfx::TextureFormat storage, GLenum format, GLenum type, const uint8_t *source)
+{
+    uint32_t r = 0, g = 0, b = 0, a = 255;
+    if (type != GL_UNSIGNED_BYTE)
+    {
+        uint16_t packed = 0;
+        std::memcpy(&packed, source, sizeof(packed));
+        if (type == GL_UNSIGNED_SHORT_5_6_5)
+        {
+            r = (((packed >> 11) & 0x1fu) * 255 + 15) / 31;
+            g = (((packed >> 5) & 0x3fu) * 255 + 31) / 63;
+            b = ((packed & 0x1fu) * 255 + 15) / 31;
+        }
+        else if (type == GL_UNSIGNED_SHORT_4_4_4_4)
+        {
+            r = ((packed >> 12) & 0xfu) * 17;
+            g = ((packed >> 8) & 0xfu) * 17;
+            b = ((packed >> 4) & 0xfu) * 17;
+            a = (packed & 0xfu) * 17;
+        }
+        else
+        {
+            r = (((packed >> 11) & 0x1fu) * 255 + 15) / 31;
+            g = (((packed >> 6) & 0x1fu) * 255 + 15) / 31;
+            b = (((packed >> 1) & 0x1fu) * 255 + 15) / 31;
+            a = (packed & 1u) ? 255 : 0;
+        }
+    }
+    else
+    {
+        switch (format)
+        {
+            case GL_RGB: r = source[0]; g = source[1]; b = source[2]; break;
+            case GL_RGBA:
+                r = source[0]; g = source[1]; b = source[2]; a = source[3];
+                break;
+            case GL_LUMINANCE_ALPHA: r = source[0]; a = source[1]; break;
+            case GL_LUMINANCE: r = source[0]; break;
+            default: a = source[0]; break;
+        }
+    }
+
+    switch (storage)
+    {
+        case gfx::TextureFormat::Rgb565:
+            return static_cast<uint16_t>((reduce_channel(r, 31) << 11) |
+                (reduce_channel(g, 63) << 5) | reduce_channel(b, 31));
+        case gfx::TextureFormat::Rgba4444:
+            return static_cast<uint16_t>((reduce_channel(r, 15) << 12) |
+                (reduce_channel(g, 15) << 8) | (reduce_channel(b, 15) << 4) |
+                reduce_channel(a, 15));
+        case gfx::TextureFormat::Rgba5551:
+            return static_cast<uint16_t>((reduce_channel(r, 31) << 11) |
+                (reduce_channel(g, 31) << 6) | (reduce_channel(b, 31) << 1) |
+                (a >= 128 ? 1u : 0u));
+        case gfx::TextureFormat::LuminanceAlpha88:
+            return static_cast<uint16_t>((r << 8) | a);
+        case gfx::TextureFormat::Luminance8:
+            return static_cast<uint16_t>(r);
+        default:
+            return static_cast<uint16_t>(a);
+    }
+}
+
+/* Unpack client rows (honouring GL_UNPACK_ALIGNMENT) into stored texels. */
+static void unpack_texture_rows(
+    const void *pixels,
+    GLenum format,
+    GLenum type,
+    gfx::TextureFormat storage,
+    uint16_t *destination,
+    size_t destination_stride,
+    GLsizei width,
+    GLsizei height)
+{
+    const size_t pixel_bytes = texture_source_pixel_bytes(format, type);
+    const size_t row_bytes = static_cast<size_t>(width) * pixel_bytes;
+    const size_t alignment = static_cast<size_t>(g_context.unpack_alignment);
+    const size_t source_stride = (row_bytes + alignment - 1) & ~(alignment - 1);
+    const uint8_t *source = static_cast<const uint8_t *>(pixels);
+    const bool identity = type == texture_identity_type(storage);
+    for (GLsizei row = 0; row < height; ++row)
+    {
+        const uint8_t *source_row = source + static_cast<size_t>(row) * source_stride;
+        uint16_t *destination_row =
+            destination + static_cast<size_t>(row) * destination_stride;
+        if (identity)
+        {
+            std::memcpy(destination_row, source_row, row_bytes);
+            continue;
+        }
+        for (GLsizei column = 0; column < width; ++column)
+            destination_row[column] = encode_texel(storage, format, type,
+                source_row + static_cast<size_t>(column) * pixel_bytes);
+    }
+}
+
 void glTexImage2D(
     GLenum target,
     GLint level,
@@ -2967,10 +3186,22 @@ void glTexImage2D(
     const GLvoid *pixels)
 {
     if (!has_context()) return;
-    if (target != GL_TEXTURE_2D || format != GL_RGB ||
-        type != GL_UNSIGNED_SHORT_5_6_5)
+    if (target != GL_TEXTURE_2D)
     {
         set_error(GL_INVALID_ENUM);
+        return;
+    }
+    const GLenum format_error = texture_format_type_error(format, type);
+    if (format_error == GL_INVALID_ENUM)
+    {
+        set_error(GL_INVALID_ENUM);
+        return;
+    }
+    if (internalformat != GL_RGB && internalformat != GL_RGBA &&
+        internalformat != GL_LUMINANCE && internalformat != GL_ALPHA &&
+        internalformat != GL_LUMINANCE_ALPHA)
+    {
+        set_error(GL_INVALID_VALUE);
         return;
     }
     if (level < 0 || level >= static_cast<GLint>(FXGL_MAX_TEXTURE_LEVELS) ||
@@ -2980,7 +3211,8 @@ void glTexImage2D(
         set_error(GL_INVALID_VALUE);
         return;
     }
-    if (internalformat != static_cast<GLint>(format))
+    if (format_error != GL_NO_ERROR ||
+        internalformat != static_cast<GLint>(format))
     {
         set_error(GL_INVALID_OPERATION);
         return;
@@ -2989,13 +3221,18 @@ void glTexImage2D(
     TextureObject *object = bound_texture(target);
     if (!object) return;
 
+    gfx::TextureFormat storage = texture_storage_for(format, type);
     if (level > 0)
     {
-        if (!object->pixels || object->width == 0 || object->height == 0)
+        // Levels share the base level's storage; mixed formats would make
+        // the texture incomplete, so this subset rejects them up front.
+        if (!object->pixels || object->width == 0 || object->height == 0 ||
+            format != object->format)
         {
             set_error(GL_INVALID_OPERATION);
             return;
         }
+        storage = object->storage;
         if (level > texture_max_level(object->width, object->height))
         {
             set_error(GL_INVALID_VALUE);
@@ -3037,17 +3274,8 @@ void glTexImage2D(
             return;
         }
         if (pixels)
-        {
-            const size_t row_bytes = static_cast<size_t>(width) * sizeof(uint16_t);
-            const size_t alignment =
-                static_cast<size_t>(g_context.unpack_alignment);
-            const size_t source_stride =
-                (row_bytes + alignment - 1) & ~(alignment - 1);
-            const uint8_t *source = static_cast<const uint8_t *>(pixels);
-            for (GLsizei row = 0; row < height; ++row)
-                std::memcpy(new_pixels + static_cast<size_t>(row) * width,
-                    source + static_cast<size_t>(row) * source_stride, row_bytes);
-        }
+            unpack_texture_rows(pixels, format, type, storage, new_pixels,
+                static_cast<size_t>(width), width, height);
         else
         {
             std::memset(new_pixels, 0, new_bytes);
@@ -3060,6 +3288,8 @@ void glTexImage2D(
         ::free(object->pixels);
         release_texture_mips(*object);
         object->pixels = new_pixels;
+        object->format = format;
+        object->storage = storage;
         object->width = static_cast<uint16_t>(width);
         object->height = static_cast<uint16_t>(height);
         object->bytes = new_bytes;
@@ -3089,8 +3319,8 @@ void glTexSubImage2D(
     const GLvoid *pixels)
 {
     if (!has_context()) return;
-    if (target != GL_TEXTURE_2D || format != GL_RGB ||
-        type != GL_UNSIGNED_SHORT_5_6_5)
+    const GLenum format_error = texture_format_type_error(format, type);
+    if (target != GL_TEXTURE_2D || format_error == GL_INVALID_ENUM)
     {
         set_error(GL_INVALID_ENUM);
         return;
@@ -3099,6 +3329,11 @@ void glTexSubImage2D(
         xoffset < 0 || yoffset < 0 || width < 0 || height < 0)
     {
         set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (format_error != GL_NO_ERROR)
+    {
+        set_error(GL_INVALID_OPERATION);
         return;
     }
 
@@ -3123,24 +3358,20 @@ void glTexSubImage2D(
         set_error(GL_INVALID_VALUE);
         return;
     }
+    if (format != object->format)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
     if (width > 0 && height > 0 && !pixels)
     {
         set_error(GL_INVALID_VALUE);
         return;
     }
 
-    const size_t row_bytes = static_cast<size_t>(width) * sizeof(uint16_t);
-    const size_t alignment = static_cast<size_t>(g_context.unpack_alignment);
-    const size_t source_stride =
-        (row_bytes + alignment - 1) & ~(alignment - 1);
-    const uint8_t *source = static_cast<const uint8_t *>(pixels);
-    for (GLsizei row = 0; row < height; ++row)
-    {
-        uint16_t *destination = destination_pixels +
-            static_cast<size_t>(yoffset + row) * level_width + xoffset;
-        std::memcpy(destination,
-            source + static_cast<size_t>(row) * source_stride, row_bytes);
-    }
+    unpack_texture_rows(pixels, format, type, object->storage,
+        destination_pixels + static_cast<size_t>(yoffset) * level_width + xoffset,
+        static_cast<size_t>(level_width), width, height);
 }
 
 /* Shared validation and readback for glCopyTex(Sub)Image2D. The region is
@@ -3185,14 +3416,24 @@ static uint16_t *read_copy_source(
     return copy;
 }
 
-/* Upload tightly packed RGB565 rows regardless of GL_UNPACK_ALIGNMENT:
-   uint16_t rows are always 2-byte aligned. */
-struct PackedRgb565Unpack
+/* Upload tightly packed rows regardless of GL_UNPACK_ALIGNMENT: copies are
+   built with 2-byte RGB565 or 1-byte luminance rows. */
+struct PackedUnpack
 {
     GLint saved_alignment = g_context.unpack_alignment;
-    PackedRgb565Unpack() { g_context.unpack_alignment = 2; }
-    ~PackedRgb565Unpack() { g_context.unpack_alignment = saved_alignment; }
+    explicit PackedUnpack(GLint alignment) { g_context.unpack_alignment = alignment; }
+    ~PackedUnpack() { g_context.unpack_alignment = saved_alignment; }
 };
+
+/* Rewrite a copied RGB565 region in place as 8-bit luminance (the red
+   component, as GLES 2.0 defines for a LUMINANCE copy). */
+static void copy_to_luminance(uint16_t *copy, size_t count)
+{
+    uint8_t *luminance = reinterpret_cast<uint8_t *>(copy);
+    for (size_t i = 0; i < count; ++i)
+        luminance[i] = static_cast<uint8_t>(
+            (((copy[i] >> 11) & 0x1fu) * 255 + 15) / 31);
+}
 
 void glCopyTexImage2D(
     GLenum target,
@@ -3217,7 +3458,7 @@ void glCopyTexImage2D(
         set_error(GL_INVALID_OPERATION);
         return;
     }
-    if (internalformat != GL_RGB)
+    if (internalformat != GL_RGB && internalformat != GL_LUMINANCE)
     {
         set_error(GL_INVALID_ENUM);
         return;
@@ -3234,8 +3475,18 @@ void glCopyTexImage2D(
     uint16_t *copy = read_copy_source(x, y, width, height, empty);
     if (!copy && !empty)
         return;
+    if (internalformat == GL_LUMINANCE)
     {
-        const PackedRgb565Unpack packed;
+        if (copy)
+            copy_to_luminance(copy,
+                static_cast<size_t>(width) * static_cast<size_t>(height));
+        const PackedUnpack packed(1);
+        glTexImage2D(target, level, GL_LUMINANCE, width, height, 0,
+                     GL_LUMINANCE, GL_UNSIGNED_BYTE, copy);
+    }
+    else
+    {
+        const PackedUnpack packed(2);
         glTexImage2D(target, level, GL_RGB, width, height, 0,
                      GL_RGB, GL_UNSIGNED_SHORT_5_6_5, copy);
     }
@@ -3268,6 +3519,18 @@ void glCopyTexSubImage2D(
         return;
     }
 
+    // The destination's format decides the conversion. The RGB565 color
+    // buffer has no alpha, so formats with alpha cannot be copied into.
+    const TextureObject *destination = find_texture(
+        g_context.texture_binding_2d[g_context.active_texture_unit]);
+    const bool luminance = destination && destination->format == GL_LUMINANCE;
+    if (destination && destination->pixels && !luminance &&
+        destination->format != GL_RGB)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
     bool empty = false;
     uint16_t *copy = read_copy_source(x, y, width, height, empty);
     if (!copy && !empty)
@@ -3275,8 +3538,18 @@ void glCopyTexSubImage2D(
     // glTexSubImage2D validates the destination level and region. An empty
     // region still needs an existing level, so pass a non-null placeholder.
     static const uint16_t no_pixels = 0;
+    if (luminance)
     {
-        const PackedRgb565Unpack packed;
+        if (copy)
+            copy_to_luminance(copy,
+                static_cast<size_t>(width) * static_cast<size_t>(height));
+        const PackedUnpack packed(1);
+        glTexSubImage2D(target, level, xoffset, yoffset, width, height,
+                        GL_LUMINANCE, GL_UNSIGNED_BYTE, copy ? copy : &no_pixels);
+    }
+    else
+    {
+        const PackedUnpack packed(2);
         glTexSubImage2D(target, level, xoffset, yoffset, width, height,
                         GL_RGB, GL_UNSIGNED_SHORT_5_6_5, copy ? copy : &no_pixels);
     }
@@ -3337,31 +3610,20 @@ void glGenerateMipmap(GLenum target)
         {
             for (uint16_t x = 0; x < width; ++x)
             {
-                unsigned red = 0;
-                unsigned green = 0;
-                unsigned blue = 0;
-                for (unsigned dy = 0; dy < 2; ++dy)
+                uint16_t box[4];
+                for (unsigned i = 0; i < 4; ++i)
                 {
-                    for (unsigned dx = 0; dx < 2; ++dx)
-                    {
-                        const uint16_t sx = std::min<uint16_t>(
-                            static_cast<uint16_t>(x * 2 + dx),
-                            static_cast<uint16_t>(source_width - 1));
-                        const uint16_t sy = std::min<uint16_t>(
-                            static_cast<uint16_t>(y * 2 + dy),
-                            static_cast<uint16_t>(source_height - 1));
-                        const uint16_t pixel =
-                            source_pixels[static_cast<size_t>(sy) * source_width + sx];
-                        red += (pixel >> 11) & 0x1f;
-                        green += (pixel >> 5) & 0x3f;
-                        blue += pixel & 0x1f;
-                    }
+                    const uint16_t sx = std::min<uint16_t>(
+                        static_cast<uint16_t>(x * 2 + (i & 1)),
+                        static_cast<uint16_t>(source_width - 1));
+                    const uint16_t sy = std::min<uint16_t>(
+                        static_cast<uint16_t>(y * 2 + (i >> 1)),
+                        static_cast<uint16_t>(source_height - 1));
+                    box[i] = source_pixels[static_cast<size_t>(sy) * source_width + sx];
                 }
                 destination[static_cast<size_t>(y) * width + x] =
-                    static_cast<uint16_t>(
-                        (((red + 2) / 4) << 11) |
-                        (((green + 2) / 4) << 5) |
-                        ((blue + 2) / 4));
+                    gfx::average_texels(object->storage,
+                                        box[0], box[1], box[2], box[3]);
             }
         }
 
@@ -4429,6 +4691,7 @@ bool get_texture_binding(
 
     view = {};
     view.pixels = object->pixels;
+    view.format = object->storage;
     view.width = object->width;
     view.height = object->height;
     view.stride = object->width;

@@ -220,6 +220,8 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_RGBA 0x1908
 #define GL_LUMINANCE 0x1909
 #define GL_LUMINANCE_ALPHA 0x190A
+#define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
+#define GL_UNSIGNED_SHORT_5_5_5_1 0x8034
 #define GL_UNSIGNED_SHORT_5_6_5 0x8363
 
 #define GL_ARRAY_BUFFER 0x8892

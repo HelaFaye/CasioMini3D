@@ -362,8 +362,11 @@ void test_texture_objects_and_uploads()
         GL_UNSIGNED_SHORT_5_6_5, nullptr);
     assert(glGetError() == GL_INVALID_VALUE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB,
-        GL_UNSIGNED_BYTE, nullptr);
+        GL_FLOAT, nullptr);
     assert(glGetError() == GL_INVALID_ENUM);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB,
+        GL_UNSIGNED_SHORT_4_4_4_4, nullptr);
+    assert(glGetError() == GL_INVALID_OPERATION);
 
     glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 1, 1, GL_RGB,
         GL_UNSIGNED_SHORT_5_6_5, &update);
@@ -1882,7 +1885,7 @@ void test_copy_tex_image_from_framebuffer()
     assert(glGetError() == GL_INVALID_VALUE);
     glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 2, 2, 0);
     assert(glGetError() == GL_INVALID_OPERATION);
-    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 0, 0, 2, 2, 0);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, 0, 0, 2, 2, 0);
     assert(glGetError() == GL_INVALID_ENUM);
     glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, 2, 2, 1);
     assert(glGetError() == GL_INVALID_VALUE);
@@ -2364,7 +2367,184 @@ void test_implementation_limits()
     glDeleteFramebuffers(1, &framebuffer);
     glDeleteRenderbuffers(1, &stencil);
     assert(glGetError() == GL_NO_ERROR);
-    fxglMakeCurrent(nullptr);
+    fxglReleaseCurrent();
+}
+
+// Draw a full-surface quad sampling unit 0 with nearest filtering and
+// return the 2x1 surface (texel 0, texel 1 of a 2x1 texture).
+static void draw_texture_quad(const GLchar *fragment, bool blend)
+{
+    static const GLchar vertex[] =
+        "attribute vec4 a_position; varying vec2 v_uv;\n"
+        "void main() { gl_Position = a_position;\n"
+        "  v_uv = a_position.xy * 0.5 + 0.5; }\n";
+    const GLuint program = build_test_program(vertex, fragment);
+    glUseProgram(program);
+    glUniform1i(glGetUniformLocation(program, "u_texture"), 0);
+    const GLfloat quad[] = {-1, -1, 1, -1, -1, 1, 1, 1};
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+    if (blend)
+    {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisable(GL_BLEND);
+    glUseProgram(0);
+    glDeleteProgram(program);
+}
+
+void test_texture_formats()
+{
+    uint16_t color[2] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 1, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 2, 1);
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    static const GLchar sample[] =
+        "precision mediump float; uniform sampler2D u_texture; varying vec2 v_uv;\n"
+        "void main() { gl_FragColor = texture2D(u_texture, v_uv); }\n";
+    // Writes alpha into red so stored alpha is visible in the RGB565 buffer.
+    static const GLchar alpha_to_red[] =
+        "precision mediump float; uniform sampler2D u_texture; varying vec2 v_uv;\n"
+        "void main() { vec4 c = texture2D(u_texture, v_uv);\n"
+        "  gl_FragColor = vec4(c.a, c.r, c.b, 1.0); }\n";
+
+    // RGB / UNSIGNED_BYTE is stored as RGB565.
+    const uint8_t rgb[] = {255, 0, 0, 0, 255, 255};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+    assert(glGetError() == GL_NO_ERROR);
+    draw_texture_quad(sample, false);
+    assert(color[0] == 0xf800 && color[1] == 0x07ff);
+
+    // LUMINANCE replicates into RGB with alpha 1.
+    const uint8_t luminance[] = {255, 0};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 2, 1, 0, GL_LUMINANCE,
+                 GL_UNSIGNED_BYTE, luminance);
+    assert(glGetError() == GL_NO_ERROR);
+    draw_texture_quad(alpha_to_red, false);
+    assert(color[0] == 0xffff && color[1] == 0xf800);
+
+    // ALPHA has black RGB.
+    const uint8_t alpha[] = {255, 0};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, 2, 1, 0, GL_ALPHA,
+                 GL_UNSIGNED_BYTE, alpha);
+    assert(glGetError() == GL_NO_ERROR);
+    draw_texture_quad(alpha_to_red, false);
+    assert(color[0] == 0xf800 && color[1] == 0x0000);
+
+    // LUMINANCE_ALPHA: luminance into RGB, alpha separate.
+    const uint8_t luminance_alpha[] = {0, 255, 255, 0};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 2, 1, 0,
+                 GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, luminance_alpha);
+    assert(glGetError() == GL_NO_ERROR);
+    draw_texture_quad(alpha_to_red, false);
+    assert(color[0] == 0xf800 && color[1] == 0x07ff);
+
+    // RGBA alpha drives blending over the existing white surface.
+    const uint8_t rgba[] = {0, 0, 255, 255, 0, 0, 255, 0};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, rgba);
+    assert(glGetError() == GL_NO_ERROR);
+    color[0] = color[1] = 0xffff;
+    draw_texture_quad(sample, true);
+    assert(color[0] == 0x001f && color[1] == 0xffff);
+
+    // Packed RGBA types are stored exactly and update with sub-images of the
+    // same format; another format is rejected.
+    const uint16_t rgba4444[] = {0xf00f, 0x0f0f};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_RGBA,
+                 GL_UNSIGNED_SHORT_4_4_4_4, rgba4444);
+    draw_texture_quad(sample, false);
+    assert(color[0] == 0xf800 && color[1] == 0x07e0);
+    const uint8_t blue_rgba[] = {0, 0, 255, 255};
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, blue_rgba);
+    assert(glGetError() == GL_NO_ERROR);
+    draw_texture_quad(sample, false);
+    assert(color[1] == 0x001f);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    const uint16_t rgba5551[] = {0x07c1, 0xf800};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_RGBA,
+                 GL_UNSIGNED_SHORT_5_5_5_1, rgba5551);
+    draw_texture_quad(alpha_to_red, false);
+    // texel 0: green, alpha 1 -> (1, 0, 0); texel 1: red, alpha 0 -> (0, 1, 0).
+    assert(color[0] == 0xf800 && color[1] == 0x07e0);
+
+    // Bad format/type pairs and mismatched internal formats.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, 1, 1, 0, GL_ALPHA,
+                 GL_UNSIGNED_SHORT_5_6_5, alpha);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glTexImage2D(GL_TEXTURE_2D, 0, 0x1234, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+    assert(glGetError() == GL_INVALID_VALUE);
+
+    // Mipmaps average every field of the stored layout.
+    const uint8_t la_quad[] = {0, 0, 255, 255, 255, 255, 255, 255,
+                               0, 0, 255, 255, 255, 255, 255, 255};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 2, 2, 0,
+                 GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, la_quad);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    assert(glGetError() == GL_NO_ERROR);
+    gfx::Texture2DView view = {};
+    gfx::TextureSampler sampler = {};
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.format == gfx::TextureFormat::LuminanceAlpha88);
+    assert(view.mip_level_count == 1 && view.mip_levels[0].pixels[0] == 0xbfbf);
+
+    // A level must use the base level's format.
+    const uint8_t one = 0;
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_LUMINANCE, 1, 1, 0, GL_LUMINANCE,
+                 GL_UNSIGNED_BYTE, &one);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    // Bilinear filtering interpolates alpha too: halfway between alpha 0 and
+    // 255 (stored 4-bit) is 8/15.
+    const uint16_t fade[] = {0xfff0, 0xffff};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 1, 0, GL_RGBA,
+                 GL_UNSIGNED_SHORT_4_4_4_4, fade);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    sampler.filter = gfx::TextureFilter::Bilinear;
+    assert(gfx::sample_texture(view, 1LL << 15, 0, sampler) == 0xfff8);
+
+    // Only RGB textures can be color attachments; LUMINANCE can be copied
+    // from the RGB565 color buffer, formats with alpha cannot.
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, texture, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &framebuffer);
+    assert(glGetError() == GL_NO_ERROR);
+
+    color[0] = 0xf800;
+    color[1] = 0x001f;
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 1, 1);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 0, 0, 2, 1, 0);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.format == gfx::TextureFormat::Luminance8);
+    assert(view.pixels[0] == 255 && view.pixels[1] == 0);
+    color[1] = 0xffff;
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 1, 0, 1, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(fxgl::get_texture_binding(0, view, sampler));
+    assert(view.pixels[1] == 255);
+
+    glDeleteTextures(1, &texture);
+    assert(glGetError() == GL_NO_ERROR);
+    fxglReleaseCurrent();
 }
 
 void test_texture_lookup_variants()
@@ -2606,6 +2786,7 @@ int main()
     test_fragment_builtin_inputs();
     test_texture_lookup_variants();
     test_implementation_limits();
+    test_texture_formats();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();
