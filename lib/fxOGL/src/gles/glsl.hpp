@@ -142,7 +142,10 @@ enum class ShaderOp : uint8_t
     /* Pops the value, then the int index pushed before it. */
     StoreLocalIndexed,
     /* Dynamic uniform-array read; operands as for LoadLocalIndexed. */
-    LoadUniformIndexed
+    LoadUniformIndexed,
+    /* Fragment built-in input: index 0 gl_FragCoord, 1 gl_FrontFacing,
+       2 gl_PointCoord. */
+    LoadBuiltinInput
 };
 
 struct ShaderInstruction
@@ -178,6 +181,11 @@ struct ShaderModule
     ShaderInstruction instructions[GLSL_MAX_INSTRUCTIONS];
     size_t instruction_count;
     bool compiled;
+    /* Fragment shader reads gl_FragCoord or gl_PointCoord, so the pipeline
+       must supply window and point coordinates. */
+    bool uses_fragment_coordinates;
+    /* Fragment shader reads any built-in input (including gl_FrontFacing). */
+    bool uses_builtin_inputs;
     char info_log[160];
 };
 
@@ -192,6 +200,11 @@ struct ShaderRuntime
     ShaderValue position;
     ShaderValue point_size;
     ShaderValue fragment_color;
+    /* Fragment built-in inputs, refreshed per fragment by the caller when
+       ShaderModule::uses_builtin_inputs is set. */
+    ShaderValue frag_coord;
+    ShaderValue front_facing;
+    ShaderValue point_coord;
 };
 
 using TextureSampleFunction = bool (*)(

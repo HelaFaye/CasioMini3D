@@ -215,7 +215,8 @@ enum class Storage : uint8_t
     Local,
     Position,
     PointSize,
-    FragmentColor
+    FragmentColor,
+    BuiltinInput /* index: 0 gl_FragCoord, 1 gl_FrontFacing, 2 gl_PointCoord */
 };
 
 struct ResolvedVariable
@@ -740,6 +741,15 @@ private:
         if (stage_ == ShaderStage::Fragment &&
             std::strcmp(name, "gl_FragColor") == 0)
             return {Storage::FragmentColor, ShaderType::Vec4, 0, true};
+        if (stage_ == ShaderStage::Fragment)
+        {
+            if (std::strcmp(name, "gl_FragCoord") == 0)
+                return {Storage::BuiltinInput, ShaderType::Vec4, 0, false};
+            if (std::strcmp(name, "gl_FrontFacing") == 0)
+                return {Storage::BuiltinInput, ShaderType::Bool, 1, false};
+            if (std::strcmp(name, "gl_PointCoord") == 0)
+                return {Storage::BuiltinInput, ShaderType::Vec2, 2, false};
+        }
 
         if (active_function_ < module_.function_count)
         {
@@ -1473,6 +1483,7 @@ private:
         if ((base.storage == Storage::Local && !base.writable) ||
             base.storage == Storage::Attribute ||
             base.storage == Storage::Uniform ||
+            base.storage == Storage::BuiltinInput ||
             (base.storage == Storage::FragmentColor && stage_ == ShaderStage::Vertex) ||
             (base.storage == Storage::Position && stage_ == ShaderStage::Fragment) ||
             (base.storage == Storage::PointSize && stage_ != ShaderStage::Vertex) ||
@@ -2257,6 +2268,12 @@ private:
             case Storage::Position: op = ShaderOp::LoadPosition; break;
             case Storage::PointSize: op = ShaderOp::LoadPointSize; break;
             case Storage::FragmentColor: op = ShaderOp::LoadFragmentColor; break;
+            case Storage::BuiltinInput:
+                op = ShaderOp::LoadBuiltinInput;
+                module_.uses_builtin_inputs = true;
+                if (variable.index != 1)
+                    module_.uses_fragment_coordinates = true;
+                break;
         }
         emit_simple(op, variable.type, variable.index);
         result_type = variable.type;
@@ -4596,6 +4613,18 @@ bool execute_glsl(
                     !array_element_slot(instruction, b, slot))
                     return false;
                 copy_shader_value(locals[slot], a);
+                break;
+            }
+
+            case ShaderOp::LoadBuiltinInput:
+            {
+                const ShaderValue *input =
+                    instruction.index == 0 ? &runtime.frag_coord :
+                    instruction.index == 1 ? &runtime.front_facing :
+                    instruction.index == 2 ? &runtime.point_coord : nullptr;
+                if (!input || input->type != instruction.type ||
+                    !push_value(stack, stack_size, *input))
+                    return false;
                 break;
             }
 

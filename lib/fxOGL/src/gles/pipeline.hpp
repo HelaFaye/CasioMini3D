@@ -48,6 +48,10 @@ struct PipelineState
        default; the GLES layer enables it because its shaders cannot write
        depth and their only side effect is failure reporting. */
     bool early_depth_test;
+    /* Supply FragmentInput::frag_coord and point_coord (gl_FragCoord and
+       gl_PointCoord). Off by default: depth and 1/w are then interpolated
+       only for the depth test and varyings, exactly as before. */
+    bool fragment_coordinates;
 
     bool cull_enabled;
     GLenum cull_face;
@@ -101,6 +105,14 @@ struct FragmentInput
     const float *varying_ddx;
     const float *varying_ddy;
     size_t varying_count;
+    /* Window x and y of the pixel centre, window depth and 1/w_clip; filled
+       when PipelineState::fragment_coordinates is set. */
+    float frag_coord[4];
+    /* Position within a point sprite, origin at its upper left; zero for
+       lines and triangles. Filled with frag_coord. */
+    float point_coord[2];
+    /* Triangles report their facing; points and lines are front-facing. */
+    bool front_facing;
 };
 
 using FragmentShader = bool (*)(

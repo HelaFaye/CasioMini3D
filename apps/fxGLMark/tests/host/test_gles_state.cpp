@@ -2186,6 +2186,127 @@ void test_varying_arrays()
     fxglReleaseCurrent();
 }
 
+GLuint build_test_program(const GLchar *vertex, const GLchar *fragment)
+{
+    const GLchar *vertex_parts[] = {vertex};
+    const GLchar *fragment_parts[] = {fragment};
+    const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    const GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, vertex_parts, nullptr);
+    glShaderSource(fs, 1, fragment_parts, nullptr);
+    glCompileShader(vs);
+    glCompileShader(fs);
+    GLint status = GL_FALSE;
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    if (status != GL_TRUE)
+    {
+        GLchar log[160] = {};
+        glGetShaderInfoLog(fs, sizeof(log), nullptr, log);
+        std::fprintf(stderr, "fragment shader: %s\n", log);
+    }
+    assert(status == GL_TRUE);
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glBindAttribLocation(program, 0, "a_position");
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &status);
+    assert(status == GL_TRUE);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return program;
+}
+
+uint16_t expected_rgb565(float r, float g, float b)
+{
+    const auto q = [](float c, float scale)
+    { return static_cast<uint16_t>(std::min(1.0f, std::max(0.0f, c)) * scale + 0.5f); };
+    return static_cast<uint16_t>((q(r, 31.0f) << 11) | (q(g, 63.0f) << 5) | q(b, 31.0f));
+}
+
+void test_fragment_builtin_inputs()
+{
+    uint16_t color[16] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 4, 4);
+    glEnableVertexAttribArray(0);
+
+    static const GLchar vertex_source[] =
+        "attribute vec4 a_position;\n"
+        "void main() { gl_Position = a_position; gl_PointSize = 4.0; }\n";
+
+    // gl_FragCoord: pixel centres, window depth and 1/w.
+    const GLuint coords = build_test_program(vertex_source,
+        "precision mediump float;\n"
+        "void main() {\n"
+        "  bool depth_ok = gl_FragCoord.z > 0.70 && gl_FragCoord.z < 0.80;\n"
+        "  bool w_ok = gl_FragCoord.w > 0.49 && gl_FragCoord.w < 0.51;\n"
+        "  gl_FragColor = vec4(gl_FragCoord.x / 4.0, gl_FragCoord.y / 4.0,\n"
+        "                      depth_ok && w_ok ? 1.0 : 0.0, 1.0);\n"
+        "}\n");
+    glUseProgram(coords);
+    // Clip w = 2 with ndc z = 0.5 (clip z = 1): window depth 0.75, 1/w = 0.5.
+    const GLfloat quad[] = {
+        -2, -2, 1, 2,   2, -2, 1, 2,   -2, 2, 1, 2,
+         2, -2, 1, 2,   2,  2, 1, 2,   -2, 2, 1, 2
+    };
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, quad);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    assert(glGetError() == GL_NO_ERROR);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            assert(color[y * 4 + x] ==
+                   expected_rgb565((x + 0.5f) / 4.0f, (y + 0.5f) / 4.0f, 1.0f));
+    glDeleteProgram(coords);
+
+    // gl_FrontFacing follows the winding (culling is off).
+    const GLuint facing = build_test_program(vertex_source,
+        "precision mediump float;\n"
+        "void main() { gl_FragColor = gl_FrontFacing ? vec4(0.0, 1.0, 0.0, 1.0)\n"
+        "                                            : vec4(1.0, 0.0, 0.0, 1.0); }\n");
+    glUseProgram(facing);
+    const GLfloat ccw[] = {-1, -1, 0, 1,   1, -1, 0, 1,   -1, 1, 0, 1};
+    const GLfloat cw[] = {-1, -1, 0, 1,   -1, 1, 0, 1,   1, -1, 0, 1};
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, ccw);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(color[0] == 0x07e0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, cw);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(color[0] == 0xf800);
+    glDeleteProgram(facing);
+
+    // gl_PointCoord spans the 4x4 sprite with an upper-left origin: the
+    // top-left pixel (0, 3) is (0.125, 0.125), bottom-right (3, 0) is
+    // (0.875, 0.875).
+    const GLuint sprite = build_test_program(vertex_source,
+        "precision mediump float;\n"
+        "void main() { gl_FragColor = vec4(gl_PointCoord, 0.0, 1.0); }\n");
+    glUseProgram(sprite);
+    const GLfloat centre[] = {0.0f, 0.0f, 0.0f, 1.0f};
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, centre);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[3 * 4 + 0] == expected_rgb565(0.125f, 0.125f, 0.0f));
+    assert(color[0 * 4 + 3] == expected_rgb565(0.875f, 0.875f, 0.0f));
+    glDeleteProgram(sprite);
+
+    // Built-in inputs are read-only and fragment-only.
+    const char *invalid[] = {
+        "void main() { gl_FragCoord = vec4(0.0); gl_FragColor = vec4(1.0); }",
+        "void main() { gl_FragColor = vec4(1.0); gl_FrontFacing = false; }",
+    };
+    for (const char *bad : invalid)
+    {
+        fxgl::ShaderModule rejected = {};
+        assert(!fxgl::compile_glsl(fxgl::ShaderStage::Fragment, bad, rejected));
+    }
+    fxgl::ShaderModule vertex_use = {};
+    assert(!fxgl::compile_glsl(fxgl::ShaderStage::Vertex,
+        "void main() { gl_Position = gl_FragCoord; }", vertex_use));
+    fxglReleaseCurrent();
+}
+
 void test_gles_mipmap_generation_and_level_uploads()
 {
     uint16_t color[16] = {};
@@ -2298,6 +2419,7 @@ int main()
     test_polygon_offset();
     test_sampler_array_uniforms();
     test_varying_arrays();
+    test_fragment_builtin_inputs();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

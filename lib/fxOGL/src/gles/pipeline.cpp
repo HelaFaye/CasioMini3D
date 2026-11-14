@@ -431,7 +431,9 @@ static bool process_fragment(
     void *user_data,
     RasterStats& stats,
     bool scissor_preclipped = false,
-    float depth_offset = 0.0f)
+    float depth_offset = 0.0f,
+    float reciprocal_w = 1.0f,
+    const float *point_coord = nullptr)
 {
     // Triangle bounds are intersected with the scissor rectangle before the
     // raster loop. Keep the check for points/lines, whose paths are not
@@ -474,9 +476,22 @@ static bool process_fragment(
         return false;
 
     float source[4] = {};
-    const FragmentInput input = {
-        varyings, varying_ddx, varying_ddy, varying_count
+    FragmentInput input = {
+        varyings, varying_ddx, varying_ddy, varying_count, {}, {}, front
     };
+    if (state.fragment_coordinates)
+    {
+        input.frag_coord[0] = static_cast<float>(x) + 0.5f;
+        input.frag_coord[1] = static_cast<float>(y) + 0.5f;
+        input.frag_coord[2] = state.depth_near +
+            (ndc_depth * 0.5f + 0.5f) * (state.depth_far - state.depth_near);
+        input.frag_coord[3] = reciprocal_w;
+        if (point_coord)
+        {
+            input.point_coord[0] = point_coord[0];
+            input.point_coord[1] = point_coord[1];
+        }
+    }
     if (!fragment_shader(input, source, user_data))
         return false;
     ++stats.shaded_fragments;
@@ -633,9 +648,15 @@ static bool rasterize_one(
     const bool stencil_active = state.stencil_enabled && surface.stencil;
     const bool opaque_color_fast_path =
         surface.color && !depth_active && !stencil_active &&
+        !state.fragment_coordinates &&
         !state.blend_enabled && state.color_write[0] &&
         state.color_write[1] && state.color_write[2];
-    const bool needs_interpolation = has_varyings || depth_active;
+    // gl_FragCoord needs depth and 1/w even without a depth test or
+    // varyings; without it these reduce to the original conditions.
+    const bool fragment_coordinates = state.fragment_coordinates;
+    const bool interpolate_depth = depth_active || fragment_coordinates;
+    const bool interpolate_w = has_varyings || fragment_coordinates;
+    const bool needs_interpolation = interpolate_w || interpolate_depth;
 
     /*
      * Edge equations are affine planes. Step them across the scanline rather
@@ -663,14 +684,14 @@ static bool rasterize_one(
         lambda1_dx = edge1_dx / area;
         lambda2_dx = edge2_dx / area;
 
-        if (depth_active)
+        if (interpolate_depth)
         {
             depth_dx =
                 lambda0_dx * vertices[0].z_over_w +
                 lambda1_dx * vertices[1].z_over_w +
                 lambda2_dx * vertices[2].z_over_w;
 
-            if (state.polygon_offset_fill)
+            if (depth_active && state.polygon_offset_fill)
             {
                 // o = factor * m + r * units, where m is the larger window
                 // depth slope; window depth is (far - near) / 2 per NDC unit.
@@ -687,7 +708,7 @@ static bool rasterize_one(
             }
         }
 
-        if (has_varyings)
+        if (interpolate_w)
         {
             reciprocal_w_dx =
                 lambda0_dx * vertices[0].inverse_w +
@@ -750,7 +771,7 @@ static bool rasterize_one(
             const float lambda1 = edge1 / area;
             const float lambda2 = edge2 / area;
 
-            if (depth_active)
+            if (interpolate_depth)
             {
                 ndc_depth =
                     lambda0 * vertices[0].z_over_w +
@@ -758,7 +779,7 @@ static bool rasterize_one(
                     lambda2 * vertices[2].z_over_w;
             }
 
-            if (has_varyings)
+            if (interpolate_w)
             {
                 reciprocal_w =
                     lambda0 * vertices[0].inverse_w +
@@ -847,7 +868,8 @@ static bool rasterize_one(
                         ++stats.tested_fragments;
                         float source[4] = {};
                         const FragmentInput fragment_input = {
-                            varyings, varyings_dx, varyings_dy, varying_count
+                            varyings, varyings_dx, varyings_dy, varying_count,
+                            {}, {}, front
                         };
                         if (fragment_shader(fragment_input, source, user_data))
                         {
@@ -866,7 +888,7 @@ static bool rasterize_one(
                             varyings, varyings_dx, varyings_dy,
                             varying_count, ndc_depth, front,
                             fragment_shader, user_data, stats, true,
-                            depth_offset))
+                            depth_offset, reciprocal_w))
                     {
                         wrote_any = true;
                     }
@@ -876,9 +898,9 @@ static bool rasterize_one(
             edge0 += edge0_dx;
             edge1 += edge1_dx;
             edge2 += edge2_dx;
-            if (depth_active)
+            if (interpolate_depth)
                 ndc_depth += depth_dx;
-            if (has_varyings)
+            if (interpolate_w)
             {
                 reciprocal_w += reciprocal_w_dx;
                 for (size_t i = 0; i < varying_count; ++i)
@@ -1162,11 +1184,22 @@ bool draw_point(
     {
         for (int64_t x = left; x < right; ++x)
         {
+            // gl_PointCoord: s grows to the right and t downwards across
+            // the square, from 0 to 1 (GLES uses an upper-left origin).
+            float point_coord[2] = {};
+            if (state.fragment_coordinates)
+            {
+                point_coord[0] = 0.5f +
+                    (static_cast<float>(x) + 0.5f - screen.x) / point_size;
+                point_coord[1] = 0.5f -
+                    (static_cast<float>(y) + 0.5f - screen.y) / point_size;
+            }
             if (process_fragment(
                     surface, state, static_cast<int>(x), static_cast<int>(y),
                     varyings, zero_derivatives, zero_derivatives,
                     varying_count, screen.z_over_w, true,
-                    fragment_shader, user_data, stats))
+                    fragment_shader, user_data, stats, false, 0.0f,
+                    screen.inverse_w, point_coord))
                 wrote_any = true;
         }
     }
@@ -1306,7 +1339,8 @@ bool draw_line(
         if (process_fragment(surface, state, x, y,
                 varyings, zero_derivatives, zero_derivatives,
                 varying_count, ndc_depth, true,
-                fragment_shader, user_data, stats))
+                fragment_shader, user_data, stats, false, 0.0f,
+                reciprocal_w))
             wrote_any = true;
     }
     return wrote_any;

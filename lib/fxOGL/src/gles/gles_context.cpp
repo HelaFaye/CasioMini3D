@@ -1284,6 +1284,21 @@ static bool execute_fragment(
         }
     }
 
+    if (module.uses_builtin_inputs)
+    {
+        runtime.frag_coord = {};
+        runtime.frag_coord.type = fxgl::ShaderType::Vec4;
+        for (size_t i = 0; i < 4; ++i)
+            runtime.frag_coord.data[i] = input.frag_coord[i];
+        runtime.front_facing = {};
+        runtime.front_facing.type = fxgl::ShaderType::Bool;
+        runtime.front_facing.data[0] = input.front_facing ? 1.0f : 0.0f;
+        runtime.point_coord = {};
+        runtime.point_coord.type = fxgl::ShaderType::Vec2;
+        runtime.point_coord.data[0] = input.point_coord[0];
+        runtime.point_coord.data[1] = input.point_coord[1];
+    }
+
     if (!fxgl::execute_glsl(module, runtime, sample_bound_texture, &invocation) ||
         runtime.fragment_color.type != fxgl::ShaderType::Vec4)
     {
@@ -1383,7 +1398,8 @@ static bool draw_vertex_triangle(
         execute_fragment,
         &invocation,
         nullptr,
-        invocation.varying_derivatives);
+        invocation.varying_derivatives,
+        invocation.program.fragment_shader->uses_fragment_coordinates);
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1407,7 +1423,8 @@ static bool draw_vertex_point(
         execute_fragment,
         &invocation,
         nullptr,
-        invocation.varying_derivatives);
+        invocation.varying_derivatives,
+        invocation.program.fragment_shader->uses_fragment_coordinates);
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1433,7 +1450,8 @@ static bool draw_vertex_line(
         execute_fragment,
         &invocation,
         nullptr,
-        invocation.varying_derivatives);
+        invocation.varying_derivatives,
+        invocation.program.fragment_shader->uses_fragment_coordinates);
     if (invocation.fragment_failed)
     {
         set_error(GL_INVALID_OPERATION);
@@ -4365,7 +4383,8 @@ static StencilFaceState convert_stencil_face(const StencilFace& face)
 static void build_pipeline_context(
     RenderSurface& surface,
     PipelineState& state,
-    bool varying_derivatives)
+    bool varying_derivatives,
+    bool fragment_coordinates)
 {
     fxgl_surface_t resolved = {};
     if (!resolve_draw_surface(resolved))
@@ -4387,6 +4406,7 @@ static void build_pipeline_context(
     // GLES shaders here cannot write depth or discard; skipping them for
     // depth-rejected fragments leaves every buffer unchanged.
     state.early_depth_test = true;
+    state.fragment_coordinates = fragment_coordinates;
     for (int i = 0; i < 4; ++i)
     {
         state.viewport[i] = g_context.viewport[i];
@@ -4425,13 +4445,15 @@ bool draw_clip_point(
     FragmentShader fragment_shader,
     void *user_data,
     RasterStats *stats,
-    bool varying_derivatives)
+    bool varying_derivatives,
+    bool fragment_coordinates)
 {
     if (!g_context.current)
         return false;
     RenderSurface surface = {};
     PipelineState state = {};
-    build_pipeline_context(surface, state, varying_derivatives);
+    build_pipeline_context(surface, state, varying_derivatives,
+                           fragment_coordinates);
     return fxgl::draw_point(surface, state, input, varying_count,
                             fragment_shader, user_data, stats);
 }
@@ -4442,13 +4464,15 @@ bool draw_clip_line(
     FragmentShader fragment_shader,
     void *user_data,
     RasterStats *stats,
-    bool varying_derivatives)
+    bool varying_derivatives,
+    bool fragment_coordinates)
 {
     if (!g_context.current)
         return false;
     RenderSurface surface = {};
     PipelineState state = {};
-    build_pipeline_context(surface, state, varying_derivatives);
+    build_pipeline_context(surface, state, varying_derivatives,
+                           fragment_coordinates);
     return fxgl::draw_line(surface, state, input, varying_count,
                            fragment_shader, user_data, stats);
 }
@@ -4459,14 +4483,16 @@ bool draw_clip_triangle(
     FragmentShader fragment_shader,
     void *user_data,
     RasterStats *stats,
-    bool varying_derivatives)
+    bool varying_derivatives,
+    bool fragment_coordinates)
 {
     if (!g_context.current)
         return false;
 
     RenderSurface surface = {};
     PipelineState state = {};
-    build_pipeline_context(surface, state, varying_derivatives);
+    build_pipeline_context(surface, state, varying_derivatives,
+                           fragment_coordinates);
     if (surface.width <= 0 || surface.height <= 0)
         return false;
 
