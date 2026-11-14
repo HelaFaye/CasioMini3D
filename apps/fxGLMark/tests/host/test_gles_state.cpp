@@ -2657,6 +2657,104 @@ void test_vertex_array_objects()
     fxglReleaseCurrent();
 }
 
+void test_sampler_objects()
+{
+    uint16_t color[2] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 1, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 2, 1);
+
+    GLuint samplers[2] = {};
+    glGenSamplers(2, samplers);
+    assert(glIsSampler(samplers[0]) == GL_TRUE);
+    assert(glIsSampler(0) == GL_FALSE);
+    GLint value = 0;
+    GLfloat float_value = 0.0f;
+    glGetSamplerParameteriv(samplers[0], GL_TEXTURE_MIN_FILTER, &value);
+    assert(value == GL_NEAREST_MIPMAP_LINEAR);
+    glGetSamplerParameteriv(samplers[0], GL_TEXTURE_WRAP_R, &value);
+    assert(value == GL_REPEAT);
+    glGetSamplerParameterfv(samplers[0], GL_TEXTURE_MAX_LOD, &float_value);
+    assert(float_value == 1000.0f);
+    glGetSamplerParameteriv(samplers[0], GL_TEXTURE_COMPARE_FUNC, &value);
+    assert(value == GL_LEQUAL);
+    assert(glGetError() == GL_NO_ERROR);
+
+    glSamplerParameteri(samplers[0], GL_TEXTURE_MAG_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glSamplerParameteri(samplers[0], GL_TEXTURE_COMPARE_MODE, GL_LINEAR);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glSamplerParameteri(samplers[0], 0x1234, GL_LINEAR);
+    assert(glGetError() == GL_INVALID_ENUM);
+    glSamplerParameteri(4242, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glBindSampler(2, samplers[0]);
+    assert(glGetError() == GL_INVALID_VALUE);
+    glBindSampler(0, 4242);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glSamplerParameterf(samplers[0], GL_TEXTURE_MIN_LOD, 1.5f);
+    glGetSamplerParameterfv(samplers[0], GL_TEXTURE_MIN_LOD, &float_value);
+    assert(float_value == 1.5f);
+    glSamplerParameteri(samplers[0], GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glGetSamplerParameteriv(samplers[0], GL_TEXTURE_COMPARE_MODE, &value);
+    assert(value == GL_COMPARE_REF_TO_TEXTURE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    // 2x2 base level (red, blue / blue, red) and a 1x1 green level 1. The
+    // texture itself samples without mipmaps.
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    const uint16_t base[4] = {0xf800, 0x001f, 0x001f, 0xf800};
+    const uint16_t level1 = 0x07e0;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, base);
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &level1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    static const GLchar sample[] =
+        "precision mediump float; uniform sampler2D u_texture; varying vec2 v_uv;\n"
+        "void main() { gl_FragColor = texture2D(u_texture, v_uv); }\n";
+    // The single pixel row samples v = 0.5: base row 1 (blue, red).
+    draw_texture_quad(sample, false);
+    assert(color[0] == 0x001f && color[1] == 0xf800);
+
+    // The bound sampler's mipmapped filter and LOD floor select level 1.
+    glSamplerParameteri(samplers[1], GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glSamplerParameteri(samplers[1], GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glSamplerParameterf(samplers[1], GL_TEXTURE_MIN_LOD, 1.0f);
+    glBindSampler(0, samplers[1]);
+    glGetIntegerv(GL_SAMPLER_BINDING, &value);
+    assert(value == static_cast<GLint>(samplers[1]));
+    draw_texture_quad(sample, false);
+    assert(color[0] == 0x07e0 && color[1] == 0x07e0);
+    GLint texture_filter = 0;
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &texture_filter);
+    assert(texture_filter == GL_NEAREST); // Texture state is untouched.
+
+    // The draw's own LOD is 1 (v spans two texels in one pixel); a maximum
+    // LOD of 0 clamps it back to magnification from level 0.
+    glSamplerParameterf(samplers[1], GL_TEXTURE_MIN_LOD, -1000.0f);
+    draw_texture_quad(sample, false);
+    assert(color[0] == 0x07e0 && color[1] == 0x07e0);
+    glSamplerParameterf(samplers[1], GL_TEXTURE_MAX_LOD, 0.0f);
+    draw_texture_quad(sample, false);
+    assert(color[0] == 0x001f && color[1] == 0xf800);
+
+    // Deleting a bound sampler unbinds it; the texture's state applies again.
+    glDeleteSamplers(2, samplers);
+    assert(glIsSampler(samplers[1]) == GL_FALSE);
+    glGetIntegerv(GL_SAMPLER_BINDING, &value);
+    assert(value == 0);
+    draw_texture_quad(sample, false);
+    assert(color[0] == 0x001f && color[1] == 0xf800);
+
+    glDeleteTextures(1, &texture);
+    assert(glGetError() == GL_NO_ERROR);
+    fxglReleaseCurrent();
+}
+
 void test_texture_lookup_variants()
 {
     uint16_t color[16] = {};
@@ -2898,6 +2996,7 @@ int main()
     test_implementation_limits();
     test_texture_formats();
     test_vertex_array_objects();
+    test_sampler_objects();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

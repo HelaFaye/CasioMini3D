@@ -8,6 +8,13 @@
 #include <GLES2/gl2.h>
 
 #define GL_VERTEX_ARRAY_BINDING 0x85B5
+#define GL_SAMPLER_BINDING 0x8919
+#define GL_TEXTURE_WRAP_R 0x8072
+#define GL_TEXTURE_MIN_LOD 0x813A
+#define GL_TEXTURE_MAX_LOD 0x813B
+#define GL_TEXTURE_COMPARE_MODE 0x884C
+#define GL_TEXTURE_COMPARE_FUNC 0x884D
+#define GL_COMPARE_REF_TO_TEXTURE 0x884E
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,6 +28,22 @@ void glGenVertexArrays(GLsizei n, GLuint *arrays);
 void glDeleteVertexArrays(GLsizei n, const GLuint *arrays);
 void glBindVertexArray(GLuint array);
 GLboolean glIsVertexArray(GLuint array);
+
+/* Sampler objects (up to eight). A sampler bound to a texture unit replaces
+   the bound texture's filters and wrap modes, and clamps the level of detail
+   to [GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD]. GL_TEXTURE_WRAP_R and the
+   compare mode/function are stored but have no effect: fxOGL has neither 3D
+   nor depth textures. */
+void glGenSamplers(GLsizei count, GLuint *samplers);
+void glDeleteSamplers(GLsizei count, const GLuint *samplers);
+GLboolean glIsSampler(GLuint sampler);
+void glBindSampler(GLuint unit, GLuint sampler);
+void glSamplerParameteri(GLuint sampler, GLenum pname, GLint param);
+void glSamplerParameteriv(GLuint sampler, GLenum pname, const GLint *param);
+void glSamplerParameterf(GLuint sampler, GLenum pname, GLfloat param);
+void glSamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat *param);
+void glGetSamplerParameteriv(GLuint sampler, GLenum pname, GLint *params);
+void glGetSamplerParameterfv(GLuint sampler, GLenum pname, GLfloat *params);
 
 #ifdef __cplusplus
 }

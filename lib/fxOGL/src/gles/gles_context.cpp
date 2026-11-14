@@ -15,6 +15,7 @@ namespace
 {
 constexpr size_t FXGL_MAX_BUFFERS = 16;
 constexpr size_t FXGL_MAX_VERTEX_ARRAYS = 8;
+constexpr size_t FXGL_MAX_SAMPLERS = 8;
 constexpr size_t FXGL_MAX_BUFFER_BYTES = 128u * 1024u;
 constexpr GLuint FXGL_MAX_VERTEX_ATTRIBS = 8;
 constexpr size_t FXGL_MAX_TEXTURES = 8;
@@ -113,6 +114,23 @@ struct VertexArrayObject
     bool alive = false; /* Bound at least once: glIsVertexArray is true. */
 };
 
+/* GLES 3.0 sampler object. Bound to a texture unit, its parameters
+   replace the bound texture's. Compare mode and function are stored and
+   queryable; they affect only depth textures, which fxOGL does not have. */
+struct SamplerObject
+{
+    GLenum min_filter = GL_NEAREST_MIPMAP_LINEAR;
+    GLenum mag_filter = GL_LINEAR;
+    GLenum wrap_s = GL_REPEAT;
+    GLenum wrap_t = GL_REPEAT;
+    GLenum wrap_r = GL_REPEAT;
+    GLfloat min_lod = -1000.0f;
+    GLfloat max_lod = 1000.0f;
+    GLenum compare_mode = GL_NONE;
+    GLenum compare_func = GL_LEQUAL;
+    bool reserved = false;
+};
+
 struct StencilFace
 {
     GLenum function = GL_ALWAYS;
@@ -146,6 +164,8 @@ struct Context
     GLuint framebuffer_binding = 0;
     GLuint renderbuffer_binding = 0;
     GLuint texture_binding_2d[FXGL_MAX_TEXTURE_UNITS] = {};
+    SamplerObject samplers[FXGL_MAX_SAMPLERS] = {};
+    GLuint sampler_binding[FXGL_MAX_TEXTURE_UNITS] = {};
     size_t active_texture_unit = 0;
     GLint unpack_alignment = 4;
     GLint pack_alignment = 4;
@@ -304,12 +324,13 @@ static TextureObject *bound_texture(GLenum target)
     return object;
 }
 
-static gfx::TextureSampler make_sampler(const TextureObject& object)
+static gfx::TextureSampler make_sampler(
+    GLenum min_filter, GLenum mag_filter, GLenum wrap_s, GLenum wrap_t)
 {
     gfx::TextureSampler sampler = {};
-    sampler.filter = object.mag_filter == GL_LINEAR
+    sampler.filter = mag_filter == GL_LINEAR
         ? gfx::TextureFilter::Bilinear : gfx::TextureFilter::Nearest;
-    switch (object.min_filter)
+    switch (min_filter)
     {
         case GL_NEAREST:
             sampler.min_filter = gfx::TextureMinFilter::Nearest;
@@ -333,14 +354,14 @@ static gfx::TextureSampler make_sampler(const TextureObject& object)
             sampler.min_filter = gfx::TextureMinFilter::Nearest;
             break;
     }
-    sampler.address_u = object.wrap_s == GL_REPEAT
+    sampler.address_u = wrap_s == GL_REPEAT
         ? gfx::TextureAddressMode::Repeat :
-        (object.wrap_s == GL_MIRRORED_REPEAT
+        (wrap_s == GL_MIRRORED_REPEAT
             ? gfx::TextureAddressMode::MirroredRepeat
             : gfx::TextureAddressMode::Clamp);
-    sampler.address_v = object.wrap_t == GL_REPEAT
+    sampler.address_v = wrap_t == GL_REPEAT
         ? gfx::TextureAddressMode::Repeat :
-        (object.wrap_t == GL_MIRRORED_REPEAT
+        (wrap_t == GL_MIRRORED_REPEAT
             ? gfx::TextureAddressMode::MirroredRepeat
             : gfx::TextureAddressMode::Clamp);
     return sampler;
@@ -1005,6 +1026,9 @@ struct CachedTextureBinding
     bool valid;
     bool nearest_repeat_power_of_two;
     bool requires_derivatives;
+    bool clamp_lod; /* A bound sampler narrows the LOD range. */
+    float min_lod;
+    float max_lod;
     gfx::TextureNearestRepeatPow2Sampler repeat_sampler;
 };
 
@@ -1161,8 +1185,12 @@ static void initialize_draw_invocation(
     for (size_t unit = 0; unit < FXGL_MAX_TEXTURE_UNITS; ++unit)
     {
         CachedTextureBinding& cached = invocation.textures[unit];
+        float lod_range[2] = {};
         cached.valid = fxgl::get_texture_binding(
-            unit, cached.view, cached.sampler);
+            unit, cached.view, cached.sampler, lod_range);
+        cached.min_lod = lod_range[0];
+        cached.max_lod = lod_range[1];
+        cached.clamp_lod = lod_range[0] != -1000.0f || lod_range[1] != 1000.0f;
         cached.nearest_repeat_power_of_two = cached.valid &&
             gfx::prepare_texture_nearest_repeat_pow2_sampler(
                 cached.view, cached.sampler, cached.repeat_sampler);
@@ -1284,6 +1312,8 @@ static bool sample_bound_texture(
         const float rho = std::max(rho_x, rho_y);
         lod = rho > 0.0f ? log2f(rho) : 0.0f;
     }
+    if (cached.clamp_lod)
+        lod = std::min(std::max(lod, cached.min_lod), cached.max_lod);
 
     const bool minifying = lod > 0.0f;
     const bool linear_filter = minifying
@@ -3132,6 +3162,243 @@ void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params)
     }
 }
 
+static SamplerObject *sampler_slot(GLuint name)
+{
+    if (name == 0 || name > FXGL_MAX_SAMPLERS)
+        return nullptr;
+    SamplerObject& object = g_context.samplers[name - 1];
+    return object.reserved ? &object : nullptr;
+}
+
+void glGenSamplers(GLsizei count, GLuint *samplers)
+{
+    if (!has_context()) return;
+    if (count < 0 || (count > 0 && !samplers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    size_t available = 0;
+    for (const SamplerObject& object : g_context.samplers)
+        if (!object.reserved) ++available;
+    if (available < static_cast<size_t>(count))
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+    GLsizei generated = 0;
+    for (size_t i = 0; i < FXGL_MAX_SAMPLERS && generated < count; ++i)
+    {
+        if (!g_context.samplers[i].reserved)
+        {
+            g_context.samplers[i] = {};
+            g_context.samplers[i].reserved = true;
+            samplers[generated++] = static_cast<GLuint>(i + 1);
+        }
+    }
+}
+
+void glDeleteSamplers(GLsizei count, const GLuint *samplers)
+{
+    if (!has_context()) return;
+    if (count < 0 || (count > 0 && !samplers))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    for (GLsizei i = 0; i < count; ++i)
+    {
+        SamplerObject *object = sampler_slot(samplers[i]);
+        if (!object)
+            continue;
+        // A deleted sampler is unbound from every unit it was bound to.
+        for (GLuint& binding : g_context.sampler_binding)
+            if (binding == samplers[i])
+                binding = 0;
+        *object = {};
+    }
+}
+
+GLboolean glIsSampler(GLuint sampler)
+{
+    if (!has_context()) return GL_FALSE;
+    return sampler_slot(sampler) ? GL_TRUE : GL_FALSE;
+}
+
+void glBindSampler(GLuint unit, GLuint sampler)
+{
+    if (!has_context()) return;
+    if (unit >= FXGL_MAX_TEXTURE_UNITS)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    if (sampler != 0 && !sampler_slot(sampler))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    g_context.sampler_binding[unit] = sampler;
+}
+
+static bool is_compare_function(GLenum function)
+{
+    return function >= GL_NEVER && function <= GL_ALWAYS;
+}
+
+/* Set one sampler parameter. Enum-valued parameters take the integer form;
+   the level-of-detail limits take the float form. */
+static void set_sampler_parameter(
+    GLuint sampler, GLenum pname, GLint enum_value, GLfloat float_value)
+{
+    if (!has_context()) return;
+    SamplerObject *object = sampler_slot(sampler);
+    if (!object)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    const GLenum value = static_cast<GLenum>(enum_value);
+    switch (pname)
+    {
+        case GL_TEXTURE_MIN_FILTER:
+            if (value != GL_NEAREST && value != GL_LINEAR &&
+                value != GL_NEAREST_MIPMAP_NEAREST &&
+                value != GL_LINEAR_MIPMAP_NEAREST &&
+                value != GL_NEAREST_MIPMAP_LINEAR &&
+                value != GL_LINEAR_MIPMAP_LINEAR)
+                break;
+            object->min_filter = value;
+            return;
+        case GL_TEXTURE_MAG_FILTER:
+            if (value != GL_NEAREST && value != GL_LINEAR)
+                break;
+            object->mag_filter = value;
+            return;
+        case GL_TEXTURE_WRAP_S:
+        case GL_TEXTURE_WRAP_T:
+        case GL_TEXTURE_WRAP_R:
+            if (value != GL_CLAMP_TO_EDGE && value != GL_REPEAT &&
+                value != GL_MIRRORED_REPEAT)
+                break;
+            (pname == GL_TEXTURE_WRAP_S ? object->wrap_s :
+             pname == GL_TEXTURE_WRAP_T ? object->wrap_t : object->wrap_r) = value;
+            return;
+        case GL_TEXTURE_MIN_LOD:
+        case GL_TEXTURE_MAX_LOD:
+            if (!isfinite(float_value))
+            {
+                set_error(GL_INVALID_VALUE);
+                return;
+            }
+            (pname == GL_TEXTURE_MIN_LOD ? object->min_lod : object->max_lod) =
+                float_value;
+            return;
+        case GL_TEXTURE_COMPARE_MODE:
+            if (value != GL_NONE && value != GL_COMPARE_REF_TO_TEXTURE)
+                break;
+            object->compare_mode = value;
+            return;
+        case GL_TEXTURE_COMPARE_FUNC:
+            if (!is_compare_function(value))
+                break;
+            object->compare_func = value;
+            return;
+        default:
+            break;
+    }
+    set_error(GL_INVALID_ENUM);
+}
+
+void glSamplerParameteri(GLuint sampler, GLenum pname, GLint param)
+{
+    set_sampler_parameter(sampler, pname, param, static_cast<GLfloat>(param));
+}
+
+void glSamplerParameterf(GLuint sampler, GLenum pname, GLfloat param)
+{
+    // Enum values are exact in a float; anything else is not a valid enum.
+    const GLint enum_value = isfinite(param) && param >= 0.0f && param < 1e9f
+        ? static_cast<GLint>(param) : -1;
+    set_sampler_parameter(sampler, pname, enum_value, param);
+}
+
+void glSamplerParameteriv(GLuint sampler, GLenum pname, const GLint *param)
+{
+    if (!has_context()) return;
+    if (!param)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glSamplerParameteri(sampler, pname, param[0]);
+}
+
+void glSamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat *param)
+{
+    if (!has_context()) return;
+    if (!param)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    glSamplerParameterf(sampler, pname, param[0]);
+}
+
+/* Read one sampler parameter as a float; enum values are exact. */
+static bool get_sampler_parameter(GLuint sampler, GLenum pname, GLfloat& value)
+{
+    if (!has_context()) return false;
+    const SamplerObject *object = sampler_slot(sampler);
+    if (!object)
+    {
+        set_error(GL_INVALID_OPERATION);
+        return false;
+    }
+    switch (pname)
+    {
+        case GL_TEXTURE_MIN_FILTER: value = static_cast<GLfloat>(object->min_filter); return true;
+        case GL_TEXTURE_MAG_FILTER: value = static_cast<GLfloat>(object->mag_filter); return true;
+        case GL_TEXTURE_WRAP_S: value = static_cast<GLfloat>(object->wrap_s); return true;
+        case GL_TEXTURE_WRAP_T: value = static_cast<GLfloat>(object->wrap_t); return true;
+        case GL_TEXTURE_WRAP_R: value = static_cast<GLfloat>(object->wrap_r); return true;
+        case GL_TEXTURE_MIN_LOD: value = object->min_lod; return true;
+        case GL_TEXTURE_MAX_LOD: value = object->max_lod; return true;
+        case GL_TEXTURE_COMPARE_MODE: value = static_cast<GLfloat>(object->compare_mode); return true;
+        case GL_TEXTURE_COMPARE_FUNC: value = static_cast<GLfloat>(object->compare_func); return true;
+        default:
+            set_error(GL_INVALID_ENUM);
+            return false;
+    }
+}
+
+void glGetSamplerParameterfv(GLuint sampler, GLenum pname, GLfloat *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    GLfloat value = 0.0f;
+    if (get_sampler_parameter(sampler, pname, value))
+        params[0] = value;
+}
+
+void glGetSamplerParameteriv(GLuint sampler, GLenum pname, GLint *params)
+{
+    if (!has_context()) return;
+    if (!params)
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    GLfloat value = 0.0f;
+    if (get_sampler_parameter(sampler, pname, value))
+        // Integer queries of float state round to the nearest integer.
+        params[0] = static_cast<GLint>(floorf(value + 0.5f));
+}
+
 /* Texture upload formats. GLES 2.0 pairs each format with its types:
    RGB with UNSIGNED_BYTE or UNSIGNED_SHORT_5_6_5; RGBA with UNSIGNED_BYTE,
    UNSIGNED_SHORT_4_4_4_4 or UNSIGNED_SHORT_5_5_5_1; LUMINANCE, ALPHA and
@@ -4371,6 +4638,10 @@ void glGetIntegerv(GLenum pname, GLint *data)
             data[0] = static_cast<GLint>(
                 GL_TEXTURE0 + g_context.active_texture_unit);
             break;
+        case GL_SAMPLER_BINDING:
+            data[0] = static_cast<GLint>(
+                g_context.sampler_binding[g_context.active_texture_unit]);
+            break;
         case GL_TEXTURE_BINDING_2D:
             data[0] = static_cast<GLint>(
                 g_context.texture_binding_2d[g_context.active_texture_unit]);
@@ -4809,7 +5080,8 @@ void report_context_error(unsigned int error)
 bool get_texture_binding(
     size_t unit,
     gfx::Texture2DView& view,
-    gfx::TextureSampler& sampler)
+    gfx::TextureSampler& sampler,
+    float *lod_range)
 {
     if (!g_context.current || unit >= FXGL_MAX_TEXTURE_UNITS)
         return false;
@@ -4841,7 +5113,23 @@ bool get_texture_binding(
     view.mip_levels = g_texture_mip_views[object_index];
     view.mip_level_count = static_cast<uint8_t>(level_count);
 
-    sampler = make_sampler(*object);
+    const SamplerObject *bound_sampler = nullptr;
+    const GLuint sampler_name = g_context.sampler_binding[unit];
+    if (sampler_name != 0 && sampler_name <= FXGL_MAX_SAMPLERS &&
+        g_context.samplers[sampler_name - 1].reserved)
+        bound_sampler = &g_context.samplers[sampler_name - 1];
+    if (bound_sampler)
+        sampler = make_sampler(bound_sampler->min_filter,
+            bound_sampler->mag_filter, bound_sampler->wrap_s,
+            bound_sampler->wrap_t);
+    else
+        sampler = make_sampler(object->min_filter, object->mag_filter,
+            object->wrap_s, object->wrap_t);
+    if (lod_range)
+    {
+        lod_range[0] = bound_sampler ? bound_sampler->min_lod : -1000.0f;
+        lod_range[1] = bound_sampler ? bound_sampler->max_lod : 1000.0f;
+    }
     return gfx::texture_valid(view) && gfx::sampler_valid(sampler);
 }
 

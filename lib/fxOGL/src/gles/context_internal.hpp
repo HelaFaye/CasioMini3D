@@ -10,10 +10,14 @@
 namespace fxgl
 {
 
+/* Resolve a unit's texture and sampling state (from the bound sampler
+   object when there is one). lod_range, when given, receives the
+   [min_lod, max_lod] clamp; [-1000, 1000] means unclamped. */
 bool get_texture_binding(
     size_t unit,
     gfx::Texture2DView& view,
-    gfx::TextureSampler& sampler);
+    gfx::TextureSampler& sampler,
+    float *lod_range = nullptr);
 
 bool draw_clip_point(
     const ClipVertex& input,
