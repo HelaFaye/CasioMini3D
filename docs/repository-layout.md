@@ -14,7 +14,9 @@ application, historical experiments and project documentation.
 │   └── fxGLMark/
 │       ├── assets/        # fxSDK-converted application assets
 │       ├── src/           # Benchmark UI, scenes and Gint integration
-│       └── tests/host/    # Host regression suite and platform stubs
+│       ├── tests/emulator/ # fx-CG50 emulator GLES regression add-in
+│       ├── tests/host/    # Host regression suite and platform stubs
+│       └── tests/profile/ # Golden frames and host model of device cost
 ├── archive/
 │   ├── renderer-v1/
 │   ├── renderer-v2/

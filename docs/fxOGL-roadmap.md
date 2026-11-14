@@ -82,6 +82,11 @@ Recent measured optimizations include:
   replacement reproduces the original float result exactly (checked over
   all 2^32 inputs) and fxGLMark frames are bit-identical.
 
+The host tools behind this work live in `apps/fxGLMark/tests/profile/`: a
+golden-frame test (run by host CI) that proves a change leaves every
+fxGLMark frame bit-identical, and a soft-float cost model of the device
+(`profile.sh`) with its calibration against these measurements.
+
 Measured on a physical fx-CG50 with the optimized build (commit `67ac1cd`),
 against the preceding `52798af` run (24 frames of 144 triangles):
 

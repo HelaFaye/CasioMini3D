@@ -88,6 +88,24 @@ target_include_directories(glmark2_tests PRIVATE
 target_link_libraries(glmark2_tests PRIVATE fxOGL::fxOGL)
 add_test(NAME fxGLMark_port COMMAND glmark2_tests)
 
+# Golden-frame regression: render every fxGLMark scene at 396x224 and compare
+# hashes of the color and depth buffers with the stored reference. Floating
+# point contraction is disabled so the hashes do not depend on whether the
+# host compiler fuses multiply-adds (the fx-CG50 build never does).
+target_compile_options(fxogl PRIVATE -ffp-contract=off)
+add_executable(fxglmark_scenes
+    ${APP_ROOT}/tests/profile/scenes.cpp
+    ${APP_SRC}/glmark2/glmark2.cpp
+)
+target_compile_features(fxglmark_scenes PRIVATE cxx_std_20)
+target_compile_options(fxglmark_scenes PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+target_include_directories(fxglmark_scenes PRIVATE
+    ${HOST_STUBS} ${APP_SRC} ${FXOGL_INCLUDE} ${FXOGL_SRC}
+)
+target_link_libraries(fxglmark_scenes PRIVATE fxOGL::fxOGL)
+add_test(NAME fxglmark_golden_frames
+    COMMAND fxglmark_scenes --check ${APP_ROOT}/tests/profile/golden_frames.txt)
+
 # Compile the real calculator entry point against small Gint/fxlibc stubs.
 add_library(fxglmark_main_compile OBJECT ${APP_SRC}/main.cpp)
 target_compile_features(fxglmark_main_compile PRIVATE cxx_std_20)
