@@ -219,6 +219,32 @@ static const char *const gouraud_fragment_shader =
     "varying vec4 v_color;\n"
     "void main() { gl_FragColor = v_color; }\n";
 
+/* shading:shading=gouraud: per-vertex Blinn-Phong with a point light, so
+   the scene costs more vertex work than build's directional diffuse. The
+   rotation-only u_model puts the sphere centre at the origin and the camera
+   at (0, 0, 3.2). */
+static const char *const shading_vertex_shader =
+    "#version 100\n"
+    "attribute vec3 a_position;\n"
+    "attribute vec3 a_normal;\n"
+    "uniform mat4 u_mvp;\n"
+    "uniform mat4 u_model;\n"
+    "uniform vec3 u_light_position;\n"
+    "varying vec4 v_color;\n"
+    "void main() {\n"
+    "  vec3 position = (u_model * vec4(a_position, 1.0)).xyz;\n"
+    "  vec3 n = normalize((u_model * vec4(a_normal, 0.0)).xyz);\n"
+    "  vec3 l = normalize(u_light_position - position);\n"
+    "  vec3 v = normalize(vec3(0.0, 0.0, 3.2) - position);\n"
+    "  float diffuse = max(dot(n, l), 0.0);\n"
+    "  float specular = diffuse > 0.0\n"
+    "      ? pow(max(dot(n, normalize(l + v)), 0.0), 24.0) : 0.0;\n"
+    "  vec3 base = vec3(0.86, 0.36, 0.10);\n"
+    "  vec3 color = base * (0.15 + 0.85 * diffuse) + vec3(0.7) * specular;\n"
+    "  v_color = vec4(clamp(color, 0.0, 1.0), 1.0);\n"
+    "  gl_Position = u_mvp * vec4(a_position, 1.0);\n"
+    "}\n";
+
 static const char *const texture_vertex_shader =
     "#version 100\n"
     "attribute vec3 a_position;\n"
@@ -283,6 +309,7 @@ static bool link_program(
     const char *vertex_source,
     const char *fragment_source,
     bool textured,
+    const char *light_uniform,
     char *error,
     size_t error_capacity)
 {
@@ -326,7 +353,7 @@ static bool link_program(
     if (!textured)
     {
         instance.model_location = glGetUniformLocation(program, "u_model");
-        instance.light_location = glGetUniformLocation(program, "u_light_dir");
+        instance.light_location = glGetUniformLocation(program, light_uniform);
     }
     else
     {
@@ -785,10 +812,13 @@ bool prepare_scene(
     instance.triangle_count = static_cast<uint32_t>(VERTEX_COUNT / 3);
 
     const bool textured = request.scene == SceneId::Texture;
+    const bool shading = request.scene == SceneId::Shading;
     if (!link_program(instance,
-            textured ? texture_vertex_shader : gouraud_vertex_shader,
+            textured ? texture_vertex_shader
+                     : shading ? shading_vertex_shader : gouraud_vertex_shader,
             textured ? texture_fragment_shader : gouraud_fragment_shader,
-            textured, error, error_capacity))
+            textured, shading ? "u_light_position" : "u_light_dir",
+            error, error_capacity))
     {
         finish_scene(instance);
         return false;
@@ -809,7 +839,9 @@ bool prepare_scene(
         return false;
     }
 
-    if (!textured)
+    if (shading)
+        glUniform3f(instance.light_location, 2.0f, 2.4f, 3.0f);
+    else if (!textured)
         glUniform3f(instance.light_location, 0.35f, 0.75f, 0.55f);
 
     if (glGetError() != GL_NO_ERROR)

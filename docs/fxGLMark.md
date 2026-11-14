@@ -39,7 +39,7 @@ sampling, depth testing, framebuffer clears and Gint presentation.
 | Build / VBO | `build:use-vbo=true` | Same mesh through a vertex buffer object |
 | Texture / nearest | `texture:texture-filter=nearest` | RGB565 generated texture, nearest repeat sampling |
 | Texture / linear | `texture:texture-filter=linear` | Same geometry/texture with bilinear sampling |
-| Shading / Gouraud | `shading:shading=gouraud` | Vertex lighting, normal transformation and interpolated fragment color |
+| Shading / Gouraud | `shading:shading=gouraud` | Per-vertex Blinn-Phong point light (diffuse and specular), normal transformation and interpolated fragment color; heavier vertex work than `build` |
 
 The geometry workloads use a compact procedural low-resolution UV sphere
 (6 latitude bands by 12 longitude sectors, 144 triangles). It is specific to

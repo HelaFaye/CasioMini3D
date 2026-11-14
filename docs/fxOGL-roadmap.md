@@ -194,7 +194,7 @@ Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
 
 ## Priorities
 
-1. Make the Gouraud scene a distinct workload.
+1. Add alpha, luminance and RGBA texture formats.
 2. Add additional texture formats and close remaining texture-completeness and pixel-store edge cases.
 3. Increase coverage of GLES state, queries, errors and resource lifetime.
 4. Add differential tests for every new shader and pipeline optimization.
