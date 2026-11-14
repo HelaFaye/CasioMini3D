@@ -32,6 +32,8 @@
 #define GL_MEDIUM_INT                     0x8DF4
 #define GL_HIGH_INT                       0x8DF5
 #define GL_CURRENT_VERTEX_ATTRIB          0x8626
+#define GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS 0x8B4C
+#define GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS 0x8B4D
 
 #ifdef __cplusplus
 extern "C" {

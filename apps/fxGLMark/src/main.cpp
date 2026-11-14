@@ -294,6 +294,8 @@ static bool microbench_texture_sample(
     float,
     float,
     float,
+    bool,
+    float,
     float rgba[4],
     void *user_data)
 {

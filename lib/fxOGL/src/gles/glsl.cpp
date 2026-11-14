@@ -405,6 +405,46 @@ static bool is_numeric(ShaderType type)
            is_vector(type) || is_int_vector(type) || is_matrix(type);
 }
 
+/* Result type of a GLSL ES 1.00 arithmetic operator, shared by the
+   compiler and the VM so the two cannot disagree. Multiplication first
+   tries the linear-algebra products (matrix x vector, vector x matrix,
+   matrix x matrix). Otherwise + - * / are component-wise: both operands
+   share a float or int base type (there are no implicit conversions) and
+   are either the same type or a scalar with a vector or matrix, in which
+   case the scalar applies to every component. */
+static ShaderType arithmetic_result(ShaderOp op, ShaderType left, ShaderType right)
+{
+    if (op == ShaderOp::Multiply)
+    {
+        const size_t left_dimension = matrix_dimension(left);
+        const size_t right_dimension = matrix_dimension(right);
+        if (left_dimension != 0 && right == vector_type(left_dimension))
+            return right;
+        if (right_dimension != 0 && left == vector_type(right_dimension))
+            return left;
+        if (left_dimension != 0 && left_dimension == right_dimension)
+            return left;
+    }
+    const auto base = [](ShaderType type)
+    {
+        if (type == ShaderType::Float || is_vector(type) || is_matrix(type))
+            return ShaderType::Float;
+        if (type == ShaderType::Int || is_int_vector(type))
+            return ShaderType::Int;
+        return ShaderType::Invalid;
+    };
+    const ShaderType left_base = base(left);
+    if (left_base == ShaderType::Invalid || left_base != base(right))
+        return ShaderType::Invalid;
+    if (left == right)
+        return left;
+    if (left == left_base)
+        return right;
+    if (right == left_base)
+        return left;
+    return ShaderType::Invalid;
+}
+
 class Parser
 {
 public:
@@ -1530,8 +1570,27 @@ private:
         }
         const ResolvedVariable element_base = target;
         bool matrix_column_assignment = false;
+        bool vector_element_assignment = false;
         uint8_t matrix_column = 0;
-        if (accept_punctuation('['))
+        if (is_any_vector(element_base.type) && accept_punctuation('['))
+        {
+            // v[k] = x writes one component, like the swizzle store v.x = x.
+            const size_t dimension = vector_dimension(element_base.type);
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 0.0f || current_.number >= dimension)
+            {
+                fail("vector index must be a constant in range");
+                return;
+            }
+            target.is_swizzle = true;
+            target.components[0] = static_cast<uint8_t>(current_.number);
+            target.type = vector_base_type(element_base.type);
+            advance();
+            if (!expect_punctuation(']'))
+                return;
+            vector_element_assignment = true;
+        }
+        else if (accept_punctuation('['))
         {
             const size_t dimension = matrix_dimension(element_base.type);
             if (dimension == 0 || element_base.storage != Storage::Local ||
@@ -1551,10 +1610,17 @@ private:
             expect_punctuation(']');
             matrix_column_assignment = true;
             target.type = vector_type(dimension);
+            if (is_punctuation('[') || is_punctuation('.'))
+            {
+                fail("assign a whole matrix column; element writes are unsupported");
+                return;
+            }
             emit_simple(ShaderOp::LoadLocal, element_base.type, element_base.index);
         }
-        const bool swizzle_assignment = !matrix_column_assignment && is_punctuation('.');
-        if (swizzle_assignment)
+        const bool dot_swizzle = !matrix_column_assignment &&
+            !vector_element_assignment && is_punctuation('.');
+        const bool swizzle_assignment = dot_swizzle || vector_element_assignment;
+        if (dot_swizzle)
         {
             if (!is_any_vector(element_base.type))
             {
@@ -2100,55 +2166,14 @@ private:
             return ShaderType::Invalid;
         }
 
-        if (std::strcmp(operation, "+") == 0 ||
-            std::strcmp(operation, "-") == 0)
-        {
-            if (left == right &&
-                (left == ShaderType::Float || left == ShaderType::Int ||
-                 is_vector(left) || is_int_vector(left) || is_matrix(left)))
-                return left;
-            return ShaderType::Invalid;
-        }
-
-        if (std::strcmp(operation, "*") == 0)
-        {
-            const size_t left_dimension = matrix_dimension(left);
-            const size_t right_dimension = matrix_dimension(right);
-            if (left_dimension != 0 && right == vector_type(left_dimension))
-                return right;
-            if (right_dimension != 0 && left == vector_type(right_dimension))
-                return left;
-            if (left_dimension != 0 && left_dimension == right_dimension)
-                return left;
-            if (left_dimension != 0 && right == ShaderType::Float)
-                return left;
-            if (left == ShaderType::Float && right_dimension != 0)
-                return right;
-            if (left == right &&
-                (left == ShaderType::Float || left == ShaderType::Int ||
-                 is_vector(left) || is_int_vector(left)))
-                return left;
-            if (left == ShaderType::Float &&
-                (is_vector(right) || is_int_vector(right)))
-                return right;
-            if (right == ShaderType::Float &&
-                (is_vector(left) || is_int_vector(left)))
-                return left;
-            return ShaderType::Invalid;
-        }
-
-        if (std::strcmp(operation, "/") == 0)
-        {
-            if (left == right &&
-                (left == ShaderType::Float || is_vector(left) || is_matrix(left)))
-                return left;
-            if ((is_vector(left) || is_int_vector(left) || is_matrix(left)) &&
-                right == ShaderType::Float)
-                return left;
-            if (left == ShaderType::Float && is_matrix(right))
-                return right;
-            return ShaderType::Invalid;
-        }
+        const ShaderOp arithmetic =
+            std::strcmp(operation, "+") == 0 ? ShaderOp::Add :
+            std::strcmp(operation, "-") == 0 ? ShaderOp::Subtract :
+            std::strcmp(operation, "*") == 0 ? ShaderOp::Multiply :
+            std::strcmp(operation, "/") == 0 ? ShaderOp::Divide :
+            ShaderOp::PushFloat;
+        if (arithmetic != ShaderOp::PushFloat)
+            return arithmetic_result(arithmetic, left, right);
 
         return ShaderType::Invalid;
     }
@@ -2283,35 +2308,54 @@ private:
 
     /* Optional constant `[column]` applied to a matrix value already on the
        stack. Leaves non-indexed expressions untouched. */
+    /* Constant subscripts on a value already on the stack: `m[c]` selects a
+       matrix column and `v[k]` a vector component, chained as in m[c][k].
+       Leaves expressions without a subscript untouched. */
     void parse_matrix_column_read(ShaderType& result_type)
     {
-        if (!is_punctuation('['))
-            return;
-        const size_t dimension = matrix_dimension(result_type);
-        if (dimension == 0)
+        while (!failed_ && is_punctuation('['))
         {
-            fail("indexing is supported only for matrices and arrays");
-            result_type = ShaderType::Invalid;
-            return;
+            const size_t columns = matrix_dimension(result_type);
+            const size_t components = is_any_vector(result_type)
+                ? vector_dimension(result_type) : 0;
+            if (columns == 0 && components == 0)
+            {
+                fail("indexing is supported only for vectors, matrices and arrays");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            advance();
+            const size_t limit = columns != 0 ? columns : components;
+            if (current_.kind != TokenKind::Number || !current_.integer ||
+                current_.number < 0.0f || current_.number >= limit)
+            {
+                fail(columns != 0 ? "matrix column index must be a constant in range"
+                                  : "vector index must be a constant in range");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            const uint8_t index = static_cast<uint8_t>(current_.number);
+            advance();
+            expect_punctuation(']');
+            ShaderInstruction instruction = {};
+            if (columns != 0)
+            {
+                instruction.op = ShaderOp::LoadMatrixColumn;
+                instruction.type = vector_type(columns);
+                instruction.index = index;
+            }
+            else
+            {
+                // A single-component swizzle reads the element.
+                instruction.op = ShaderOp::Swizzle;
+                instruction.type = vector_base_type(result_type);
+                instruction.argument_count = 1;
+                instruction.swizzle[0] = index;
+            }
+            emit(instruction);
+            result_type = instruction.type;
+            expression_lvalue_ = {};
         }
-        advance();
-        if (current_.kind != TokenKind::Number || !current_.integer ||
-            current_.number < 0.0f || current_.number >= dimension)
-        {
-            fail("matrix column index must be a constant in range");
-            result_type = ShaderType::Invalid;
-            return;
-        }
-        const uint8_t column = static_cast<uint8_t>(current_.number);
-        advance();
-        expect_punctuation(']');
-        ShaderInstruction instruction = {};
-        instruction.op = ShaderOp::LoadMatrixColumn;
-        instruction.type = vector_type(dimension);
-        instruction.index = column;
-        emit(instruction);
-        result_type = instruction.type;
-        expression_lvalue_ = {};
     }
 
     /* Sentinel for emit_user_call when no user overload matches. */
@@ -2540,16 +2584,60 @@ private:
             return constructor;
         }
 
-        if (std::strcmp(name, "texture2D") == 0)
+        if (std::strcmp(name, "texture2D") == 0 && argument_count == 2)
         {
-            if (argument_count != 2 ||
-                arguments[0] != ShaderType::Sampler2D ||
+            if (arguments[0] != ShaderType::Sampler2D ||
                 arguments[1] != ShaderType::Vec2)
             {
                 fail("texture2D requires sampler2D and vec2 arguments");
                 return ShaderType::Invalid;
             }
             emit_simple(ShaderOp::Texture2D, ShaderType::Vec4, 0, 2);
+            return ShaderType::Vec4;
+        }
+
+        // The other GLSL ES 1.00 lookups: a bias is fragment-only and an
+        // explicit level of detail is vertex-only, as the language requires.
+        const bool proj = std::strcmp(name, "texture2DProj") == 0;
+        const bool lod = std::strcmp(name, "texture2DLod") == 0;
+        const bool proj_lod = std::strcmp(name, "texture2DProjLod") == 0;
+        if (std::strcmp(name, "texture2D") == 0 || proj || lod || proj_lod)
+        {
+            const bool projective = proj || proj_lod;
+            const bool explicit_lod = lod || proj_lod;
+            const bool has_bias = !explicit_lod && argument_count == 3;
+            const bool coordinate_ok = projective
+                ? (arguments[1] == ShaderType::Vec3 || arguments[1] == ShaderType::Vec4)
+                : arguments[1] == ShaderType::Vec2;
+            const size_t expected = explicit_lod ? 3 : (has_bias ? 3 : 2);
+            if (argument_count != expected ||
+                arguments[0] != ShaderType::Sampler2D || !coordinate_ok ||
+                (argument_count == 3 && arguments[2] != ShaderType::Float))
+            {
+                fail("invalid texture lookup arguments");
+                return ShaderType::Invalid;
+            }
+            if (has_bias && stage_ != ShaderStage::Fragment)
+            {
+                fail("texture lookup bias is only available in fragment shaders");
+                return ShaderType::Invalid;
+            }
+            if (explicit_lod && stage_ != ShaderStage::Vertex)
+            {
+                fail("explicit-lod texture lookups are only available in vertex shaders");
+                return ShaderType::Invalid;
+            }
+            uint8_t flags = 0;
+            if (projective)
+                flags |= TEXTURE_LOOKUP_PROJECTIVE;
+            if (projective && arguments[1] == ShaderType::Vec4)
+                flags |= TEXTURE_LOOKUP_VEC4;
+            if (has_bias)
+                flags |= TEXTURE_LOOKUP_BIAS;
+            if (explicit_lod)
+                flags |= TEXTURE_LOOKUP_LOD;
+            emit_simple(ShaderOp::Texture2DExt, ShaderType::Vec4, flags,
+                        static_cast<uint8_t>(argument_count));
             return ShaderType::Vec4;
         }
 
@@ -3286,6 +3374,14 @@ static void apply_binary(
                 result.ddy[i] = left_dy * b + a * right_dy;
                 break;
             case ShaderOp::Divide:
+                if (result_type == ShaderType::Int || is_int_vector(result_type))
+                {
+                    // Integer division truncates toward zero; integer values
+                    // are exact in a float up to 2^24.
+                    result.data[i] = b == 0.0f ? 0.0f : static_cast<float>(
+                        static_cast<int32_t>(a) / static_cast<int32_t>(b));
+                    break;
+                }
                 result.data[i] = b == 0.0f ? 0.0f : a / b;
                 if (b != 0.0f)
                 {
@@ -4009,57 +4105,8 @@ bool execute_glsl(
                     !pop_value(stack, stack_size, a))
                     return false;
 
-                ShaderType expected_type = ShaderType::Invalid;
-                if (instruction.op == ShaderOp::Add ||
-                    instruction.op == ShaderOp::Subtract)
-                {
-                    if (a.type == b.type &&
-                        (a.type == ShaderType::Float || a.type == ShaderType::Int ||
-                         is_vector(a.type) || is_int_vector(a.type) || is_matrix(a.type)))
-                        expected_type = a.type;
-                }
-                else if (instruction.op == ShaderOp::Multiply)
-                {
-                    const size_t a_dimension = matrix_dimension(a.type);
-                    const size_t b_dimension = matrix_dimension(b.type);
-                    if (a_dimension != 0 && b.type == vector_type(a_dimension))
-                        expected_type = b.type;
-                    else if (b_dimension != 0 && a.type == vector_type(b_dimension))
-                        expected_type = a.type;
-                    else if (a_dimension != 0 && a_dimension == b_dimension)
-                        expected_type = a.type;
-                    else if (a_dimension != 0 && b.type == ShaderType::Float)
-                        expected_type = a.type;
-                    else if (b_dimension != 0 && a.type == ShaderType::Float)
-                        expected_type = b.type;
-                    else if (a.type == ShaderType::Float &&
-                             (is_vector(b.type) || is_int_vector(b.type)))
-                        expected_type = b.type;
-                    else if ((is_vector(a.type) || is_int_vector(a.type)) &&
-                             b.type == ShaderType::Float)
-                        expected_type = a.type;
-                    else if (a.type == b.type &&
-                             (a.type == ShaderType::Float || a.type == ShaderType::Int ||
-                               is_vector(a.type) || is_int_vector(a.type)))
-                        expected_type = a.type;
-                }
-                else if (instruction.op == ShaderOp::Divide)
-                {
-                    if (is_matrix(a.type) && b.type == ShaderType::Float)
-                        expected_type = a.type;
-                    else if (a.type == ShaderType::Float && is_matrix(b.type))
-                        expected_type = b.type;
-                    else if ((is_vector(a.type) || is_int_vector(a.type) ||
-                              is_matrix(a.type)) &&
-                             b.type == ShaderType::Float)
-                        expected_type = a.type;
-                    else if (a.type == b.type &&
-                             (a.type == ShaderType::Float || a.type == ShaderType::Int ||
-                              is_vector(a.type) || is_int_vector(a.type) ||
-                              is_matrix(a.type)))
-                        expected_type = a.type;
-                }
-
+                const ShaderType expected_type =
+                    arithmetic_result(instruction.op, a.type, b.type);
                 if (expected_type == ShaderType::Invalid ||
                     instruction.type != expected_type)
                     return false;
@@ -4579,6 +4626,7 @@ bool execute_glsl(
                                     coordinate.data[0], coordinate.data[1],
                                     coordinate.ddx[0], coordinate.ddx[1],
                                     coordinate.ddy[0], coordinate.ddy[1],
+                                    false, 0.0f,
                                     sampler_value.data, user_data))
                     return false;
 
@@ -4613,6 +4661,64 @@ bool execute_glsl(
                     !array_element_slot(instruction, b, slot))
                     return false;
                 copy_shader_value(locals[slot], a);
+                break;
+            }
+
+            case ShaderOp::Texture2DExt:
+            {
+                const uint8_t flags = instruction.index;
+                float extra = 0.0f;
+                if (instruction.argument_count == 3)
+                {
+                    if (!pop_value(stack, stack_size, c) || c.type != ShaderType::Float)
+                        return false;
+                    extra = c.data[0];
+                }
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Sampler2D || !texture_sample)
+                    return false;
+
+                float u = b.data[0];
+                float v = b.data[1];
+                float dudx = b.ddx[0], dvdx = b.ddx[1];
+                float dudy = b.ddy[0], dvdy = b.ddy[1];
+                if (flags & TEXTURE_LOOKUP_PROJECTIVE)
+                {
+                    // (u, v) = (s, t) / q, with quotient-rule derivatives.
+                    const size_t q_index = (flags & TEXTURE_LOOKUP_VEC4) ? 3 : 2;
+                    if (b.type != ((flags & TEXTURE_LOOKUP_VEC4)
+                                   ? ShaderType::Vec4 : ShaderType::Vec3))
+                        return false;
+                    const float q = b.data[q_index];
+                    const float inverse_q = 1.0f / q;
+                    const float inverse_q2 = inverse_q * inverse_q;
+                    u = b.data[0] * inverse_q;
+                    v = b.data[1] * inverse_q;
+                    dudx = (b.ddx[0] * q - b.data[0] * b.ddx[q_index]) * inverse_q2;
+                    dvdx = (b.ddx[1] * q - b.data[1] * b.ddx[q_index]) * inverse_q2;
+                    dudy = (b.ddy[0] * q - b.data[0] * b.ddy[q_index]) * inverse_q2;
+                    dvdy = (b.ddy[1] * q - b.data[1] * b.ddy[q_index]) * inverse_q2;
+                }
+                else if (b.type != ShaderType::Vec2)
+                    return false;
+                if (flags & TEXTURE_LOOKUP_BIAS)
+                {
+                    // log2(rho * 2^bias) = lod + bias.
+                    const float scale = exp2f(extra);
+                    dudx *= scale; dvdx *= scale; dudy *= scale; dvdy *= scale;
+                }
+                const bool explicit_lod = (flags & TEXTURE_LOOKUP_LOD) != 0;
+                set_zero_value(result, ShaderType::Vec4);
+                if (!texture_sample(static_cast<int>(a.data[0]), u, v,
+                                    explicit_lod ? 0.0f : dudx,
+                                    explicit_lod ? 0.0f : dvdx,
+                                    explicit_lod ? 0.0f : dudy,
+                                    explicit_lod ? 0.0f : dvdy,
+                                    explicit_lod, explicit_lod ? extra : 0.0f,
+                                    result.data, user_data) ||
+                    !push_value(stack, stack_size, result))
+                    return false;
                 break;
             }
 

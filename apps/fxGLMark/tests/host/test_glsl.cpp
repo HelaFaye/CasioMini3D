@@ -95,6 +95,8 @@ static bool test_texture_sample(
     float dvdx,
     float dudy,
     float dvdy,
+    bool,
+    float,
     float rgba[4],
     void *)
 {
@@ -1620,6 +1622,54 @@ static void test_array_function_parameters()
     }
 }
 
+static void test_arithmetic_operand_rules()
+{
+    static const char source[] =
+        "void main() {\n"
+        "  int q = 7 / 2;\n"
+        "  int n = -7 / 2;\n"
+        "  vec2 shifted = vec2(0.5, -1.0) * 0.5 + 0.5;\n"
+        "  vec2 flipped = 1.0 - vec2(0.25, 0.75);\n"
+        "  ivec2 halves = ivec2(9, 4) / 2;\n"
+        "  mat2 m = mat2(2.0) / 4.0 + 0.25;\n"
+        "  flipped[0] = m[0][1];\n"
+        "  gl_FragColor = vec4(float(q) + float(n), shifted[0] + shifted.y,\n"
+        "                      flipped[1] + float(halves.x - halves[1]), m[0][0] + flipped.x);\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module, "arithmetic rules");
+    ShaderRuntime runtime = {};
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    // q + n = 3 + -3; shifted = (0.75, 0.0); flipped.y = 0.25, halves = (4, 2);
+    // m = mat2(0.5) + 0.25 -> m[0] = (0.75, 0.25).
+    assert(near(runtime.fragment_color.data[0], 0.0f));
+    assert(near(runtime.fragment_color.data[1], 0.75f));
+    assert(near(runtime.fragment_color.data[2], 2.25f));
+    assert(near(runtime.fragment_color.data[3], 1.0f));
+
+    const char *invalid[] = {
+        "void main() { ivec2 v = ivec2(1) * 1.5; gl_FragColor = vec4(1.0); }",
+        "void main() { float f = 1.0 + 1; gl_FragColor = vec4(f); }",
+        "void main() { vec2 v = vec2(1.0) + 1; gl_FragColor = vec4(v, 0.0, 1.0); }",
+        "void main() { bool b = true + false; gl_FragColor = vec4(1.0); }",
+        "void main() { vec3 v = vec2(1.0) + vec3(1.0); gl_FragColor = vec4(v, 1.0); }",
+        "void main() { mat2 m = mat2(1.0) * mat3(1.0); gl_FragColor = vec4(1.0); }",
+        "void main() { vec2 v = vec2(1.0); gl_FragColor = vec4(v[2]); }",
+        "void main() { vec2 v = vec2(1.0); int i = 0; gl_FragColor = vec4(v[i]); }",
+        "void main() { mat2 m = mat2(1.0); m[0][1] = 2.0; gl_FragColor = vec4(1.0); }",
+        "void main() { float f = 1.0; gl_FragColor = vec4(f[0]); }"
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
+    }
+}
+
 } // namespace
 
 
@@ -1660,6 +1710,7 @@ int main()
     test_lexer_errors_report_their_reason();
     test_conditional_operator();
     test_array_function_parameters();
+    test_arithmetic_operand_rules();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;

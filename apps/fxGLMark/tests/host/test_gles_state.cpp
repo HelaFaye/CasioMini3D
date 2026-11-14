@@ -2197,14 +2197,18 @@ GLuint build_test_program(const GLchar *vertex, const GLchar *fragment)
     glCompileShader(vs);
     glCompileShader(fs);
     GLint status = GL_FALSE;
-    glGetShaderiv(fs, GL_COMPILE_STATUS, &status);
-    if (status != GL_TRUE)
+    for (GLuint shader : {vs, fs})
     {
-        GLchar log[160] = {};
-        glGetShaderInfoLog(fs, sizeof(log), nullptr, log);
-        std::fprintf(stderr, "fragment shader: %s\n", log);
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+        if (status != GL_TRUE)
+        {
+            GLchar log[160] = {};
+            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+            std::fprintf(stderr, "%s shader: %s\n",
+                         shader == vs ? "vertex" : "fragment", log);
+        }
+        assert(status == GL_TRUE);
     }
-    assert(status == GL_TRUE);
     const GLuint program = glCreateProgram();
     glAttachShader(program, vs);
     glAttachShader(program, fs);
@@ -2304,6 +2308,130 @@ void test_fragment_builtin_inputs()
     fxgl::ShaderModule vertex_use = {};
     assert(!fxgl::compile_glsl(fxgl::ShaderStage::Vertex,
         "void main() { gl_Position = gl_FragCoord; }", vertex_use));
+    fxglReleaseCurrent();
+}
+
+void test_texture_lookup_variants()
+{
+    uint16_t color[16] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 4, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 4, 4);
+    glEnableVertexAttribArray(0);
+
+    // 2x2 base level (red, blue / blue, red) and a 1x1 green level 1.
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    const uint16_t base[4] = {0xf800, 0x001f, 0x001f, 0xf800};
+    const uint16_t level1 = 0x07e0;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, base);
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &level1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    assert(glGetError() == GL_NO_ERROR);
+
+    GLint units = 0;
+    glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &units);
+    assert(units == 2);
+    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &units);
+    assert(units == 2);
+
+    const GLfloat centre[] = {0.0f, 0.0f, 0.0f, 1.0f};
+    static const GLchar pass_fragment[] =
+        "precision mediump float; varying vec4 v_color;\n"
+        "void main() { gl_FragColor = v_color; }\n";
+
+    // Vertex texture fetch: implicit lookups use the base level; an explicit
+    // level of detail selects level 1.
+    const struct { const char *vertex; uint16_t expected; } vertex_cases[] = {
+        {"attribute vec4 a_position; uniform sampler2D u_s; varying vec4 v_color;\n"
+         "void main() { gl_Position = a_position; gl_PointSize = 1.0;\n"
+         "  v_color = texture2D(u_s, vec2(0.25, 0.25)); }\n", 0xf800},
+        {"attribute vec4 a_position; uniform sampler2D u_s; varying vec4 v_color;\n"
+         "void main() { gl_Position = a_position; gl_PointSize = 1.0;\n"
+         "  v_color = texture2DLod(u_s, vec2(0.25, 0.25), 1.0); }\n", 0x07e0},
+        {"attribute vec4 a_position; uniform sampler2D u_s; varying vec4 v_color;\n"
+         "void main() { gl_Position = a_position; gl_PointSize = 1.0;\n"
+         "  v_color = texture2DProjLod(u_s, vec4(1.5, 0.75, 0.0, 2.0), 0.0); }\n", 0x001f},
+    };
+    for (const auto& c : vertex_cases)
+    {
+        const GLuint program = build_test_program(c.vertex, pass_fragment);
+        glUseProgram(program);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, centre);
+        color[2 * 4 + 2] = 0;
+        glDrawArrays(GL_POINTS, 0, 1);
+        assert(glGetError() == GL_NO_ERROR);
+        assert(color[2 * 4 + 2] == c.expected);
+        glDeleteProgram(program);
+    }
+
+    // texture2DProj divides by q: (0.5, 1.5, 2) and (0.25, 0.75, x, 1) both
+    // address texel (0, 1), which is blue.
+    static const GLchar point_vertex[] =
+        "attribute vec4 a_position;\n"
+        "void main() { gl_Position = a_position; gl_PointSize = 1.0; }\n";
+    const char *proj_fragments[] = {
+        "precision mediump float; uniform sampler2D u_s;\n"
+        "void main() { gl_FragColor = texture2DProj(u_s, vec3(0.5, 1.5, 2.0)); }\n",
+        "precision mediump float; uniform sampler2D u_s;\n"
+        "void main() { gl_FragColor = texture2DProj(u_s, vec4(0.25, 0.75, 9.0, 1.0)); }\n",
+    };
+    for (const char *fragment : proj_fragments)
+    {
+        const GLuint program = build_test_program(point_vertex, fragment);
+        glUseProgram(program);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, centre);
+        color[2 * 4 + 2] = 0;
+        glDrawArrays(GL_POINTS, 0, 1);
+        assert(glGetError() == GL_NO_ERROR);
+        assert(color[2 * 4 + 2] == 0x001f);
+        glDeleteProgram(program);
+    }
+
+    // Bias: a full-screen quad maps 2 texels onto 4 pixels (lod -1, the
+    // base level); a bias of 2 moves it to lod 1 (green level 1).
+    static const GLchar quad_vertex[] =
+        "attribute vec4 a_position; varying vec2 v_uv;\n"
+        "void main() { gl_Position = a_position; v_uv = a_position.xy * 0.5 + 0.5; }\n";
+    const GLfloat quad[] = {
+        -1, -1, 0, 1,   1, -1, 0, 1,   -1, 1, 0, 1,
+         1, -1, 0, 1,   1,  1, 0, 1,   -1, 1, 0, 1
+    };
+    const struct { const char *fragment; uint16_t pixel0; } bias_cases[] = {
+        {"precision mediump float; uniform sampler2D u_s; varying vec2 v_uv;\n"
+         "void main() { gl_FragColor = texture2D(u_s, v_uv, 0.0); }\n", 0xf800},
+        {"precision mediump float; uniform sampler2D u_s; varying vec2 v_uv;\n"
+         "void main() { gl_FragColor = texture2D(u_s, v_uv, 2.0); }\n", 0x07e0},
+    };
+    for (const auto& c : bias_cases)
+    {
+        const GLuint program = build_test_program(quad_vertex, c.fragment);
+        glUseProgram(program);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, quad);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        assert(glGetError() == GL_NO_ERROR);
+        assert(color[0] == c.pixel0);
+        glDeleteProgram(program);
+    }
+
+    // GLSL ES 1.00 stage rules and argument types.
+    fxgl::ShaderModule rejected = {};
+    assert(!fxgl::compile_glsl(fxgl::ShaderStage::Fragment,
+        "uniform sampler2D s; void main() { gl_FragColor = texture2DLod(s, vec2(0.0), 1.0); }",
+        rejected));
+    rejected = {};
+    assert(!fxgl::compile_glsl(fxgl::ShaderStage::Vertex,
+        "uniform sampler2D s; void main() { gl_Position = texture2D(s, vec2(0.0), 1.0); }",
+        rejected));
+    rejected = {};
+    assert(!fxgl::compile_glsl(fxgl::ShaderStage::Fragment,
+        "uniform sampler2D s; void main() { gl_FragColor = texture2DProj(s, vec2(0.0)); }",
+        rejected));
+
+    glDeleteTextures(1, &texture);
     fxglReleaseCurrent();
 }
 
@@ -2420,6 +2548,7 @@ int main()
     test_sampler_array_uniforms();
     test_varying_arrays();
     test_fragment_builtin_inputs();
+    test_texture_lookup_variants();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

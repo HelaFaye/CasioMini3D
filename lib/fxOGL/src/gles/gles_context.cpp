@@ -1043,16 +1043,19 @@ static void initialize_draw_invocation(
             program.uniform_values[location];
     }
 
-    bool uses_texture = false;
-    for (size_t i = 0; i < module.instruction_count; ++i)
+    const auto samples_textures = [](const fxgl::ShaderModule *stage)
     {
-        if (module.instructions[i].op == fxgl::ShaderOp::Texture2D)
-        {
-            uses_texture = true;
-            break;
-        }
-    }
-    if (!uses_texture)
+        if (!stage)
+            return false;
+        for (size_t i = 0; i < stage->instruction_count; ++i)
+            if (stage->instructions[i].op == fxgl::ShaderOp::Texture2D ||
+                stage->instructions[i].op == fxgl::ShaderOp::Texture2DExt)
+                return true;
+        return false;
+    };
+    const bool fragment_uses_texture = samples_textures(&module);
+    // Vertex shaders sample through the same cached bindings.
+    if (!fragment_uses_texture && !samples_textures(program.vertex_shader))
         return;
 
     // A GL draw call cannot mutate texture bindings or sampler uniforms while
@@ -1069,6 +1072,10 @@ static void initialize_draw_invocation(
         cached.requires_derivatives = !cached.valid ||
             gfx::sampler_requires_implicit_derivatives(cached.sampler);
     }
+
+    // Varying derivatives only serve fragment-stage lookups.
+    if (!fragment_uses_texture)
+        return;
 
     bool found_sampler = false;
     for (size_t i = 0; i < module.uniform_count; ++i)
@@ -1112,6 +1119,8 @@ static bool sample_bound_texture(
     float dvdx,
     float dudy,
     float dvdy,
+    bool explicit_lod,
+    float explicit_lod_value,
     float rgba[4],
     void *user_data)
 {
@@ -1144,7 +1153,7 @@ static bool sample_bound_texture(
         return false;
     // Non-mipmapped nearest/linear filtering does not consume derivatives.
     // Avoid four finite checks on the common nearest-texture path.
-    if (cached.requires_derivatives &&
+    if (cached.requires_derivatives && !explicit_lod &&
         (!isfinite(dudx) || !isfinite(dvdx) ||
          !isfinite(dudy) || !isfinite(dvdy)))
         return false;
@@ -1161,7 +1170,13 @@ static bool sample_bound_texture(
     }
 
     float lod = 0.0f;
-    if (cached.requires_derivatives)
+    if (explicit_lod)
+    {
+        if (!isfinite(explicit_lod_value))
+            return false;
+        lod = explicit_lod_value;
+    }
+    else if (cached.requires_derivatives)
     {
         const float rho_x = sqrtf(
             (dudx * texture.width) * (dudx * texture.width) +
@@ -1229,7 +1244,7 @@ static bool execute_fragment(
         if (!sample_bound_texture(
                 invocation.texture_passthrough_unit,
                 varyings[offset], varyings[offset + 1],
-                dudx, dvdx, dudy, dvdy, rgba, &invocation))
+                dudx, dvdx, dudy, dvdy, false, 0.0f, rgba, &invocation))
         {
             invocation.fragment_failed = true;
             return false;
@@ -1312,10 +1327,11 @@ static bool execute_fragment(
 }
 
 static bool execute_vertex(
-    const fxgl::LinkedProgramView& program,
+    DrawInvocation& invocation,
     uint32_t vertex_index,
     fxgl::ClipVertex& output)
 {
+    const fxgl::LinkedProgramView& program = invocation.program;
     const fxgl::ShaderModule& module = *program.vertex_shader;
     fxgl::ShaderRuntime runtime = {};
 
@@ -1342,7 +1358,9 @@ static bool execute_vertex(
         runtime.uniforms[i] = program.uniform_values[location];
     }
 
-    if (!fxgl::execute_glsl(module, runtime) ||
+    // Vertex shaders sample through the same cached bindings as fragment
+    // shaders; with zero derivatives an implicit lookup uses the base level.
+    if (!fxgl::execute_glsl(module, runtime, sample_bound_texture, &invocation) ||
         runtime.position.type != fxgl::ShaderType::Vec4)
     {
         set_error(GL_INVALID_OPERATION);
@@ -1387,9 +1405,9 @@ static bool draw_vertex_triangle(
 {
     const fxgl::LinkedProgramView& program = invocation.program;
     fxgl::ClipVertex vertices[3] = {};
-    if (!execute_vertex(program, first, vertices[0]) ||
-        !execute_vertex(program, second, vertices[1]) ||
-        !execute_vertex(program, third, vertices[2]))
+    if (!execute_vertex(invocation, first, vertices[0]) ||
+        !execute_vertex(invocation, second, vertices[1]) ||
+        !execute_vertex(invocation, third, vertices[2]))
         return false;
 
     fxgl::draw_clip_triangle(
@@ -1414,7 +1432,7 @@ static bool draw_vertex_point(
 {
     const fxgl::LinkedProgramView& program = invocation.program;
     fxgl::ClipVertex vertex = {};
-    if (!execute_vertex(program, index, vertex))
+    if (!execute_vertex(invocation, index, vertex))
         return false;
 
     fxgl::draw_clip_point(
@@ -1440,8 +1458,8 @@ static bool draw_vertex_line(
 {
     const fxgl::LinkedProgramView& program = invocation.program;
     fxgl::ClipVertex vertices[2] = {};
-    if (!execute_vertex(program, first, vertices[0]) ||
-        !execute_vertex(program, second, vertices[1]))
+    if (!execute_vertex(invocation, first, vertices[0]) ||
+        !execute_vertex(invocation, second, vertices[1]))
         return false;
 
     fxgl::draw_clip_line(
@@ -3935,6 +3953,9 @@ void glGetIntegerv(GLenum pname, GLint *data)
                 g_context.texture_binding_2d[g_context.active_texture_unit]);
             break;
         case GL_MAX_TEXTURE_IMAGE_UNITS:
+        case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
+        case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
+            // Both stages sample through the same units.
             data[0] = static_cast<GLint>(FXGL_MAX_TEXTURE_UNITS);
             break;
         case GL_UNPACK_ALIGNMENT:

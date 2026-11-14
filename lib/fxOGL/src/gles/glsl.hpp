@@ -145,8 +145,17 @@ enum class ShaderOp : uint8_t
     LoadUniformIndexed,
     /* Fragment built-in input: index 0 gl_FragCoord, 1 gl_FrontFacing,
        2 gl_PointCoord. */
-    LoadBuiltinInput
+    LoadBuiltinInput,
+    /* texture2D with bias, texture2DProj, texture2DLod and texture2DProjLod.
+       index holds TEXTURE_LOOKUP_* flags; argument_count is the number of
+       stack operands (sampler, coordinate and an optional bias or lod). */
+    Texture2DExt
 };
+
+constexpr uint8_t TEXTURE_LOOKUP_PROJECTIVE = 1u << 0; /* divide by q */
+constexpr uint8_t TEXTURE_LOOKUP_VEC4 = 1u << 1;       /* q is w, not z */
+constexpr uint8_t TEXTURE_LOOKUP_BIAS = 1u << 2;
+constexpr uint8_t TEXTURE_LOOKUP_LOD = 1u << 3;
 
 struct ShaderInstruction
 {
@@ -207,6 +216,10 @@ struct ShaderRuntime
     ShaderValue point_coord;
 };
 
+/* Sample a texture unit at (u, v). The derivatives give the implicit level
+   of detail; when explicit_lod is set (texture2DLod), `lod` is used instead
+   and the derivatives are zero. A texture2D bias is already applied by
+   scaling the derivatives by 2^bias. */
 using TextureSampleFunction = bool (*)(
     int texture_unit,
     float u,
@@ -215,6 +228,8 @@ using TextureSampleFunction = bool (*)(
     float dvdx,
     float dudy,
     float dvdy,
+    bool explicit_lod,
+    float lod,
     float rgba[4],
     void *user_data);
 
@@ -247,6 +262,13 @@ using TextureSampleFunction = bool (*)(
    (`float f(inout float a[3])`) take a whole local, uniform or varying
    array of the same element type and size by value, with copy-out for
    out/inout; each element counts toward the four-parameter limit.
+   Vectors take constant-index component reads and writes (`v[1]`,
+   `m[0][1]` reads; `v[1] = x` writes to locals). Arithmetic follows GLSL ES
+   1.00 operand rules: operands share a float or int base type and are the
+   same type or a scalar with a vector/matrix, plus matrix-vector and
+   matrix-matrix products; int division truncates. Texture lookups cover
+   texture2D (optional fragment bias), texture2DProj (vec3/vec4, optional
+   fragment bias) and the vertex-only texture2DLod and texture2DProjLod.
    Whole-array assignment, structs, do-while, switch, preprocessor
    directives and precision qualifiers other than ordinary precision
    statements remain unsupported. GLSL ES 1.00 has no array return types
