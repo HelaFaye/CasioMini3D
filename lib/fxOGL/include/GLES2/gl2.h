@@ -492,8 +492,8 @@ void glVertexAttrib2fv(GLuint index, const GLfloat *values);
 void glVertexAttrib3fv(GLuint index, const GLfloat *values);
 void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat *params);
 /* Copy from the current framebuffer's RGB565 color buffer into the bound
-   texture. Only GL_RGB is accepted: the color buffer has no alpha, and
-   fxOGL stores RGB565 textures only. Reads outside the framebuffer give
+   texture. GL_RGB and GL_LUMINANCE (the red component) are accepted;
+   formats with alpha are not, because the color buffer has none. Reads outside the framebuffer give
    zero, as glReadPixels does. */
 void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat,
     GLint x, GLint y, GLsizei width, GLsizei height, GLint border);

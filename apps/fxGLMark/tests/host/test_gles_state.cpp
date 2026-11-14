@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include <GLES2/gl2.h>
+#include <GLES3/gl3.h>
 #include <fxgl/platform.h>
 #include "gles/context_internal.hpp"
 
@@ -2547,6 +2548,115 @@ void test_texture_formats()
     fxglReleaseCurrent();
 }
 
+void test_vertex_array_objects()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 2, 2, 2};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 2, 2);
+
+    GLint value = -1;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &value);
+    assert(value == 0);
+
+    GLuint arrays[2] = {};
+    glGenVertexArrays(2, arrays);
+    assert(arrays[0] != 0 && arrays[1] != 0 && arrays[0] != arrays[1]);
+    // A generated name becomes a vertex array object when first bound.
+    assert(glIsVertexArray(arrays[0]) == GL_FALSE);
+    glBindVertexArray(7777);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    GLuint buffers[2] = {};
+    glGenBuffers(2, buffers);
+    const GLfloat full[] = {-1, -1, 3, -1, -1, 3};
+    glBindBuffer(GL_ARRAY_BUFFER, buffers[0]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(full), full, GL_STATIC_DRAW);
+    const GLubyte indices[] = {0, 1, 2};
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers[1]);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+    // Default array: attribute 1 enabled, nothing else.
+    glEnableVertexAttribArray(1);
+    glVertexAttrib4f(3, 0.25f, 0.5f, 0.75f, 1.0f);
+
+    glBindVertexArray(arrays[0]);
+    assert(glIsVertexArray(arrays[0]) == GL_TRUE);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &value);
+    assert(value == static_cast<GLint>(arrays[0]));
+    glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &value);
+    assert(value == GL_FALSE); // A new array starts with defaults.
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers[1]);
+    // The array buffer binding is context state, not array state.
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    glBindVertexArray(0);
+    glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &value);
+    assert(value == GL_FALSE);
+    glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &value);
+    assert(value == GL_TRUE);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &value);
+    assert(value == 0);
+    glDisableVertexAttribArray(1);
+
+    glBindVertexArray(arrays[0]);
+    glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &value);
+    assert(value == static_cast<GLint>(buffers[0]));
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &value);
+    assert(value == static_cast<GLint>(buffers[1]));
+    GLfloat current[4] = {};
+    glGetVertexAttribfv(3, GL_CURRENT_VERTEX_ATTRIB, current);
+    assert(current[0] == 0.25f && current[2] == 0.75f);
+
+    // Draw through the array with no other attribute setup.
+    static const GLchar vertex[] =
+        "attribute vec4 a_position;\n"
+        "void main() { gl_Position = a_position; }\n";
+    static const GLchar fragment[] =
+        "precision mediump float;\n"
+        "void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }\n";
+    const GLuint program = build_test_program(vertex, fragment);
+    glBindAttribLocation(program, 0, "a_position");
+    glLinkProgram(program);
+    glUseProgram(program);
+    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_BYTE, nullptr);
+    assert(glGetError() == GL_NO_ERROR);
+    for (uint16_t pixel : color)
+        assert(pixel == 0x07e0);
+
+    // Deleting a buffer detaches it from unbound arrays as well.
+    glBindVertexArray(arrays[1]);
+    glDeleteBuffers(1, &buffers[1]);
+    glBindVertexArray(arrays[0]);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &value);
+    assert(value == 0);
+
+    // Deleting the bound array reverts to the default array.
+    glDeleteVertexArrays(2, arrays);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &value);
+    assert(value == 0);
+    assert(glIsVertexArray(arrays[0]) == GL_FALSE);
+    glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &value);
+    assert(value == GL_FALSE);
+    glBindVertexArray(arrays[0]);
+    assert(glGetError() == GL_INVALID_OPERATION);
+
+    glDeleteVertexArrays(-1, arrays);
+    assert(glGetError() == GL_INVALID_VALUE);
+    GLuint many[9] = {};
+    glGenVertexArrays(9, many);
+    assert(glGetError() == GL_OUT_OF_MEMORY);
+
+    glUseProgram(0);
+    glDeleteProgram(program);
+    glDeleteBuffers(1, &buffers[0]);
+    assert(glGetError() == GL_NO_ERROR);
+    fxglReleaseCurrent();
+}
+
 void test_texture_lookup_variants()
 {
     uint16_t color[16] = {};
@@ -2787,6 +2897,7 @@ int main()
     test_texture_lookup_variants();
     test_implementation_limits();
     test_texture_formats();
+    test_vertex_array_objects();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

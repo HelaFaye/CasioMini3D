@@ -1,4 +1,5 @@
 #include <GLES2/gl2.h>
+#include <GLES3/gl3.h>
 #include <fxgl/platform.h>
 #include "../gfx/texture.hpp"
 #include "context_internal.hpp"
@@ -13,6 +14,7 @@
 namespace
 {
 constexpr size_t FXGL_MAX_BUFFERS = 16;
+constexpr size_t FXGL_MAX_VERTEX_ARRAYS = 8;
 constexpr size_t FXGL_MAX_BUFFER_BYTES = 128u * 1024u;
 constexpr GLuint FXGL_MAX_VERTEX_ATTRIBS = 8;
 constexpr size_t FXGL_MAX_TEXTURES = 8;
@@ -100,6 +102,17 @@ struct VertexAttribute
     GLfloat current[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
+/* A vertex array object's state while it is not bound. The bound one's
+   state lives in Context::attributes and element_buffer_binding, so draws
+   and queries read one place; binding swaps the state in and out. */
+struct VertexArrayObject
+{
+    VertexAttribute attributes[FXGL_MAX_VERTEX_ATTRIBS] = {};
+    GLuint element_buffer_binding = 0;
+    bool reserved = false;
+    bool alive = false; /* Bound at least once: glIsVertexArray is true. */
+};
+
 struct StencilFace
 {
     GLenum function = GL_ALWAYS;
@@ -121,6 +134,9 @@ struct Context
     GLuint array_buffer_binding = 0;
     GLuint element_buffer_binding = 0;
     VertexAttribute attributes[FXGL_MAX_VERTEX_ATTRIBS] = {};
+    /* Index 0 holds the default vertex array while another is bound. */
+    VertexArrayObject vertex_arrays[FXGL_MAX_VERTEX_ARRAYS + 1] = {};
+    GLuint vertex_array_binding = 0;
 
     TextureObject textures[FXGL_MAX_TEXTURES] = {};
     size_t texture_bytes = 0;
@@ -1707,6 +1723,102 @@ void glGenBuffers(GLsizei n, GLuint *buffers)
     }
 }
 
+static VertexArrayObject *vertex_array_slot(GLuint name)
+{
+    if (name == 0 || name > FXGL_MAX_VERTEX_ARRAYS)
+        return nullptr;
+    VertexArrayObject& object = g_context.vertex_arrays[name];
+    return object.reserved ? &object : nullptr;
+}
+
+/* Move the bound array's state out of the context and the named array's
+   in. Generic attribute values (current) stay with the context. */
+static void switch_vertex_array(GLuint name)
+{
+    VertexArrayObject& previous = g_context.vertex_arrays[g_context.vertex_array_binding];
+    VertexArrayObject& next = g_context.vertex_arrays[name];
+    for (size_t i = 0; i < FXGL_MAX_VERTEX_ATTRIBS; ++i)
+    {
+        VertexAttribute& live = g_context.attributes[i];
+        GLfloat current[4];
+        std::memcpy(current, live.current, sizeof(current));
+        previous.attributes[i] = live;
+        live = next.attributes[i];
+        std::memcpy(live.current, current, sizeof(current));
+    }
+    previous.element_buffer_binding = g_context.element_buffer_binding;
+    g_context.element_buffer_binding = next.element_buffer_binding;
+    g_context.vertex_array_binding = name;
+}
+
+void glGenVertexArrays(GLsizei n, GLuint *arrays)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !arrays))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    size_t available = 0;
+    for (size_t i = 1; i <= FXGL_MAX_VERTEX_ARRAYS; ++i)
+        if (!g_context.vertex_arrays[i].reserved) ++available;
+    if (available < static_cast<size_t>(n))
+    {
+        set_error(GL_OUT_OF_MEMORY);
+        return;
+    }
+    GLsizei generated = 0;
+    for (size_t i = 1; i <= FXGL_MAX_VERTEX_ARRAYS && generated < n; ++i)
+    {
+        if (!g_context.vertex_arrays[i].reserved)
+        {
+            g_context.vertex_arrays[i] = {};
+            g_context.vertex_arrays[i].reserved = true;
+            arrays[generated++] = static_cast<GLuint>(i);
+        }
+    }
+}
+
+void glDeleteVertexArrays(GLsizei n, const GLuint *arrays)
+{
+    if (!has_context()) return;
+    if (n < 0 || (n > 0 && !arrays))
+    {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+    for (GLsizei i = 0; i < n; ++i)
+    {
+        VertexArrayObject *object = vertex_array_slot(arrays[i]);
+        if (!object)
+            continue; // Unused names and 0 are silently ignored.
+        if (g_context.vertex_array_binding == arrays[i])
+            switch_vertex_array(0); // Deleting the bound array binds 0.
+        *object = {};
+    }
+}
+
+void glBindVertexArray(GLuint array)
+{
+    if (!has_context()) return;
+    if (array != 0 && !vertex_array_slot(array))
+    {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (array != 0)
+        g_context.vertex_arrays[array].alive = true;
+    if (array != g_context.vertex_array_binding)
+        switch_vertex_array(array);
+}
+
+GLboolean glIsVertexArray(GLuint array)
+{
+    if (!has_context()) return GL_FALSE;
+    const VertexArrayObject *object = vertex_array_slot(array);
+    return object && object->alive ? GL_TRUE : GL_FALSE;
+}
+
 void glDeleteBuffers(GLsizei n, const GLuint *buffers)
 {
     if (!has_context()) return;
@@ -1734,6 +1846,21 @@ void glDeleteBuffers(GLsizei n, const GLuint *buffers)
             {
                 attribute.buffer_binding = 0;
                 attribute.pointer = nullptr;
+            }
+        }
+        // Also detach it from vertex arrays that are not bound, so a later
+        // buffer reusing the name is never read through a stale binding.
+        for (VertexArrayObject& array : g_context.vertex_arrays)
+        {
+            if (array.element_buffer_binding == name)
+                array.element_buffer_binding = 0;
+            for (VertexAttribute& attribute : array.attributes)
+            {
+                if (attribute.buffer_binding == name)
+                {
+                    attribute.buffer_binding = 0;
+                    attribute.pointer = nullptr;
+                }
             }
         }
 
@@ -4230,6 +4357,9 @@ void glGetIntegerv(GLenum pname, GLint *data)
             break;
         case GL_CURRENT_PROGRAM:
             data[0] = static_cast<GLint>(fxgl::current_program_name());
+            break;
+        case GL_VERTEX_ARRAY_BINDING:
+            data[0] = static_cast<GLint>(g_context.vertex_array_binding);
             break;
         case GL_ELEMENT_ARRAY_BUFFER_BINDING:
             data[0] = static_cast<GLint>(g_context.element_buffer_binding);
