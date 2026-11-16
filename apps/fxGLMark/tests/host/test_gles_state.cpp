@@ -2219,6 +2219,12 @@ GLuint build_test_program(const GLchar *vertex, const GLchar *fragment)
     glBindAttribLocation(program, 0, "a_position");
     glLinkProgram(program);
     glGetProgramiv(program, GL_LINK_STATUS, &status);
+    if (status != GL_TRUE)
+    {
+        GLchar log[160] = {};
+        glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+        std::fprintf(stderr, "link: %s\n", log);
+    }
     assert(status == GL_TRUE);
     glDeleteShader(vs);
     glDeleteShader(fs);
@@ -2978,6 +2984,96 @@ void test_buffer_mapping()
     fxglReleaseCurrent();
 }
 
+void test_glsl_es_300_programs()
+{
+    uint16_t color[4] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 4, 1, 4};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 4, 1);
+
+    // No attributes at all: gl_VertexID places the points, gl_InstanceID
+    // picks their color, and the fragment output replaces gl_FragColor.
+    static const GLchar vertex[] =
+        "#version 300 es\n"
+        "out vec3 v_color;\n"
+        "void main() {\n"
+        "  gl_Position = vec4(-0.75 + 0.5 * float(gl_VertexID), 0.0, 0.0, 1.0);\n"
+        "  gl_PointSize = 1.0;\n"
+        "  v_color = gl_InstanceID == 0 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0);\n"
+        "}\n";
+    static const GLchar fragment[] =
+        "#version 300 es\n"
+        "precision mediump float;\n"
+        "in vec3 v_color;\n"
+        "out vec4 color;\n"
+        "void main() { color = vec4(v_color, 1.0); }\n";
+    const GLuint program = build_test_program(vertex, fragment);
+    glUseProgram(program);
+    glDrawArrays(GL_POINTS, 0, 4);
+    assert(glGetError() == GL_NO_ERROR);
+    for (uint16_t pixel : color)
+        assert(pixel == 0xf800);
+    // The second instance draws over the first: two vertices, blue.
+    std::memset(color, 0, sizeof(color));
+    glDrawArraysInstanced(GL_POINTS, 2, 2, 2);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0 && color[1] == 0 && color[2] == 0x001f && color[3] == 0x001f);
+
+    // layout(location) wins over glBindAttribLocation.
+    static const GLchar located[] =
+        "#version 300 es\n"
+        "layout(location = 5) in vec4 a_position;\n"
+        "in vec4 a_other;\n"
+        "void main() { gl_Position = a_position + a_other * 0.0; }\n";
+    static const GLchar constant_fragment[] =
+        "#version 300 es\n"
+        "precision mediump float; out vec4 color;\n"
+        "void main() { color = vec4(1.0); }\n";
+    const GLuint located_program = build_test_program(located, constant_fragment);
+    glBindAttribLocation(located_program, 0, "a_position");
+    glBindAttribLocation(located_program, 5, "a_other");
+    glLinkProgram(located_program);
+    GLint status = GL_TRUE;
+    glGetProgramiv(located_program, GL_LINK_STATUS, &status);
+    assert(status == GL_FALSE); // a_other's binding collides with layout 5.
+    glBindAttribLocation(located_program, 1, "a_other");
+    glLinkProgram(located_program);
+    glGetProgramiv(located_program, GL_LINK_STATUS, &status);
+    assert(status == GL_TRUE);
+    assert(glGetAttribLocation(located_program, "a_position") == 5);
+    assert(glGetAttribLocation(located_program, "a_other") == 1);
+
+    // Both stages must use the same language version. Free the programs
+    // first: the context holds two program and four shader objects.
+    glUseProgram(0);
+    glDeleteProgram(program);
+    glDeleteProgram(located_program);
+    static const GLchar es1_fragment[] =
+        "precision mediump float; void main() { gl_FragColor = vec4(1.0); }\n";
+    const GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+    const GLchar *vertex_source = vertex;
+    glShaderSource(vertex_shader, 1, &vertex_source, nullptr);
+    glCompileShader(vertex_shader);
+    const GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *fragment_source = es1_fragment;
+    glShaderSource(fragment_shader, 1, &fragment_source, nullptr);
+    glCompileShader(fragment_shader);
+    const GLuint mixed = glCreateProgram();
+    glAttachShader(mixed, vertex_shader);
+    glAttachShader(mixed, fragment_shader);
+    glLinkProgram(mixed);
+    status = -1;
+    glGetProgramiv(mixed, GL_LINK_STATUS, &status);
+    assert(status == GL_FALSE);
+    assert(glGetError() == GL_NO_ERROR);
+
+    glDeleteProgram(mixed);
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
+    assert(glGetError() == GL_NO_ERROR);
+    fxglReleaseCurrent();
+}
+
 void test_texture_lookup_variants()
 {
     uint16_t color[16] = {};
@@ -3222,6 +3318,7 @@ int main()
     test_sampler_objects();
     test_instancing_and_primitive_restart();
     test_buffer_mapping();
+    test_glsl_es_300_programs();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

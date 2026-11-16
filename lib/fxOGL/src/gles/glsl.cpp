@@ -216,7 +216,9 @@ enum class Storage : uint8_t
     Position,
     PointSize,
     FragmentColor,
-    BuiltinInput /* index: 0 gl_FragCoord, 1 gl_FrontFacing, 2 gl_PointCoord */
+    /* index: 0 gl_FragCoord, 1 gl_FrontFacing, 2 gl_PointCoord (fragment);
+       3 gl_VertexID, 4 gl_InstanceID (vertex, GLSL ES 3.00) */
+    BuiltinInput
 };
 
 struct ResolvedVariable
@@ -476,7 +478,12 @@ public:
             }
             else if (is_identifier("attribute") ||
                      is_identifier("uniform") ||
-                     is_identifier("varying"))
+                     is_identifier("varying") ||
+                     (es3() && (is_identifier("in") || is_identifier("out") ||
+                                is_identifier("layout") ||
+                                is_identifier("smooth") ||
+                                is_identifier("flat") ||
+                                is_identifier("centroid"))))
             {
                 if (module_.has_main)
                 {
@@ -659,21 +666,83 @@ private:
         expect_punctuation(';');
     }
 
+    bool es3() const { return module_.language_version == 300; }
+
+    /* layout(location = N), GLSL ES 3.00. Returns N, or -1 without one. */
+    int parse_layout_qualifier()
+    {
+        if (!is_identifier("layout"))
+            return -1;
+        advance();
+        if (!expect_punctuation('('))
+            return -1;
+        if (!is_identifier("location"))
+        {
+            fail("only the layout location qualifier is supported");
+            return -1;
+        }
+        advance();
+        if (!expect_punctuation('='))
+            return -1;
+        if (current_.kind != TokenKind::Number || !current_.integer ||
+            current_.number < 0.0f ||
+            current_.number >= static_cast<float>(GLSL_MAX_ATTRIBUTES))
+        {
+            fail("layout location must be a small non-negative integer constant");
+            return -1;
+        }
+        const int location = static_cast<int>(current_.number);
+        advance();
+        expect_punctuation(')');
+        return failed_ ? -1 : location;
+    }
+
     void parse_global_declaration()
     {
+        const int layout_location = parse_layout_qualifier();
+        if (failed_)
+            return;
+        if (is_identifier("flat") || is_identifier("centroid"))
+        {
+            fail("flat and centroid interpolation are not supported");
+            return;
+        }
+        if (is_identifier("smooth"))
+            advance(); // The default and only interpolation.
+
         Storage storage;
+        bool fragment_output = false;
+        if (es3() && (is_identifier("attribute") || is_identifier("varying")))
+        {
+            fail("attribute and varying are not GLSL ES 3.00; use in and out");
+            return;
+        }
         if (is_identifier("attribute"))
             storage = Storage::Attribute;
         else if (is_identifier("uniform"))
             storage = Storage::Uniform;
         else if (is_identifier("varying"))
             storage = Storage::Varying;
+        else if (es3() && is_identifier("in"))
+            storage = stage_ == ShaderStage::Vertex
+                ? Storage::Attribute : Storage::Varying;
+        else if (es3() && is_identifier("out"))
+        {
+            storage = Storage::Varying;
+            fragment_output = stage_ == ShaderStage::Fragment;
+        }
         else
         {
-            fail("expected attribute, uniform, varying or precision declaration");
+            fail(es3() ? "expected in, out, uniform or precision declaration"
+                       : "expected attribute, uniform, varying or precision declaration");
             return;
         }
         advance();
+        if (layout_location >= 0 && storage != Storage::Attribute && !fragment_output)
+        {
+            fail("layout locations apply to vertex inputs and fragment outputs");
+            return;
+        }
 
         const ShaderType type = parse_type();
         if (failed_)
@@ -715,6 +784,24 @@ private:
         if (lookup(name).type != ShaderType::Invalid)
         {
             fail("duplicate variable declaration");
+            return;
+        }
+
+        if (fragment_output)
+        {
+            // One RGB565 color buffer: a single vec4 output at location 0.
+            if (module_.fragment_output[0] != '\0' || layout_location > 0)
+            {
+                fail("only one fragment output, at location 0, is supported");
+                return;
+            }
+            if (type != ShaderType::Vec4 || array_size != 0)
+            {
+                fail("the fragment output must be a vec4");
+                return;
+            }
+            std::snprintf(module_.fragment_output,
+                          sizeof(module_.fragment_output), "%s", name);
             return;
         }
 
@@ -763,6 +850,9 @@ private:
             {
                 std::snprintf(variable.name, sizeof(variable.name), "%s", name);
                 variable.array_size = static_cast<uint8_t>(array_size);
+                if (layout_location >= 0)
+                    variable.layout_location =
+                        static_cast<uint8_t>(layout_location + 1);
             }
             variable.type = type;
             variable.index = static_cast<uint8_t>(*count);
@@ -778,9 +868,19 @@ private:
         if (stage_ == ShaderStage::Vertex &&
             std::strcmp(name, "gl_PointSize") == 0)
             return {Storage::PointSize, ShaderType::Float, 0, true};
-        if (stage_ == ShaderStage::Fragment &&
+        if (stage_ == ShaderStage::Fragment && !es3() &&
             std::strcmp(name, "gl_FragColor") == 0)
             return {Storage::FragmentColor, ShaderType::Vec4, 0, true};
+        if (stage_ == ShaderStage::Fragment && module_.fragment_output[0] != '\0' &&
+            std::strcmp(name, module_.fragment_output) == 0)
+            return {Storage::FragmentColor, ShaderType::Vec4, 0, true};
+        if (stage_ == ShaderStage::Vertex && es3())
+        {
+            if (std::strcmp(name, "gl_VertexID") == 0)
+                return {Storage::BuiltinInput, ShaderType::Int, 3, false};
+            if (std::strcmp(name, "gl_InstanceID") == 0)
+                return {Storage::BuiltinInput, ShaderType::Int, 4, false};
+        }
         if (stage_ == ShaderStage::Fragment)
         {
             if (std::strcmp(name, "gl_FragCoord") == 0)
@@ -2296,7 +2396,7 @@ private:
             case Storage::BuiltinInput:
                 op = ShaderOp::LoadBuiltinInput;
                 module_.uses_builtin_inputs = true;
-                if (variable.index != 1)
+                if (variable.index == 0 || variable.index == 2)
                     module_.uses_fragment_coordinates = true;
                 break;
         }
@@ -2584,6 +2684,31 @@ private:
             return constructor;
         }
 
+        // GLSL ES 3.00 names the lookups texture, textureProj, textureLod and
+        // textureProjLod, with no stage restriction on an explicit LOD.
+        const bool es3_texture = es3() &&
+            (std::strcmp(name, "texture") == 0 ||
+             std::strcmp(name, "textureProj") == 0 ||
+             std::strcmp(name, "textureLod") == 0 ||
+             std::strcmp(name, "textureProjLod") == 0);
+        const bool es1_texture =
+            std::strcmp(name, "texture2D") == 0 ||
+            std::strcmp(name, "texture2DProj") == 0 ||
+            std::strcmp(name, "texture2DLod") == 0 ||
+            std::strcmp(name, "texture2DProjLod") == 0;
+        if (es3() && es1_texture)
+        {
+            fail("texture2D lookups are not GLSL ES 3.00; use texture");
+            return ShaderType::Invalid;
+        }
+        if (es3_texture && std::strcmp(name, "texture") == 0 && argument_count == 2)
+            name = "texture2D"; // Same lookup and fast path as GLSL ES 1.00.
+        else if (es3_texture)
+            name = std::strcmp(name, "texture") == 0 ? "texture2D"
+                 : std::strcmp(name, "textureProj") == 0 ? "texture2DProj"
+                 : std::strcmp(name, "textureLod") == 0 ? "texture2DLod"
+                 : "texture2DProjLod";
+
         if (std::strcmp(name, "texture2D") == 0 && argument_count == 2)
         {
             if (arguments[0] != ShaderType::Sampler2D ||
@@ -2622,7 +2747,7 @@ private:
                 fail("texture lookup bias is only available in fragment shaders");
                 return ShaderType::Invalid;
             }
-            if (explicit_lod && stage_ != ShaderStage::Vertex)
+            if (explicit_lod && stage_ != ShaderStage::Vertex && !es3())
             {
                 fail("explicit-lod texture lookups are only available in vertex shaders");
                 return ShaderType::Invalid;
@@ -3434,6 +3559,7 @@ bool compile_glsl(
 {
     module = {};
     module.stage = stage;
+    module.language_version = 100; // Without a #version directive.
     if (!source)
     {
         std::snprintf(module.info_log, sizeof(module.info_log),
@@ -3453,14 +3579,23 @@ bool compile_glsl(
         const char *line_end = shader_source;
         while (*line_end && *line_end != '\n' && *line_end != '\r')
             ++line_end;
-        const char *expected = "#version 100";
-        size_t length = static_cast<size_t>(line_end - shader_source);
-        while (length > 0 &&
-               (shader_source[length - 1] == ' ' ||
-                shader_source[length - 1] == '\t'))
-            --length;
-        if (length != std::strlen(expected) ||
-            std::strncmp(shader_source, expected, length) != 0)
+        // Compare the directive's words, ignoring the spacing between them.
+        char words[32] = {};
+        size_t used = 0;
+        for (const char *c = shader_source; c < line_end && used + 1 < sizeof(words); ++c)
+        {
+            const bool space = *c == ' ' || *c == '\t';
+            if (space && (used == 0 || words[used - 1] == ' '))
+                continue;
+            words[used++] = space ? ' ' : *c;
+        }
+        while (used > 0 && words[used - 1] == ' ')
+            words[--used] = '\0';
+        if (std::strcmp(words, "#version 100") == 0)
+            module.language_version = 100;
+        else if (std::strcmp(words, "#version 300 es") == 0)
+            module.language_version = 300;
+        else
         {
             std::snprintf(module.info_log, sizeof(module.info_log),
                           "GLSL ES subset: unsupported preprocessor directive");
@@ -4727,7 +4862,9 @@ bool execute_glsl(
                 const ShaderValue *input =
                     instruction.index == 0 ? &runtime.frag_coord :
                     instruction.index == 1 ? &runtime.front_facing :
-                    instruction.index == 2 ? &runtime.point_coord : nullptr;
+                    instruction.index == 2 ? &runtime.point_coord :
+                    instruction.index == 3 ? &runtime.vertex_id :
+                    instruction.index == 4 ? &runtime.instance_id : nullptr;
                 if (!input || input->type != instruction.type ||
                     !push_value(stack, stack_size, *input))
                     return false;

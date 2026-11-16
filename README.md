@@ -17,6 +17,11 @@ full GLES 2.0 compatibility or Khronos conformance.
 | **Historical projects** | [`archive/`](archive/) | Earlier renderer generations and model-renderer experiments |
 | **Documentation** | [`docs/`](docs/) | Architecture, compatibility roadmap, benchmark design and third-party notices |
 
+fxOGL and the graphics benchmarks are planned to move into repositories of
+their own later. The shared fx-CG50 infrastructure (the launcher, the ESP32-S3
+storage interface and GB-Link compatibility) starts here too; see
+[`docs/fxOGL-roadmap.md`](docs/fxOGL-roadmap.md).
+
 ## Build fxGLMark for fx-CG50
 
 Install a working fxSDK/Gint toolchain, then run:

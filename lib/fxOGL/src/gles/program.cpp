@@ -363,6 +363,12 @@ static bool link_program(ProgramObject& program)
                 "Link failed: attached shaders must compile successfully");
         return false;
     }
+    if (vertex->module.language_version != fragment->module.language_version)
+    {
+        set_log(program.info_log, sizeof(program.info_log),
+                "Link failed: shaders must use the same GLSL ES version");
+        return false;
+    }
 
     program.vertex_module = vertex->module;
     program.fragment_module = fragment->module;
@@ -399,7 +405,10 @@ static bool link_program(ProgramObject& program)
     {
         const fxgl::ShaderVariable& attribute =
             program.vertex_module.attributes[i];
-        const int location = find_bound_attribute(program, attribute.name);
+        // A GLSL ES 3.00 layout(location = N) overrides glBindAttribLocation.
+        const int location = attribute.layout_location != 0
+            ? attribute.layout_location - 1
+            : find_bound_attribute(program, attribute.name);
         if (location < 0)
             continue;
         if (location >= static_cast<int>(fxgl::GLSL_MAX_ATTRIBUTES) ||

@@ -1490,6 +1490,15 @@ static bool execute_vertex(
         }
     }
 
+    if (module.uses_builtin_inputs)
+    {
+        // GLSL ES 3.00 gl_VertexID and gl_InstanceID.
+        runtime.vertex_id.type = fxgl::ShaderType::Int;
+        runtime.vertex_id.data[0] = static_cast<float>(vertex_index);
+        runtime.instance_id.type = fxgl::ShaderType::Int;
+        runtime.instance_id.data[0] = static_cast<float>(invocation.instance);
+    }
+
     for (size_t i = 0; i < module.uniform_count; ++i)
     {
         const uint8_t location = program.vertex_uniform_map[i];

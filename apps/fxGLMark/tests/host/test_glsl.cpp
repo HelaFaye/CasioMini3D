@@ -1670,6 +1670,104 @@ static void test_arithmetic_operand_rules()
     }
 }
 
+static ShaderValue make_value(ShaderType type, float x, float y = 0.0f, float z = 0.0f)
+{
+    ShaderValue value = {};
+    value.type = type;
+    value.data[0] = x;
+    value.data[1] = y;
+    value.data[2] = z;
+    return value;
+}
+
+static void test_glsl_es_300_front_end()
+{
+    // in/out, layout locations, the declared fragment output and texture().
+    static const char vertex[] =
+        "#version 300 es\n"
+        "layout(location = 3) in vec2 a_position;\n"
+        "in vec3 a_color;\n"
+        "out vec3 v_color;\n"
+        "void main() {\n"
+        "  v_color = a_color;\n"
+        "  gl_Position = vec4(a_position, float(gl_VertexID), float(gl_InstanceID));\n"
+        "}\n";
+    ShaderModule vertex_module = {};
+    compile_or_report(ShaderStage::Vertex, vertex, vertex_module, "es3 vertex");
+    assert(vertex_module.language_version == 300);
+    assert(vertex_module.attribute_count == 2);
+    assert(vertex_module.attributes[0].layout_location == 4);
+    assert(vertex_module.attributes[1].layout_location == 0);
+    assert(vertex_module.varying_count == 1);
+    assert(vertex_module.uses_builtin_inputs);
+    ShaderRuntime runtime = {};
+    fxgl::prepare_shader_runtime(vertex_module, runtime);
+    runtime.attributes[0] = make_value(ShaderType::Vec2, 0.25f, 0.5f);
+    runtime.attributes[1] = make_value(ShaderType::Vec3, 1.0f, 0.0f, 0.5f);
+    runtime.vertex_id = make_value(ShaderType::Int, 7.0f);
+    runtime.instance_id = make_value(ShaderType::Int, 2.0f);
+    assert(fxgl::execute_glsl(vertex_module, runtime));
+    assert(near(runtime.position.data[2], 7.0f) && near(runtime.position.data[3], 2.0f));
+    assert(near(runtime.varyings[0].data[2], 0.5f));
+
+    static const char fragment[] =
+        "#version 300   es\n"
+        "precision mediump float;\n"
+        "in vec3 v_color;\n"
+        "layout(location = 0) out vec4 frag_color;\n"
+        "void main() { frag_color = vec4(v_color, 1.0); frag_color.g = 0.25; }\n";
+    ShaderModule fragment_module = {};
+    compile_or_report(ShaderStage::Fragment, fragment, fragment_module, "es3 fragment");
+    assert(std::strcmp(fragment_module.fragment_output, "frag_color") == 0);
+    assert(fragment_module.varying_count == 1);
+    fxgl::prepare_shader_runtime(fragment_module, runtime);
+    runtime.varyings[0] = make_value(ShaderType::Vec3, 1.0f, 0.0f, 0.5f);
+    assert(fxgl::execute_glsl(fragment_module, runtime));
+    assert(near(runtime.fragment_color.data[0], 1.0f));
+    assert(near(runtime.fragment_color.data[1], 0.25f));
+
+    // Lookups use the GLSL ES 3.00 names; textureLod works in both stages.
+    static const char lookups[] =
+        "#version 300 es\n"
+        "precision mediump float;\n"
+        "uniform sampler2D s; out vec4 o;\n"
+        "void main() { o = texture(s, vec2(0.5)) + texture(s, vec2(0.5), 1.0)\n"
+        "  + textureProj(s, vec3(1.0)) + textureLod(s, vec2(0.0), 0.0)\n"
+        "  + textureProjLod(s, vec4(1.0), 0.0); }\n";
+    ShaderModule lookup_module = {};
+    compile_or_report(ShaderStage::Fragment, lookups, lookup_module, "es3 lookups");
+
+    const struct { ShaderStage stage; const char *source; } invalid[] = {
+        {ShaderStage::Vertex, "#version 300 es\nattribute vec4 a; void main() { gl_Position = a; }"},
+        {ShaderStage::Vertex, "#version 300 es\nvarying vec4 v; void main() { gl_Position = vec4(1.0); }"},
+        {ShaderStage::Fragment, "#version 300 es\nvoid main() { gl_FragColor = vec4(1.0); }"},
+        {ShaderStage::Fragment, "#version 300 es\nprecision mediump float; uniform sampler2D s; out vec4 o;\n"
+                                "void main() { o = texture2D(s, vec2(0.0)); }"},
+        {ShaderStage::Fragment, "#version 300 es\nout vec4 a; out vec4 b; void main() { a = vec4(1.0); }"},
+        {ShaderStage::Fragment, "#version 300 es\nlayout(location = 1) out vec4 a; void main() { a = vec4(1.0); }"},
+        {ShaderStage::Fragment, "#version 300 es\nout vec3 a; void main() { a = vec3(1.0); }"},
+        {ShaderStage::Vertex, "#version 300 es\nlayout(location = 0) uniform vec4 u; void main() { gl_Position = u; }"},
+        {ShaderStage::Vertex, "#version 300 es\nlayout(location = 0) out vec4 v; void main() { gl_Position = v; }"},
+        {ShaderStage::Vertex, "#version 300 es\nflat out vec4 v; void main() { gl_Position = vec4(1.0); }"},
+        {ShaderStage::Vertex, "#version 300 es\nin vec4 a; void main() { gl_Position = a + vec4(float(gl_FragCoord.x)); }"},
+        {ShaderStage::Vertex, "#version 300\nin vec4 a; void main() { gl_Position = a; }"},
+        {ShaderStage::Vertex, "#version 310 es\nin vec4 a; void main() { gl_Position = a; }"},
+        // GLSL ES 1.00 has neither in/out globals, gl_VertexID nor texture().
+        {ShaderStage::Vertex, "in vec4 a; void main() { gl_Position = a; }"},
+        {ShaderStage::Vertex, "void main() { gl_Position = vec4(float(gl_VertexID)); }"},
+        {ShaderStage::Fragment, "precision mediump float; uniform sampler2D s;\n"
+                                "void main() { gl_FragColor = texture(s, vec2(0.0)); }"},
+    };
+    for (const auto& bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(bad.stage, bad.source, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad.source);
+        assert(!compiled);
+    }
+}
+
 } // namespace
 
 
@@ -1711,6 +1809,7 @@ int main()
     test_conditional_operator();
     test_array_function_parameters();
     test_arithmetic_operand_rules();
+    test_glsl_es_300_front_end();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;

@@ -71,6 +71,9 @@ struct ShaderVariable
        array of N elements occupies N consecutive slots starting at index;
        the slots after the first are recorded as unnamed element entries. */
     uint8_t array_size;
+    /* GLSL ES 3.00 layout(location = N) on a vertex input, stored as N + 1;
+       0 when there is no layout qualifier. */
+    uint8_t layout_location;
 };
 
 struct ShaderFunction
@@ -175,6 +178,8 @@ struct ShaderInstruction
 struct ShaderModule
 {
     ShaderStage stage;
+    /* 100 for GLSL ES 1.00, 300 for GLSL ES 3.00 (#version 300 es). */
+    uint16_t language_version;
     ShaderVariable attributes[GLSL_MAX_ATTRIBUTES];
     ShaderVariable uniforms[GLSL_MAX_UNIFORMS];
     ShaderVariable varyings[GLSL_MAX_VARYINGS];
@@ -193,8 +198,11 @@ struct ShaderModule
     /* Fragment shader reads gl_FragCoord or gl_PointCoord, so the pipeline
        must supply window and point coordinates. */
     bool uses_fragment_coordinates;
-    /* Fragment shader reads any built-in input (including gl_FrontFacing). */
+    /* Shader reads any built-in input (gl_FrontFacing, gl_VertexID, ...). */
     bool uses_builtin_inputs;
+    /* GLSL ES 3.00 fragment output declared with `out vec4 name;`; it takes
+       the place of gl_FragColor. Empty when there is none. */
+    char fragment_output[GLSL_NAME_BYTES];
     char info_log[160];
 };
 
@@ -214,6 +222,9 @@ struct ShaderRuntime
     ShaderValue frag_coord;
     ShaderValue front_facing;
     ShaderValue point_coord;
+    /* Vertex built-in inputs (GLSL ES 3.00), refreshed per vertex. */
+    ShaderValue vertex_id;
+    ShaderValue instance_id;
 };
 
 /* Sample a texture unit at (u, v). The derivatives give the implicit level
@@ -269,6 +280,18 @@ using TextureSampleFunction = bool (*)(
    matrix-matrix products; int division truncates. Texture lookups cover
    texture2D (optional fragment bias), texture2DProj (vec3/vec4, optional
    fragment bias) and the vertex-only texture2DLod and texture2DProjLod.
+   `#version 300 es` selects GLSL ES 3.00:
+   - in/out replace attribute/varying (which it rejects);
+   - layout(location = N) is accepted on vertex inputs and overrides
+     glBindAttribLocation;
+   - one `out vec4` fragment output at location 0 replaces gl_FragColor;
+   - texture, textureProj, textureLod and textureProjLod replace the
+     texture2D family, with an explicit LOD allowed in both stages;
+   - gl_VertexID and gl_InstanceID are available.
+   Not yet supported in GLSL ES 3.00: 32-bit integer semantics (ints stay
+   exact to 2^24), unsigned types, flat/centroid interpolation, uniform
+   blocks, integer and 3D samplers, and multiple fragment outputs. Both
+   stages of a program must use the same version.
    Whole-array assignment, structs, do-while, switch, preprocessor
    directives and precision qualifiers other than ordinary precision
    statements remain unsupported. GLSL ES 1.00 has no array return types
