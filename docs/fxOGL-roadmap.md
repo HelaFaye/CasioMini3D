@@ -204,6 +204,21 @@ Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
 6. Build deterministic reference images and a repeatable hardware test log.
 7. Run a formal conformance suite before making any compatibility claim.
 
+## Applications to port
+
+- **glxgears.** The classic three-gear spinning demo, as an fxOGL add-in that
+  reports its frame rate.
+  - glxgears itself uses GLX and fixed-function OpenGL (display lists,
+    `glBegin`, built-in lighting), none of which fxOGL has. Port it the way
+    Mesa's `es2gears` does: the same gear geometry built into vertex buffers,
+    lit per vertex in a GLSL ES 1.00 shader.
+  - Keep the original copyright and permission notice, per the Mesa demos
+    license.
+  - A useful second workload next to fxGLMark: depth-tested, lit, mid-sized
+    meshes drawn every frame.
+- **Project Picori** (HelaFaye/tmc, `fx-cg50` branch): a 2D port that uses no
+  fxOGL. Its plan is in that repository at `docs/fx-cg50-port-plan.md`.
+
 Host CI validates parser, sampler, context, pipeline and app integration
 behavior. It does not replace the fxSDK/SH build or physical calculator
 testing.
