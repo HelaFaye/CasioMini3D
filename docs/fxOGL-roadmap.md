@@ -219,6 +219,28 @@ Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
 - **Project Picori** (HelaFaye/tmc, `fx-cg50` branch): a 2D port that uses no
   fxOGL. Its plan is in that repository at `docs/fx-cg50-port-plan.md`.
 
+## Shared fx-CG50 infrastructure (planned, in this repository)
+
+These parts serve every port, Project Picori first, so they live here:
+
+- **ESP32-S3 storage interface.** Firmware for an ESP32-S3FH4R2 SuperMini with
+  a microSD breakout, on the calculator's 2.5 mm serial port. It provides:
+  - SLIP+CRC link framing, adapted from HelaFaye/gbagate's `link_proto`;
+  - SD file access;
+  - installing add-ins and data into calculator storage;
+  - save backup;
+  - Wi-Fi file transfer;
+  - audio playback.
+- **Calculator link client.** A gint library for the same protocol.
+- **Launcher.** An add-in that browses the SD card and installs or starts
+  applications.
+- **GB-Link compatibility.** Link-cable emulation for ports such as Pokémon
+  Emerald, talking to GB-Link hosts (Celio, the netplay bridge) through the
+  ESP32. It starts here and moves to its own repository later.
+
+Wiring, the suggested pinout and the voltage check required before connecting
+anything (there is no level shifter) are in tmc's `docs/fx-cg50-port-plan.md`.
+
 Host CI validates parser, sampler, context, pipeline and app integration
 behavior. It does not replace the fxSDK/SH build or physical calculator
 testing.
