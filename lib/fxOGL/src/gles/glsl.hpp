@@ -171,7 +171,18 @@ enum class ShaderOp : uint8_t
     /* texture2D with bias, texture2DProj, texture2DLod and texture2DProjLod.
        index holds TEXTURE_LOOKUP_* flags; argument_count is the number of
        stack operands (sampler, coordinate and an optional bias or lod). */
-    Texture2DExt
+    Texture2DExt,
+    /* GLSL ES 3.00 integer operators on int/ivec operands, component-wise
+       with scalar broadcast like arithmetic: % & | ^ << >>, and unary ~. */
+    Modulo,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    BitNot,
+    /* ^^ on two bools. */
+    LogicalXor
 };
 
 constexpr uint8_t TEXTURE_LOOKUP_PROJECTIVE = 1u << 0; /* divide by q */
@@ -310,8 +321,14 @@ using TextureSampleFunction = bool (*)(
    int and ivec values are exact 32-bit two's-complement integers in both
    versions: + - * wrap, / truncates toward zero, division by zero gives 0,
    and float-to-int conversion truncates (saturating out of range).
-   Not yet supported in GLSL ES 3.00: unsigned types, the integer-only
-   operators (%, bitwise, shifts), flat/centroid interpolation, uniform
+   Both versions have compound assignment (+= -= *= /=), statement-level
+   x++ / x--, ^^, and decimal, octal and hexadecimal integer literals.
+   GLSL ES 3.00 adds % & | ^ << >> ~ and their compound forms on int/ivec
+   (x % 0 is 0; out-of-range shifts give 0 or the sign fill).
+   Compound assignment to a dynamically indexed array element is
+   unsupported.
+   Not yet supported in GLSL ES 3.00: unsigned types, flat/centroid
+   interpolation, uniform
    blocks, integer and 3D samplers, and multiple fragment outputs. Both
    stages of a program must use the same version.
    Whole-array assignment, structs, do-while, switch, preprocessor

@@ -72,6 +72,42 @@ public:
              source_[offset_ + 1] <= '9'))
         {
             const size_t start = offset_;
+            // Hexadecimal integer literal: 0x followed by up to eight digits,
+            // the full 32-bit pattern (0xFFFFFFFF is -1).
+            if (c == '0' && (source_[offset_ + 1] == 'x' || source_[offset_ + 1] == 'X'))
+            {
+                offset_ += 2;
+                uint64_t value = 0;
+                size_t digits = 0;
+                for (;; ++offset_, ++digits)
+                {
+                    const char d = source_[offset_];
+                    const int nibble = d >= '0' && d <= '9' ? d - '0'
+                        : d >= 'a' && d <= 'f' ? d - 'a' + 10
+                        : d >= 'A' && d <= 'F' ? d - 'A' + 10 : -1;
+                    if (nibble < 0)
+                        break;
+                    value = value * 16u + static_cast<uint64_t>(nibble);
+                    if (value > 0xffffffffull)
+                        break;
+                }
+                if (digits == 0 || value > 0xffffffffull ||
+                    is_identifier_part(source_[offset_]) || source_[offset_] == '.')
+                {
+                    token.kind = TokenKind::Invalid;
+                    copy_error_text(token.text, sizeof(token.text),
+                                    "invalid hexadecimal literal");
+                    return token;
+                }
+                const size_t length = std::min(offset_ - start, sizeof(token.text) - 1);
+                std::memcpy(token.text, source_ + start, length);
+                token.text[length] = '\0';
+                token.integer = true;
+                token.integer_value = static_cast<int32_t>(static_cast<uint32_t>(value));
+                token.number = static_cast<float>(token.integer_value);
+                token.kind = TokenKind::Number;
+                return token;
+            }
             bool has_dot = false;
             bool has_exponent = false;
             if (source_[offset_] == '.')
@@ -125,11 +161,22 @@ public:
             token.integer = !has_dot && !has_exponent;
             if (token.integer)
             {
+                // A leading 0 makes the literal octal, up to 037777777777.
+                const bool octal = token.text[0] == '0' && token.text[1] != '\0';
+                const uint64_t limit = octal ? 0xffffffffull : 2147483648ull;
                 uint64_t value = 0;
                 for (const char *digit = token.text; *digit; ++digit)
                 {
-                    value = value * 10u + static_cast<uint64_t>(*digit - '0');
-                    if (value > 2147483648ull)
+                    if (octal && *digit > '7')
+                    {
+                        token.kind = TokenKind::Invalid;
+                        copy_error_text(token.text, sizeof(token.text),
+                                        "invalid octal literal");
+                        return token;
+                    }
+                    value = value * (octal ? 8u : 10u) +
+                            static_cast<uint64_t>(*digit - '0');
+                    if (value > limit)
                     {
                         token.kind = TokenKind::Invalid;
                         copy_error_text(token.text, sizeof(token.text),
@@ -139,27 +186,32 @@ public:
                 }
                 token.integer_value = static_cast<int32_t>(
                     static_cast<uint32_t>(value));
+                if (octal)
+                    token.number = static_cast<float>(token.integer_value);
             }
             token.kind = TokenKind::Number;
             return token;
         }
 
-        if (std::strchr("=!<>&|+-", c))
+        // Longest operator first: <<= >>=, then the two-character forms.
+        static const char *const operators[] = {
+            "<<=", ">>=",
+            "<=", ">=", "==", "!=", "&&", "||", "^^", "++", "--", "<<", ">>",
+            "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="
+        };
+        for (const char *op : operators)
         {
-            const char next = source_[offset_ + 1];
-            const bool pair =
-                ((c == '=' || c == '!' || c == '<' || c == '>') && next == '=') ||
-                ((c == '&' || c == '|') && next == c) ||
-                ((c == '+' || c == '-') && next == c);
-            token.kind = TokenKind::Punctuation;
-            token.text[0] = c;
-            token.text[1] = pair ? next : '\0';
-            token.text[pair ? 2 : 1] = '\0';
-            offset_ += pair ? 2 : 1;
-            return token;
+            const size_t length = std::strlen(op);
+            if (std::strncmp(source_ + offset_, op, length) == 0)
+            {
+                token.kind = TokenKind::Punctuation;
+                std::memcpy(token.text, op, length + 1);
+                offset_ += length;
+                return token;
+            }
         }
 
-        if (std::strchr("{}();,[]=.+-*/?:", c))
+        if (std::strchr("{}();,[]=.+-*/?:<>!&|^%~", c))
         {
             token.kind = TokenKind::Punctuation;
             token.text[0] = c;
@@ -465,6 +517,49 @@ static ShaderType arithmetic_result(ShaderOp op, ShaderType left, ShaderType rig
     if (right == left_base)
         return left;
     return ShaderType::Invalid;
+}
+
+/* Result type of an integer-only operator (GLSL ES 3.00). % & | ^ follow
+   the arithmetic shapes on int-based operands; a shift keeps the left
+   operand's type and takes an int or a same-size ivec count. */
+static ShaderType integer_operator_result(ShaderOp op, ShaderType left, ShaderType right)
+{
+    const auto is_int_based = [](ShaderType type)
+    {
+        return type == ShaderType::Int || is_int_vector(type);
+    };
+    if (!is_int_based(left) || !is_int_based(right))
+        return ShaderType::Invalid;
+    if (op == ShaderOp::ShiftLeft || op == ShaderOp::ShiftRight)
+        return right == ShaderType::Int || right == left ? left : ShaderType::Invalid;
+    return arithmetic_result(ShaderOp::Add, left, right);
+}
+
+static ShaderOp binary_operator_op(const char *operation)
+{
+    static const struct { const char *text; ShaderOp op; } table[] = {
+        {"+", ShaderOp::Add}, {"-", ShaderOp::Subtract},
+        {"*", ShaderOp::Multiply}, {"/", ShaderOp::Divide},
+        {"%", ShaderOp::Modulo}, {"&", ShaderOp::BitAnd},
+        {"|", ShaderOp::BitOr}, {"^", ShaderOp::BitXor},
+        {"<<", ShaderOp::ShiftLeft}, {">>", ShaderOp::ShiftRight},
+        {"==", ShaderOp::Equal}, {"!=", ShaderOp::NotEqual},
+        {"<", ShaderOp::Less}, {"<=", ShaderOp::LessEqual},
+        {">", ShaderOp::Greater}, {">=", ShaderOp::GreaterEqual},
+        {"&&", ShaderOp::LogicalAnd}, {"||", ShaderOp::LogicalOr},
+        {"^^", ShaderOp::LogicalXor},
+    };
+    for (const auto& entry : table)
+        if (std::strcmp(entry.text, operation) == 0)
+            return entry.op;
+    return ShaderOp::PushFloat; // Not a binary operator.
+}
+
+static bool is_integer_only_operator(ShaderOp op)
+{
+    return op == ShaderOp::Modulo || op == ShaderOp::BitAnd ||
+           op == ShaderOp::BitOr || op == ShaderOp::BitXor ||
+           op == ShaderOp::ShiftLeft || op == ShaderOp::ShiftRight;
 }
 
 class Parser
@@ -1623,6 +1718,126 @@ private:
         }
     }
 
+    /* How to re-read an assignment target for a compound assignment. */
+    struct TargetRead
+    {
+        enum Kind { None, Whole, Swizzle, Column } kind;
+        ResolvedVariable base;   /* the variable or array element */
+        ResolvedVariable target; /* the swizzle (Swizzle kind) */
+        uint8_t column;          /* the matrix column (Column kind) */
+    };
+
+    void emit_storage_load(const ResolvedVariable& variable)
+    {
+        ShaderOp op = ShaderOp::LoadLocal;
+        switch (variable.storage)
+        {
+            case Storage::Attribute: op = ShaderOp::LoadAttribute; break;
+            case Storage::Uniform: op = ShaderOp::LoadUniform; break;
+            case Storage::Varying: op = ShaderOp::LoadVarying; break;
+            case Storage::Position: op = ShaderOp::LoadPosition; break;
+            case Storage::PointSize: op = ShaderOp::LoadPointSize; break;
+            case Storage::FragmentColor: op = ShaderOp::LoadFragmentColor; break;
+            default: op = ShaderOp::LoadLocal; break;
+        }
+        emit_simple(op, variable.type, variable.index);
+    }
+
+    void emit_target_read(const TargetRead& read)
+    {
+        emit_storage_load(read.base);
+        if (read.kind == TargetRead::Swizzle)
+        {
+            ShaderInstruction instruction = {};
+            instruction.op = ShaderOp::Swizzle;
+            instruction.type = read.target.type;
+            instruction.argument_count =
+                static_cast<uint8_t>(component_count(read.target.type));
+            for (size_t i = 0; i < instruction.argument_count; ++i)
+                instruction.swizzle[i] = read.target.components[i];
+            emit(instruction);
+        }
+        else if (read.kind == TargetRead::Column)
+        {
+            ShaderInstruction instruction = {};
+            instruction.op = ShaderOp::LoadMatrixColumn;
+            instruction.type = vector_type(matrix_dimension(read.base.type));
+            instruction.index = read.column;
+            emit(instruction);
+        }
+    }
+
+    /* After an assignment target: `= expression`, a compound `op= expression`
+       (target op expression, which must keep the target's type), or a
+       postfix ++/-- (target + 1). Returns the type of the value to store. */
+    ShaderType parse_assignment_value(ShaderType target_type, const TargetRead& read)
+    {
+        if (accept_punctuation('='))
+            return parse_expression(1);
+        if (current_.kind != TokenKind::Punctuation)
+        {
+            fail("expected '='");
+            return ShaderType::Invalid;
+        }
+        const bool step = std::strcmp(current_.text, "++") == 0 ||
+                          std::strcmp(current_.text, "--") == 0;
+        const size_t length = std::strlen(current_.text);
+        if (!step && (length < 2 || current_.text[length - 1] != '=' ||
+                      std::strcmp(current_.text, "==") == 0 ||
+                      std::strcmp(current_.text, "<=") == 0 ||
+                      std::strcmp(current_.text, ">=") == 0 ||
+                      std::strcmp(current_.text, "!=") == 0))
+        {
+            fail("expected '='");
+            return ShaderType::Invalid;
+        }
+        char operation[4] = {};
+        if (step)
+            operation[0] = current_.text[0];
+        else
+            std::memcpy(operation, current_.text, length - 1);
+        const ShaderOp op = binary_operator_op(operation);
+        if (!es3() && is_integer_only_operator(op))
+        {
+            fail("this operator requires GLSL ES 3.00");
+            return ShaderType::Invalid;
+        }
+        if (read.kind == TargetRead::None)
+        {
+            fail("compound assignment is unsupported for this target");
+            return ShaderType::Invalid;
+        }
+        advance();
+        emit_target_read(read);
+        ShaderType operand_type = ShaderType::Invalid;
+        if (step)
+        {
+            const ShaderType base = component_count(target_type) == 1
+                ? target_type : vector_base_type(target_type);
+            if (base != ShaderType::Int && base != ShaderType::Float)
+            {
+                fail("++ and -- require an int or float target");
+                return ShaderType::Invalid;
+            }
+            ShaderInstruction one = {};
+            one.op = base == ShaderType::Int ? ShaderOp::PushInt : ShaderOp::PushFloat;
+            one.type = base;
+            one.literal = base == ShaderType::Int ? shader_int_bits(1) : 1.0f;
+            emit(one);
+            operand_type = base;
+        }
+        else
+            operand_type = parse_expression(1);
+        const ShaderType result = result_of_binary(operation, target_type, operand_type);
+        if (failed_ || result != target_type)
+        {
+            fail("compound assignment must keep the target's type");
+            return ShaderType::Invalid;
+        }
+        emit_simple(op, result);
+        return result;
+    }
+
     void parse_assignment_statement(bool consume_semicolon)
     {
         if (current_.kind != TokenKind::Identifier)
@@ -1672,8 +1887,8 @@ private:
                     fail("dynamically indexed array assignments must write whole elements");
                     return;
                 }
-                expect_punctuation('=');
-                if (parse_expression(1) != base.type)
+                const TargetRead no_read = {TargetRead::None, {}, {}, 0};
+                if (parse_assignment_value(base.type, no_read) != base.type)
                 {
                     fail("assignment type does not match target type");
                     return;
@@ -1774,8 +1989,12 @@ private:
             }
         }
 
-        expect_punctuation('=');
-        const ShaderType expression_type = parse_expression(1);
+        TargetRead read = {TargetRead::Whole, element_base, {}, 0};
+        if (matrix_column_assignment)
+            read = {TargetRead::Column, element_base, {}, matrix_column};
+        else if (swizzle_assignment)
+            read = {TargetRead::Swizzle, element_base, target, 0};
+        const ShaderType expression_type = parse_assignment_value(target.type, read);
         if (expression_type != target.type)
         {
             fail("assignment type does not match target type");
@@ -1857,8 +2076,8 @@ private:
             return;
         }
 
-        expect_punctuation('=');
-        const ShaderType expression_type = parse_expression(1);
+        const TargetRead read = {TargetRead::Whole, target, {}, 0};
+        const ShaderType expression_type = parse_assignment_value(target.type, read);
         if (expression_type != target.type)
         {
             fail("for-loop increment type mismatch");
@@ -2107,21 +2326,39 @@ private:
     {
         if (current_.kind != TokenKind::Punctuation)
             return 0;
-        if (std::strcmp(current_.text, "||") == 0) return 1;
-        if (std::strcmp(current_.text, "&&") == 0) return 2;
-        if (std::strcmp(current_.text, "==") == 0 ||
-            std::strcmp(current_.text, "!=") == 0) return 3;
-        if (std::strcmp(current_.text, "<") == 0 ||
-            std::strcmp(current_.text, "<=") == 0 ||
-            std::strcmp(current_.text, ">") == 0 ||
-            std::strcmp(current_.text, ">=") == 0) return 4;
-        if (is_punctuation('+') || is_punctuation('-')) return 5;
-        if (is_punctuation('*') || is_punctuation('/')) return 6;
+        // GLSL precedence, loosest first.
+        static const struct { const char *text; int level; } levels[] = {
+            {"||", 1}, {"^^", 2}, {"&&", 3}, {"|", 4}, {"^", 5}, {"&", 6},
+            {"==", 7}, {"!=", 7}, {"<", 8}, {"<=", 8}, {">", 8}, {">=", 8},
+            {"<<", 9}, {">>", 9}, {"+", 10}, {"-", 10},
+            {"*", 11}, {"/", 11}, {"%", 11},
+        };
+        for (const auto& entry : levels)
+            if (std::strcmp(current_.text, entry.text) == 0)
+                return entry.level;
         return 0;
     }
 
     void parse_unary(ShaderType& result_type)
     {
+        if (is_punctuation('~'))
+        {
+            if (!es3())
+            {
+                fail("this operator requires GLSL ES 3.00");
+                return;
+            }
+            advance();
+            parse_unary(result_type);
+            expression_lvalue_ = {};
+            if (result_type != ShaderType::Int && !is_int_vector(result_type))
+            {
+                fail("~ requires an int or ivec operand");
+                return;
+            }
+            emit_simple(ShaderOp::BitNot, result_type);
+            return;
+        }
         if (current_.kind == TokenKind::Punctuation &&
             std::strcmp(current_.text, "!") == 0)
         {
@@ -2176,6 +2413,11 @@ private:
 
             char operation[GLSL_NAME_BYTES] = {};
             std::snprintf(operation, sizeof(operation), "%s", current_.text);
+            if (!es3() && is_integer_only_operator(binary_operator_op(operation)))
+            {
+                fail("this operator requires GLSL ES 3.00");
+                break;
+            }
             advance();
             const ShaderType right_type = parse_expression(current_precedence + 1);
             const ShaderType result_type =
@@ -2186,22 +2428,8 @@ private:
                 break;
             }
 
-            ShaderOp op = ShaderOp::Add;
-            bool operator_found = true;
-            if (std::strcmp(operation, "+") == 0) op = ShaderOp::Add;
-            else if (std::strcmp(operation, "-") == 0) op = ShaderOp::Subtract;
-            else if (std::strcmp(operation, "*") == 0) op = ShaderOp::Multiply;
-            else if (std::strcmp(operation, "/") == 0) op = ShaderOp::Divide;
-            else if (std::strcmp(operation, "==") == 0) op = ShaderOp::Equal;
-            else if (std::strcmp(operation, "!=") == 0) op = ShaderOp::NotEqual;
-            else if (std::strcmp(operation, "<") == 0) op = ShaderOp::Less;
-            else if (std::strcmp(operation, "<=") == 0) op = ShaderOp::LessEqual;
-            else if (std::strcmp(operation, ">") == 0) op = ShaderOp::Greater;
-            else if (std::strcmp(operation, ">=") == 0) op = ShaderOp::GreaterEqual;
-            else if (std::strcmp(operation, "&&") == 0) op = ShaderOp::LogicalAnd;
-            else if (std::strcmp(operation, "||") == 0) op = ShaderOp::LogicalOr;
-            else operator_found = false;
-            if (!operator_found)
+            const ShaderOp op = binary_operator_op(operation);
+            if (op == ShaderOp::PushFloat)
             {
                 fail("unsupported binary operator");
                 break;
@@ -2261,9 +2489,14 @@ private:
             return ShaderType::Invalid;
 
         if (std::strcmp(operation, "&&") == 0 ||
-            std::strcmp(operation, "||") == 0)
+            std::strcmp(operation, "||") == 0 ||
+            std::strcmp(operation, "^^") == 0)
             return left == ShaderType::Bool && right == ShaderType::Bool
                 ? ShaderType::Bool : ShaderType::Invalid;
+
+        const ShaderOp integer_op = binary_operator_op(operation);
+        if (is_integer_only_operator(integer_op))
+            return integer_operator_result(integer_op, left, right);
 
         if (std::strcmp(operation, "==") == 0 ||
             std::strcmp(operation, "!=") == 0)
@@ -3368,6 +3601,32 @@ static float convert_component(
     return from_int ? static_cast<float>(shader_int(value)) : value;
 }
 
+/* % & | ^ << >> on 32-bit integers. GLSL leaves a negative % operand,
+   a zero divisor and a shift count outside [0, 31] undefined: here % uses
+   C's truncating remainder, x % 0 is 0, and an out-of-range shift gives 0
+   (<<) or the sign fill (>>). >> is arithmetic. */
+static int32_t integer_operator(ShaderOp op, int32_t a, int32_t b)
+{
+    const uint32_t ua = static_cast<uint32_t>(a);
+    switch (op)
+    {
+        case ShaderOp::Modulo:
+            if (b == 0 || (a == INT32_MIN && b == -1))
+                return 0;
+            return a % b;
+        case ShaderOp::BitAnd: return a & b;
+        case ShaderOp::BitOr: return a | b;
+        case ShaderOp::BitXor: return a ^ b;
+        case ShaderOp::ShiftLeft:
+            return b < 0 || b > 31 ? 0 : static_cast<int32_t>(ua << b);
+        default: // ShiftRight
+            if (b < 0 || b > 31)
+                return a < 0 ? -1 : 0;
+            return a < 0 ? ~static_cast<int32_t>(~ua >> b)
+                         : static_cast<int32_t>(ua >> b);
+    }
+}
+
 /* Integer + - * / with 32-bit wraparound. Division truncates toward zero;
    division by zero, undefined in GLSL, gives 0, and INT32_MIN / -1 wraps. */
 static int32_t integer_arithmetic(ShaderOp op, int32_t a, int32_t b)
@@ -4355,6 +4614,53 @@ bool execute_glsl(
                     return false;
                 break;
             }
+
+            case ShaderOp::Modulo:
+            case ShaderOp::BitAnd:
+            case ShaderOp::BitOr:
+            case ShaderOp::BitXor:
+            case ShaderOp::ShiftLeft:
+            case ShaderOp::ShiftRight:
+            {
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    integer_operator_result(instruction.op, a.type, b.type) !=
+                        instruction.type)
+                    return false;
+                set_zero_value(result, instruction.type);
+                const bool scalar_a = component_count(a.type) == 1;
+                const bool scalar_b = component_count(b.type) == 1;
+                for (size_t i = 0; i < component_count(instruction.type); ++i)
+                    result.data[i] = shader_int_bits(integer_operator(
+                        instruction.op,
+                        shader_int(a.data[scalar_a ? 0 : i]),
+                        shader_int(b.data[scalar_b ? 0 : i])));
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+            }
+
+            case ShaderOp::BitNot:
+                if (!pop_value(stack, stack_size, a) || a.type != instruction.type ||
+                    !is_integer_type(a.type))
+                    return false;
+                set_zero_value(result, a.type);
+                for (size_t i = 0; i < component_count(a.type); ++i)
+                    result.data[i] = shader_int_bits(~shader_int(a.data[i]));
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
+
+            case ShaderOp::LogicalXor:
+                if (!pop_value(stack, stack_size, b) ||
+                    !pop_value(stack, stack_size, a) ||
+                    a.type != ShaderType::Bool || b.type != ShaderType::Bool)
+                    return false;
+                set_zero_value(result, ShaderType::Bool);
+                result.data[0] = (a.data[0] != 0.0f) != (b.data[0] != 0.0f) ? 1.0f : 0.0f;
+                if (!push_value(stack, stack_size, result))
+                    return false;
+                break;
 
             case ShaderOp::Equal:
             case ShaderOp::NotEqual:

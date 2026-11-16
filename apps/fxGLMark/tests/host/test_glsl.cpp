@@ -1739,6 +1739,84 @@ static void test_exact_32_bit_integers()
         rejected));
 }
 
+static void test_integer_operators_and_compound_assignment()
+{
+    // Two shaders, to stay within the per-shader instruction budget.
+    static const char operators[] =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "out vec4 o;\n"
+        "void main() {\n"
+        "  int bits = (0xF0 & 0x3C) | 1;\n"
+        "  int shifted = (1 << 31) >> 4;\n"            // arithmetic shift
+        "  ivec2 m = ivec2(17, -17) % 5;\n"
+        "  o = vec4(bits == 49 && shifted == -134217728 ? 1.0 : 0.0,\n"
+        "           m == ivec2(2, -2) && ~0 == -1 && (5 ^ 3) == 6 ? 1.0 : 0.0,\n"
+        "           0xFFFFFFFF == -1 && 017 == 15 && (true ^^ false) ? 1.0 : 0.0,\n"
+        "           1 + 2 * 3 << 1 == 14 && !(true ^^ true) ? 1.0 : 0.0);\n"
+        "}\n";
+    static const char compound[] =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "out vec4 o;\n"
+        "void main() {\n"
+        "  int n = 6; n += 4; n *= 3; n -= 2; n /= 4; n %= 4; n <<= 3; n |= 5; n ^= 1; n++;\n"
+        "  vec3 v = vec3(1.0); v.xy *= 2.0; v.z -= 0.5; v++;\n"
+        "  o = vec4(n == 29 ? 1.0 : 0.0, v == vec3(3.0, 3.0, 1.5) ? 1.0 : 0.0, 1.0, 1.0);\n"
+        "}\n";
+    const char *const sources[] = {operators, compound};
+    for (const char *source : sources)
+    {
+        ShaderModule module = {};
+        compile_or_report(ShaderStage::Fragment, source, module, "integer operators");
+        ShaderRuntime runtime = {};
+        fxgl::prepare_shader_runtime(module, runtime);
+        assert(fxgl::execute_glsl(module, runtime));
+        for (size_t i = 0; i < 4; ++i)
+        {
+            if (!near(runtime.fragment_color.data[i], 1.0f))
+                std::fprintf(stderr, "operator check %zu failed\n", i);
+            assert(near(runtime.fragment_color.data[i], 1.0f));
+        }
+    }
+    ShaderRuntime runtime = {};
+
+    // GLSL ES 1.00 has compound assignment, ++ statements and ^^, but not
+    // the integer-only operators.
+    static const char es1[] =
+        "void main() { float f = 2.0; f += 1.0; f *= 2.0; int i = 1; i++; i += 2;\n"
+        "  mat2 m = mat2(1.0); m[1] += vec2(1.0); bool x = true ^^ true;\n"
+        "  gl_FragColor = vec4(f, float(i), m[1][1], x ? 1.0 : 0.0); }\n";
+    ShaderModule es1_module = {};
+    compile_or_report(ShaderStage::Fragment, es1, es1_module, "es1 compound");
+    fxgl::prepare_shader_runtime(es1_module, runtime);
+    assert(fxgl::execute_glsl(es1_module, runtime));
+    assert(near(runtime.fragment_color.data[0], 6.0f));
+    assert(near(runtime.fragment_color.data[1], 4.0f));
+    assert(near(runtime.fragment_color.data[2], 2.0f));
+    assert(near(runtime.fragment_color.data[3], 0.0f));
+
+    const struct { const char *source; } invalid[] = {
+        {"void main() { int i = 5 % 2; gl_FragColor = vec4(1.0); }"},
+        {"void main() { int i = 1; i <<= 2; gl_FragColor = vec4(1.0); }"},
+        {"void main() { int i = ~1; gl_FragColor = vec4(1.0); }"},
+        {"#version 300 es\nout vec4 o; void main() { float f = 1.0 % 2.0; o = vec4(f); }"},
+        {"#version 300 es\nout vec4 o; void main() { int i = 1; i += 1.0; o = vec4(1.0); }"},
+        {"#version 300 es\nout vec4 o; void main() { vec2 v = vec2(1.0); v *= mat3(1.0); o = vec4(1.0); }"},
+        {"#version 300 es\nout vec4 o; void main() { bool b = true; b++; o = vec4(1.0); }"},
+        {"#version 300 es\nout vec4 o; void main() { ivec2 v = ivec2(1) << ivec3(1); o = vec4(1.0); }"},
+        {"#version 300 es\nout vec4 o; void main() { float f = ~1.0; o = vec4(f); }"},
+    };
+    for (const auto& bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, bad.source, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad.source);
+        assert(!compiled);
+    }
+}
+
 static ShaderValue make_value(ShaderType type, float x, float y = 0.0f, float z = 0.0f)
 {
     ShaderValue value = {};
@@ -1880,6 +1958,7 @@ int main()
     test_arithmetic_operand_rules();
     test_glsl_es_300_front_end();
     test_exact_32_bit_integers();
+    test_integer_operators_and_compound_assignment();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;
