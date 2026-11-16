@@ -27,7 +27,17 @@ static ShaderValue value(ShaderType type, float a, float b = 0.0f,
     result.data[1] = b;
     result.data[2] = c;
     result.data[3] = d;
+    // Int and ivec components hold exact 32-bit integers.
+    if (type == ShaderType::Int || type == ShaderType::IVec2 ||
+        type == ShaderType::IVec3 || type == ShaderType::IVec4)
+        for (size_t i = 0; i < 4; ++i)
+            result.data[i] = fxgl::shader_int_bits(static_cast<int32_t>(result.data[i]));
     return result;
+}
+
+static int32_t int_at(const ShaderValue& v, size_t i)
+{
+    return fxgl::shader_int(v.data[i]);
 }
 
 static void identity_matrix(ShaderValue& matrix)
@@ -1670,6 +1680,65 @@ static void test_arithmetic_operand_rules()
     }
 }
 
+static void test_exact_32_bit_integers()
+{
+    // Each check writes 1.0 into its component of o when it holds.
+    static const char source[] =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "out vec4 o;\n"
+        "void main() {\n"
+        "  int big = 16777217;\n"                       // 2^24 + 1: not a float
+        "  int wrapped = 2147483647 + 1;\n"             // wraps to INT32_MIN
+        "  int lowest = -2147483648;\n"
+        "  int product = 65536 * 65536 + 7;\n"          // 2^32 wraps away
+        "  ivec2 halves = ivec2(-7, 7) / 2;\n"
+        "  int truncated = int(-2.75) + int(2.75);\n"
+        "  int saturated = int(1e20);\n"
+        "  o = vec4(big - 16777216 == 1 && big > 16777216 ? 1.0 : 0.0,\n"
+        "           wrapped == lowest && wrapped < 0 && product == 7 ? 1.0 : 0.0,\n"
+        "           halves == ivec2(-3, 3) && truncated == 0 &&\n"
+        "           saturated == 2147483647 && -lowest == lowest ? 1.0 : 0.0,\n"
+        "           float(big) == 16777216.0 ? 1.0 : 0.0);\n"
+        "}\n";
+    ShaderModule module = {};
+    compile_or_report(ShaderStage::Fragment, source, module, "32-bit integers");
+    ShaderRuntime runtime = {};
+    fxgl::prepare_shader_runtime(module, runtime);
+    assert(fxgl::execute_glsl(module, runtime));
+    for (size_t i = 0; i < 4; ++i)
+    {
+        if (!near(runtime.fragment_color.data[i], 1.0f))
+            std::fprintf(stderr, "integer check %zu failed\n", i);
+        assert(near(runtime.fragment_color.data[i], 1.0f));
+    }
+    // Locals keep the exact value: `big` is the first local.
+    assert(module.locals[0].type == ShaderType::Int);
+    assert(int_at(runtime.locals[module.locals[0].index], 0) == 16777217);
+
+    // Integer indices and loop counters are exact too, in GLSL ES 1.00.
+    static const char es1[] =
+        "uniform int u_index;\n"
+        "void main() { float a[3]; a[2] = 4.0; int n = 0;\n"
+        "  for (int i = 0; i < 20; i++) { n = n + 3; }\n"
+        "  gl_FragColor = vec4(a[u_index], float(n), 0.0, 1.0); }\n";
+    ShaderModule es1_module = {};
+    compile_or_report(ShaderStage::Fragment, es1, es1_module, "es1 integers");
+    fxgl::prepare_shader_runtime(es1_module, runtime);
+    runtime.uniforms[0] = value(ShaderType::Int, 2.0f);
+    assert(fxgl::execute_glsl(es1_module, runtime));
+    assert(near(runtime.fragment_color.data[0], 4.0f));
+    assert(near(runtime.fragment_color.data[1], 60.0f));
+
+    ShaderModule rejected = {};
+    assert(!fxgl::compile_glsl(ShaderStage::Fragment,
+        "#version 300 es\nout vec4 o; void main() { int x = 4294967296; o = vec4(1.0); }",
+        rejected));
+    assert(!fxgl::compile_glsl(ShaderStage::Fragment,
+        "#version 300 es\nout vec4 o; void main() { int x = 2147483649; o = vec4(1.0); }",
+        rejected));
+}
+
 static ShaderValue make_value(ShaderType type, float x, float y = 0.0f, float z = 0.0f)
 {
     ShaderValue value = {};
@@ -1704,8 +1773,8 @@ static void test_glsl_es_300_front_end()
     fxgl::prepare_shader_runtime(vertex_module, runtime);
     runtime.attributes[0] = make_value(ShaderType::Vec2, 0.25f, 0.5f);
     runtime.attributes[1] = make_value(ShaderType::Vec3, 1.0f, 0.0f, 0.5f);
-    runtime.vertex_id = make_value(ShaderType::Int, 7.0f);
-    runtime.instance_id = make_value(ShaderType::Int, 2.0f);
+    runtime.vertex_id = value(ShaderType::Int, 7.0f);
+    runtime.instance_id = value(ShaderType::Int, 2.0f);
     assert(fxgl::execute_glsl(vertex_module, runtime));
     assert(near(runtime.position.data[2], 7.0f) && near(runtime.position.data[3], 2.0f));
     assert(near(runtime.varyings[0].data[2], 0.5f));
@@ -1810,6 +1879,7 @@ int main()
     test_array_function_parameters();
     test_arithmetic_operand_rules();
     test_glsl_es_300_front_end();
+    test_exact_32_bit_integers();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;

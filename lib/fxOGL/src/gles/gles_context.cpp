@@ -1494,9 +1494,11 @@ static bool execute_vertex(
     {
         // GLSL ES 3.00 gl_VertexID and gl_InstanceID.
         runtime.vertex_id.type = fxgl::ShaderType::Int;
-        runtime.vertex_id.data[0] = static_cast<float>(vertex_index);
+        runtime.vertex_id.data[0] =
+            fxgl::shader_int_bits(static_cast<int32_t>(vertex_index));
         runtime.instance_id.type = fxgl::ShaderType::Int;
-        runtime.instance_id.data[0] = static_cast<float>(invocation.instance);
+        runtime.instance_id.data[0] =
+            fxgl::shader_int_bits(static_cast<int32_t>(invocation.instance));
     }
 
     for (size_t i = 0; i < module.uniform_count; ++i)
@@ -5139,9 +5141,10 @@ void glGetShaderPrecisionFormat(
         case GL_LOW_INT:
         case GL_MEDIUM_INT:
         case GL_HIGH_INT:
-            // Integers are held in floats and stay exact up to 2^24.
-            range[0] = 24;
-            range[1] = 24;
+            // Integers are exact 32-bit two's complement: [-2^31, 2^31 - 1],
+            // which GLES reports as log2 range 31 and 30.
+            range[0] = 31;
+            range[1] = 30;
             *precision = 0;
             break;
         default:

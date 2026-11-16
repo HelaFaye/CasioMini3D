@@ -296,6 +296,24 @@ static bool map_stage_uniforms(
     return true;
 }
 
+static bool is_int_type(fxgl::ShaderType type)
+{
+    return type == fxgl::ShaderType::Int || type == fxgl::ShaderType::IVec2 ||
+           type == fxgl::ShaderType::IVec3 || type == fxgl::ShaderType::IVec4;
+}
+
+/* An integer-API uniform value as stored for `type`: exact 32-bit integers
+   for int types, 0.0/1.0 for bools, the unit number for samplers. */
+static float shader_integer_component(fxgl::ShaderType type, GLint value)
+{
+    if (is_int_type(type))
+        return fxgl::shader_int_bits(value);
+    if (type == fxgl::ShaderType::Bool || type == fxgl::ShaderType::BVec2 ||
+        type == fxgl::ShaderType::BVec3 || type == fxgl::ShaderType::BVec4)
+        return value != 0 ? 1.0f : 0.0f;
+    return static_cast<float>(value);
+}
+
 static int find_bound_attribute(
     const ProgramObject& program,
     const char *name)
@@ -634,15 +652,8 @@ static void set_uniform_integer(
         destination.type = expected;
         for (size_t i = 0; i < components; ++i)
         {
-            const float value =
-                static_cast<float>(values[element * components + i]);
-            destination.data[i] =
-                (expected == fxgl::ShaderType::Bool ||
-                 expected == fxgl::ShaderType::BVec2 ||
-                 expected == fxgl::ShaderType::BVec3 ||
-                 expected == fxgl::ShaderType::BVec4)
-                    ? (value != 0.0f ? 1.0f : 0.0f)
-                    : value;
+            const GLint value = values[element * components + i];
+            destination.data[i] = shader_integer_component(expected, value);
         }
     }
 }
@@ -1382,9 +1393,7 @@ void glUniform1i(GLint location, GLint v0)
     program->uniform_values[location] = {};
     program->uniform_values[location].type = type;
     program->uniform_values[location].data[0] =
-        type == fxgl::ShaderType::Bool
-            ? (v0 != 0 ? 1.0f : 0.0f)
-            : static_cast<float>(v0);
+        shader_integer_component(type, v0);
 }
 
 void glUniform1fv(GLint location, GLsizei count, const GLfloat *value)
@@ -1453,7 +1462,9 @@ void glGetUniformfv(GLuint program_name, GLint location, GLfloat *params)
     const fxgl::ShaderValue& value = program->uniform_values[location];
     const size_t components = shader_component_count(value.type);
     for (size_t i = 0; i < components; ++i)
-        params[i] = value.data[i];
+        params[i] = is_int_type(value.type)
+            ? static_cast<GLfloat>(fxgl::shader_int(value.data[i]))
+            : value.data[i];
 }
 
 void glGetUniformiv(GLuint program_name, GLint location, GLint *params)
@@ -1474,7 +1485,9 @@ void glGetUniformiv(GLuint program_name, GLint location, GLint *params)
     const fxgl::ShaderValue& value = program->uniform_values[location];
     const size_t components = shader_component_count(value.type);
     for (size_t i = 0; i < components; ++i)
-        params[i] = static_cast<GLint>(value.data[i]);
+        params[i] = is_int_type(value.type)
+            ? fxgl::shader_int(value.data[i])
+            : static_cast<GLint>(value.data[i]);
 }
 
 void glUniform2i(GLint location, GLint v0, GLint v1)

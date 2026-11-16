@@ -1777,7 +1777,7 @@ void test_remaining_gles2_entry_points()
     glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, range, &precision);
     assert(range[0] == 127 && range[1] == 127 && precision == 23);
     glGetShaderPrecisionFormat(GL_VERTEX_SHADER, GL_LOW_INT, range, &precision);
-    assert(range[0] == 24 && range[1] == 24 && precision == 0);
+    assert(range[0] == 31 && range[1] == 30 && precision == 0);
     glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_FLOAT, range, &precision);
     assert(glGetError() == GL_INVALID_ENUM);
     glGetShaderPrecisionFormat(GL_TEXTURE_2D, GL_HIGH_FLOAT, range, &precision);
@@ -3074,6 +3074,42 @@ void test_glsl_es_300_programs()
     fxglReleaseCurrent();
 }
 
+void test_exact_integer_uniforms()
+{
+    uint16_t color[1] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 1, 1, 1};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 1, 1);
+    static const GLchar vertex[] =
+        "#version 300 es\n"
+        "void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); gl_PointSize = 1.0; }\n";
+    static const GLchar fragment[] =
+        "#version 300 es\n"
+        "precision mediump float; uniform int u_big; uniform ivec2 u_pair; out vec4 o;\n"
+        "void main() { o = vec4(u_big == 16777217 ? 1.0 : 0.0,\n"
+        "  u_pair == ivec2(-2147483647, 2147483647) ? 1.0 : 0.0, 0.0, 1.0); }\n";
+    const GLuint program = build_test_program(vertex, fragment);
+    glUseProgram(program);
+    const GLint big = glGetUniformLocation(program, "u_big");
+    const GLint pair = glGetUniformLocation(program, "u_pair");
+    glUniform1i(big, 16777217);
+    glUniform2i(pair, -2147483647, 2147483647);
+    GLint values[2] = {};
+    glGetUniformiv(program, big, values);
+    assert(values[0] == 16777217);
+    glGetUniformiv(program, pair, values);
+    assert(values[0] == -2147483647 && values[1] == 2147483647);
+    GLfloat as_float = 0.0f;
+    glGetUniformfv(program, big, &as_float);
+    assert(as_float == 16777216.0f); // The nearest float.
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0xffe0); // Red and green: both comparisons held.
+    glUseProgram(0);
+    glDeleteProgram(program);
+    fxglReleaseCurrent();
+}
+
 void test_texture_lookup_variants()
 {
     uint16_t color[16] = {};
@@ -3319,6 +3355,7 @@ int main()
     test_instancing_and_primitive_restart();
     test_buffer_mapping();
     test_glsl_es_300_programs();
+    test_exact_integer_uniforms();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();

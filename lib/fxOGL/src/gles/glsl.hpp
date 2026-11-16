@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 namespace fxgl
 {
@@ -48,10 +49,28 @@ enum class ShaderType : uint8_t
 struct ShaderValue
 {
     ShaderType type;
+    /* Float, vector and matrix components. Int and ivec components hold
+       exact 32-bit two's-complement integers stored bit for bit (use
+       shader_int/shader_int_bits); bool components are 0.0 or 1.0. */
     float data[16];
     float ddx[4];
     float ddy[4];
 };
+
+/* Read and write the 32-bit integer stored in an int/ivec component. */
+inline int32_t shader_int(float component)
+{
+    int32_t value;
+    memcpy(&value, &component, sizeof(value));
+    return value;
+}
+
+inline float shader_int_bits(int32_t value)
+{
+    float component;
+    memcpy(&component, &value, sizeof(component));
+    return component;
+}
 
 enum class ShaderParameterQualifier : uint8_t
 {
@@ -288,8 +307,11 @@ using TextureSampleFunction = bool (*)(
    - texture, textureProj, textureLod and textureProjLod replace the
      texture2D family, with an explicit LOD allowed in both stages;
    - gl_VertexID and gl_InstanceID are available.
-   Not yet supported in GLSL ES 3.00: 32-bit integer semantics (ints stay
-   exact to 2^24), unsigned types, flat/centroid interpolation, uniform
+   int and ivec values are exact 32-bit two's-complement integers in both
+   versions: + - * wrap, / truncates toward zero, division by zero gives 0,
+   and float-to-int conversion truncates (saturating out of range).
+   Not yet supported in GLSL ES 3.00: unsigned types, the integer-only
+   operators (%, bitwise, shifts), flat/centroid interpolation, uniform
    blocks, integer and 3D samplers, and multiple fragment outputs. Both
    stages of a program must use the same version.
    Whole-array assignment, structs, do-while, switch, preprocessor

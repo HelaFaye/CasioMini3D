@@ -25,6 +25,9 @@ struct Token
     char text[GLSL_NAME_BYTES];
     float number;
     bool integer;
+    /* Integer literals: the value modulo 2^32 (2147483648 is accepted so
+       that -2147483648 can be written); larger literals are rejected. */
+    int32_t integer_value;
     size_t offset;
 };
 
@@ -120,6 +123,23 @@ public:
                 return token;
             }
             token.integer = !has_dot && !has_exponent;
+            if (token.integer)
+            {
+                uint64_t value = 0;
+                for (const char *digit = token.text; *digit; ++digit)
+                {
+                    value = value * 10u + static_cast<uint64_t>(*digit - '0');
+                    if (value > 2147483648ull)
+                    {
+                        token.kind = TokenKind::Invalid;
+                        copy_error_text(token.text, sizeof(token.text),
+                                        "integer literal out of range");
+                        return token;
+                    }
+                }
+                token.integer_value = static_cast<int32_t>(
+                    static_cast<uint32_t>(value));
+            }
             token.kind = TokenKind::Number;
             return token;
         }
@@ -1830,7 +1850,7 @@ private:
             one.op = target.type == ShaderType::Int
                 ? ShaderOp::PushInt : ShaderOp::PushFloat;
             one.type = target.type;
-            one.literal = 1.0f;
+            one.literal = target.type == ShaderType::Int ? shader_int_bits(1) : 1.0f;
             emit(one);
             emit_simple(increment ? ShaderOp::Add : ShaderOp::Subtract, target.type);
             emit_assignment_store(target);
@@ -2248,9 +2268,8 @@ private:
         if (std::strcmp(operation, "==") == 0 ||
             std::strcmp(operation, "!=") == 0)
         {
-            if (left == right &&
-                (left == ShaderType::Float || left == ShaderType::Int ||
-                 left == ShaderType::Bool || is_vector(left)))
+            // Any two values of the same non-sampler type, compared whole.
+            if (left == right && left != ShaderType::Sampler2D)
                 return ShaderType::Bool;
             return ShaderType::Invalid;
         }
@@ -2286,7 +2305,8 @@ private:
             ShaderInstruction instruction = {};
             instruction.op = current_.integer ? ShaderOp::PushInt : ShaderOp::PushFloat;
             instruction.type = current_.integer ? ShaderType::Int : ShaderType::Float;
-            instruction.literal = current_.number;
+            instruction.literal = current_.integer
+                ? shader_int_bits(current_.integer_value) : current_.number;
             emit(instruction);
             result_type = instruction.type;
             advance();
@@ -3302,13 +3322,70 @@ static void copy_shader_value(ShaderValue& destination,
     }
 }
 
-static float convert_component(ShaderType destination, float value)
+static bool is_integer_type(ShaderType type)
 {
-    if (destination == ShaderType::Int || is_int_vector(destination))
-        return static_cast<float>(static_cast<int32_t>(value));
-    if (destination == ShaderType::Bool || is_bool_vector(destination))
+    return type == ShaderType::Int || is_int_vector(type);
+}
+
+static bool is_boolean_type(ShaderType type)
+{
+    return type == ShaderType::Bool || is_bool_vector(type);
+}
+
+/* float -> int truncates toward zero, as GLSL specifies. Out-of-range and
+   NaN values are undefined there; they saturate (NaN gives 0) here. */
+static int32_t float_to_int(float value)
+{
+    if (!(value == value))
+        return 0;
+    if (value <= -2147483648.0f)
+        return INT32_MIN;
+    if (value >= 2147483648.0f)
+        return INT32_MAX;
+    return static_cast<int32_t>(value);
+}
+
+/* Convert one component of a `source`-typed value for a constructor of
+   `destination` type. */
+static float convert_component(
+    ShaderType destination, ShaderType source, float value)
+{
+    const bool from_int = is_integer_type(source);
+    if (is_integer_type(destination))
+    {
+        if (from_int)
+            return value;
+        if (is_boolean_type(source))
+            return shader_int_bits(value != 0.0f ? 1 : 0);
+        return shader_int_bits(float_to_int(value));
+    }
+    if (is_boolean_type(destination))
+    {
+        if (from_int)
+            return shader_int(value) != 0 ? 1.0f : 0.0f;
         return value != 0.0f ? 1.0f : 0.0f;
-    return value;
+    }
+    return from_int ? static_cast<float>(shader_int(value)) : value;
+}
+
+/* Integer + - * / with 32-bit wraparound. Division truncates toward zero;
+   division by zero, undefined in GLSL, gives 0, and INT32_MIN / -1 wraps. */
+static int32_t integer_arithmetic(ShaderOp op, int32_t a, int32_t b)
+{
+    const uint32_t ua = static_cast<uint32_t>(a);
+    const uint32_t ub = static_cast<uint32_t>(b);
+    switch (op)
+    {
+        case ShaderOp::Add: return static_cast<int32_t>(ua + ub);
+        case ShaderOp::Subtract: return static_cast<int32_t>(ua - ub);
+        case ShaderOp::Multiply: return static_cast<int32_t>(ua * ub);
+        default:
+            if (b == 0)
+                return 0;
+            if (a == INT32_MIN && b == -1)
+                return INT32_MIN;
+            return a / b;
+    }
 }
 
 static bool pop_value(
@@ -3532,9 +3609,8 @@ static bool array_element_slot(
 {
     if (index.type != ShaderType::Int)
         return false;
-    const float element = index.data[0];
-    if (!(element >= 0.0f) ||
-        element >= static_cast<float>(instruction.argument_count))
+    const int32_t element = shader_int(index.data[0]);
+    if (element < 0 || element >= static_cast<int32_t>(instruction.argument_count))
         return false;
     slot = static_cast<size_t>(instruction.index) +
            static_cast<size_t>(element);
@@ -3543,6 +3619,8 @@ static bool array_element_slot(
 
 static bool finite_value(const ShaderValue& value)
 {
+    if (is_integer_type(value.type))
+        return true; // Every bit pattern is a valid integer.
     const size_t count = component_count(value.type);
     for (size_t i = 0; i < count; ++i)
         if (!isfinite(value.data[i]))
@@ -4124,14 +4202,18 @@ bool execute_glsl(
                     const float scalar = args[0].data[0];
                     if (destination_dimension != 0)
                     {
+                        const float diagonal = convert_component(
+                            ShaderType::Float, args[0].type, scalar);
                         for (size_t i = 0; i < destination_dimension; ++i)
-                            result.data[i * destination_dimension + i] = scalar;
+                            result.data[i * destination_dimension + i] = diagonal;
                     }
                     else
                     {
+                        const float converted = convert_component(
+                            instruction.type, args[0].type, scalar);
                         for (size_t i = 0; i < wanted; ++i)
                         {
-                            result.data[i] = convert_component(instruction.type, scalar);
+                            result.data[i] = converted;
                             if (i < 4)
                             {
                                 result.ddx[i] = args[0].ddx[0];
@@ -4164,10 +4246,16 @@ bool execute_glsl(
                         const size_t count = component_count(args[arg].type);
                         if (offset + count > wanted)
                             return false;
+                        // Float into a float type, the common case, copies.
+                        const bool convert = is_integer_type(instruction.type) ||
+                            is_boolean_type(instruction.type) ||
+                            is_integer_type(args[arg].type);
                         for (size_t i = 0; i < count; ++i)
                         {
-                            result.data[offset] =
-                                convert_component(instruction.type, args[arg].data[i]);
+                            result.data[offset] = convert
+                                ? convert_component(instruction.type,
+                                    args[arg].type, args[arg].data[i])
+                                : args[arg].data[i];
                             if (offset < 4 && i < 4)
                             {
                                 result.ddx[offset] = args[arg].ddx[i];
@@ -4178,14 +4266,6 @@ bool execute_glsl(
                     }
                     if (offset != wanted)
                         return false;
-                }
-                if (instruction.type == ShaderType::Int ||
-                    is_int_vector(instruction.type) ||
-                    instruction.type == ShaderType::Bool ||
-                    is_bool_vector(instruction.type))
-                {
-                    for (size_t i = 0; i < component_count(result.type); ++i)
-                        result.data[i] = convert_component(instruction.type, result.data[i]);
                 }
                 if (!push_value(stack, stack_size, result))
                     return false;
@@ -4218,6 +4298,15 @@ bool execute_glsl(
                     a.type != instruction.type)
                     return false;
                 copy_shader_value(result, a);
+                if (is_integer_type(a.type))
+                {
+                    for (size_t i = 0; i < component_count(a.type); ++i)
+                        result.data[i] = shader_int_bits(static_cast<int32_t>(
+                            0u - static_cast<uint32_t>(shader_int(a.data[i]))));
+                    if (!push_value(stack, stack_size, result))
+                        return false;
+                    break;
+                }
                 for (size_t i = 0; i < component_count(a.type); ++i)
                 {
                     result.data[i] = -result.data[i];
@@ -4246,14 +4335,22 @@ bool execute_glsl(
                     instruction.type != expected_type)
                     return false;
 
+                if (is_integer_type(instruction.type))
+                {
+                    // Component-wise; a scalar operand applies to every component.
+                    set_zero_value(result, instruction.type);
+                    const bool scalar_a = component_count(a.type) == 1;
+                    const bool scalar_b = component_count(b.type) == 1;
+                    for (size_t i = 0; i < component_count(instruction.type); ++i)
+                        result.data[i] = shader_int_bits(integer_arithmetic(
+                            instruction.op,
+                            shader_int(a.data[scalar_a ? 0 : i]),
+                            shader_int(b.data[scalar_b ? 0 : i])));
+                    if (!push_value(stack, stack_size, result))
+                        return false;
+                    break;
+                }
                 apply_binary(instruction.op, a, b, instruction.type, result);
-                if (instruction.type == ShaderType::Int ||
-                    is_int_vector(instruction.type) ||
-                    instruction.type == ShaderType::Bool ||
-                    is_bool_vector(instruction.type))
-                    for (size_t i = 0; i < component_count(result.type); ++i)
-                        result.data[i] = convert_component(instruction.type,
-                            result.data[i]);
                 if (!finite_value(result) || !push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -4291,7 +4388,17 @@ bool execute_glsl(
                     if (a.type != ShaderType::Float &&
                         a.type != ShaderType::Int)
                         return false;
-                    if (instruction.op == ShaderOp::Less)
+                    if (a.type == ShaderType::Int)
+                    {
+                        const int32_t left = shader_int(a.data[0]);
+                        const int32_t right = shader_int(b.data[0]);
+                        result.data[0] =
+                            instruction.op == ShaderOp::Less ? left < right :
+                            instruction.op == ShaderOp::LessEqual ? left <= right :
+                            instruction.op == ShaderOp::Greater ? left > right :
+                            left >= right;
+                    }
+                    else if (instruction.op == ShaderOp::Less)
                         result.data[0] = a.data[0] < b.data[0];
                     else if (instruction.op == ShaderOp::LessEqual)
                         result.data[0] = a.data[0] <= b.data[0];
@@ -4304,8 +4411,10 @@ bool execute_glsl(
                 {
                     bool equal = true;
                     const size_t components = component_count(a.type);
+                    const bool integer = is_integer_type(a.type);
                     for (size_t i = 0; i < components; ++i)
-                        if (a.data[i] != b.data[i])
+                        if (integer ? shader_int(a.data[i]) != shader_int(b.data[i])
+                                    : a.data[i] != b.data[i])
                             equal = false;
                     result.data[0] = instruction.op == ShaderOp::Equal
                         ? equal : !equal;
