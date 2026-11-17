@@ -26,6 +26,7 @@ set(APP_SOURCES
     src/shapes/parallelogram.cpp
     src/shapes/rectangle.cpp
     src/shapes/triangle.cpp
+    src/glmark2/glmark2.cpp
 )
 
 # Shared assets, fx-9860G-only assets and fx-CG-50-only assets.

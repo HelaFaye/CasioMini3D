@@ -35,6 +35,9 @@ endif()
 # it from GCC's sysroot layout (which differs between toolchain releases).
 set(FXOGL_TARGET_C_INCLUDE_DIR "")
 
+# Only cross builds need this. A host build on a machine that also has fxSDK
+# installed must not pick up the calculator's C headers.
+if(CMAKE_CROSSCOMPILING)
 execute_process(
     COMMAND fxsdk path include
     OUTPUT_VARIABLE FXOGL_FXSDK_INCLUDE_DIR
@@ -79,6 +82,7 @@ if(NOT FXOGL_TARGET_C_INCLUDE_DIR AND
         set(FXOGL_TARGET_C_INCLUDE_DIR "${FXOGL_COMPILER_SYSROOT}/include")
     endif()
 endif()
+endif() # CMAKE_CROSSCOMPILING
 
 if(FXOGL_TARGET_C_INCLUDE_DIR)
     target_include_directories(fxogl BEFORE PRIVATE
