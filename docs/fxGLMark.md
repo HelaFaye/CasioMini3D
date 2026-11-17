@@ -1,6 +1,6 @@
 # fxGLMark: native Casio fx-CG50 benchmark
 
-**Application:** `apps/fxGLMark/`  
+**Application:** [HelaFaye/fxGLMark](https://github.com/HelaFaye/fxGLMark) (formerly `apps/fxGLMark/` here)  
 **Renderer:** fxOGL software graphics library  
 **Target:** Casio fx-CG50, Gint/fxSDK, 396x224 RGB565  
 **Reference:** [upstream glmark2](https://github.com/glmark2/glmark2)

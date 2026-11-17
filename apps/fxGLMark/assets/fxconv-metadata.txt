@@ -1,5 +1,0 @@
-Textures-16.png:
-  name: IMG_ASSET_blocks
-  type: bopti-image
-  profile: p8
-

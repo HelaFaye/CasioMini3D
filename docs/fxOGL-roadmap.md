@@ -92,7 +92,8 @@ Recent measured optimizations include:
   replacement reproduces the original float result exactly (checked over
   all 2^32 inputs) and fxGLMark frames are bit-identical.
 
-The host tools behind this work live in `apps/fxGLMark/tests/profile/`: a
+The host tools behind this work live in fxGLMark's `tests/profile/`
+([HelaFaye/fxGLMark](https://github.com/HelaFaye/fxGLMark)): a
 golden-frame test (run by host CI) that proves a change leaves every
 fxGLMark frame bit-identical, and a soft-float cost model of the device
 (`profile.sh`) with its calibration against these measurements.
@@ -239,7 +240,7 @@ Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
 - **Project Picori** (HelaFaye/tmc, `fx-cg50` branch): a 2D port that uses no
   fxOGL. Its plan is in that repository at `docs/fx-cg50-port-plan.md`.
 
-## Shared fx-CG50 infrastructure (planned, in this repository)
+## Shared fx-CG50 infrastructure (now in HelaFaye/fxLauncher)
 
 These parts serve every port, Project Picori first, so they live here:
 
@@ -251,7 +252,8 @@ These parts serve every port, Project Picori first, so they live here:
   - save backup;
   - Wi-Fi file transfer;
   - audio playback.
-- **Calculator link library** ([`lib/cglink`](../lib/cglink/README.md)),
+- **Calculator link library** (`lib/cglink` in
+  [HelaFaye/fxLauncher](https://github.com/HelaFaye/fxLauncher)),
   shared by the launcher and the ESP32 firmware:
   - framing, the page-pak index, a raw-deflate decoder, the RAM page cache
     and page streaming;

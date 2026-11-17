@@ -4,7 +4,7 @@ This document preserves the design and measurement notes for the original
 four-workload fxmark microbenchmark. It is not the specification for the
 current fxGLMark application.
 
-The maintained application is under `apps/fxGLMark/`; its workload catalog,
+The maintained application is [HelaFaye/fxGLMark](https://github.com/HelaFaye/fxGLMark) (formerly `apps/fxGLMark/`); its workload catalog,
 menu, batteries and current CSV schemas are documented in
 [`fxGLMark.md`](fxGLMark.md). The reusable rendering library is under
 `lib/fxOGL/`.

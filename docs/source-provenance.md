@@ -20,7 +20,7 @@ A tree comparison against the parent repository found:
 
 - 321 unchanged inherited files still present in this fork.
 - 313 of those remain in `archive/`.
-- 8 unchanged inherited files remain in active `apps/fxGLMark/`.
+- 8 unchanged inherited files remained in `apps/fxGLMark/`, which moved to HelaFaye/fxGLMark with its history.
 - 10 inherited paths have been modified in this fork.
 - 76 parent paths are no longer represented, primarily generated build and
   editor-specific material removed during cleanup.

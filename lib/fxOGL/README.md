@@ -69,7 +69,7 @@ does not call Gint display functions.
 
 ## Validation
 
-Host regression tests in `apps/fxGLMark/tests/host` build the standalone
+Host regression tests in `tests/host` build the standalone
 library target and verify that an installed package can be consumed by an
 independent CMake project. Host tests do not replace an fxSDK/SH cross-build
 or physical calculator testing.

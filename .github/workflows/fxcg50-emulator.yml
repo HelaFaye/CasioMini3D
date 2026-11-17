@@ -8,12 +8,12 @@ on:
       - main
     paths:
       - "lib/fxOGL/**"
-      - "apps/fxGLMark/tests/emulator/**"
+      - "lib/fxOGL/tests/emulator/**"
       - ".github/workflows/fxcg50-emulator.yml"
   pull_request:
     paths:
       - "lib/fxOGL/**"
-      - "apps/fxGLMark/tests/emulator/**"
+      - "lib/fxOGL/tests/emulator/**"
       - ".github/workflows/fxcg50-emulator.yml"
   workflow_dispatch:
     inputs:
@@ -128,8 +128,8 @@ jobs:
 
       - name: Build fxOGL emulator regression add-in
         run: |
-          docker run --rm --volume "$GITHUB_WORKSPACE:/work" --workdir /work/apps/fxGLMark/tests/emulator fxsdk-ci fxsdk build-cg
-          G3A="$(find apps/fxGLMark/tests/emulator -type f -name 'fxogl-emulator-regression.g3a' -print -quit)"
+          docker run --rm --volume "$GITHUB_WORKSPACE:/work" --workdir /work/lib/fxOGL/tests/emulator fxsdk-ci fxsdk build-cg
+          G3A="$(find lib/fxOGL/tests/emulator -type f -name 'fxogl-emulator-regression.g3a' -print -quit)"
           test -n "$G3A"
           printf 'FXSDK_G3A=%s\n' "$G3A" >> "$GITHUB_ENV"
       - name: Check out Casio CG50 emulator
@@ -143,7 +143,7 @@ jobs:
 
       - name: Build headless Casio emulator
         run: |
-          cmake -S apps/fxGLMark/tests/emulator/casio-emu-headless -B build/casio-emu-headless -DCASIO_EMU_SOURCE="$GITHUB_WORKSPACE/.cache/casio-emu"
+          cmake -S lib/fxOGL/tests/emulator/casio-emu-headless -B build/casio-emu-headless -DCASIO_EMU_SOURCE="$GITHUB_WORKSPACE/.cache/casio-emu"
           cmake --build build/casio-emu-headless --parallel 2
 
       - name: Run fxOGL GLES regression add-in in Casio emulator

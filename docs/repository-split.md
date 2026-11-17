@@ -1,15 +1,17 @@
 # Repository split
 
-Plan for dividing this repository into one repository per project. Status:
-**planned**; component histories are extracted locally with
-`git subtree split` and are ready to push once the repositories exist.
+Dividing the former CasioMini3D repository into one repository per project.
+Status: **done** for the repositories below. CasioMini3D was renamed fxOGL;
+fxGLMark and fxLauncher received their histories with `git subtree split`;
+fxglxgears and fxSDL start with their plans. The library tests now live in
+`lib/fxOGL/tests`.
 
 ## Target repositories
 
 | Repository | Comes from | Contents |
 |---|---|---|
 | **fxOGL** (this repository, renamed from CasioMini3D) | `lib/fxOGL`, the library tests now under `apps/fxGLMark/tests/host` and `tests/emulator`, `archive/`, the library docs | The software OpenGL ES library for the fx-CG50, its host and emulator tests, the historical renderers |
-| **fxGLMark** | `apps/fxGLMark` (80 commits of history) | The benchmark add-in, its scenes, golden frames and device cost model; uses fxOGL as a git submodule |
+| **fxGLMark** | `apps/fxGLMark` (81 commits of history) | The benchmark add-in, its scenes, golden frames and device cost model; uses fxOGL as a git submodule |
 | **fxglxgears** | new | glxgears on fxOGL through a GL 1.x compatibility layer (see `docs/fxOGL-roadmap.md`) |
 | **fxSDL** | new | An SDL-compatible layer on gint (video, input, timers; audio through the ESP32), so SDL programs port with less change |
 | **fxLauncher** | `lib/cglink` (1 commit), plus the launcher add-in and ESP32 firmware when written | The launcher, the calculator <-> ESP32 link library and the ESP32-S3 firmware, versioned together because they share one protocol |

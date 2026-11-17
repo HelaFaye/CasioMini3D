@@ -1,7 +1,8 @@
 # fxOGL
 
 **fxOGL** is a C++ software graphics library for Casio fx-CG calculators.
-**fxGLMark** is its native calculator benchmark application.
+Its benchmark application, **fxGLMark**, now lives in
+[HelaFaye/fxGLMark](https://github.com/HelaFaye/fxGLMark).
 
 The project targets the SH-4A CPU and Gint/fxSDK environment. The renderer
 implements a growing subset of the OpenGL ES 2.0 programming model in
@@ -13,37 +14,31 @@ full GLES 2.0 compatibility or Khronos conformance.
 | Component | Location | Purpose |
 |---|---|---|
 | **fxOGL** | [`lib/fxOGL/`](lib/fxOGL/) | Reusable software graphics library, GLES-style API, shader VM, rasterizer and RGB565 texture sampler |
-| **fxGLMark** | [`apps/fxGLMark/`](apps/fxGLMark/) | Native fx-CG50 benchmark selector, glmark2-inspired scenes, test batteries and on-device CSV logging |
 | **Historical projects** | [`archive/`](archive/) | Earlier renderer generations and model-renderer experiments |
 | **Documentation** | [`docs/`](docs/) | Architecture, compatibility roadmap, benchmark design and third-party notices |
 
-fxOGL and the graphics benchmarks are planned to move into repositories of
-their own; see [`docs/repository-split.md`](docs/repository-split.md). The shared fx-CG50 infrastructure (the launcher, the ESP32-S3
-storage interface and GB-Link compatibility) starts here too; see
-[`docs/fxOGL-roadmap.md`](docs/fxOGL-roadmap.md).
+Related repositories, split out of this one (see
+[`docs/repository-split.md`](docs/repository-split.md)):
 
-## Build fxGLMark for fx-CG50
+| Repository | Purpose |
+|---|---|
+| [fxGLMark](https://github.com/HelaFaye/fxGLMark) | The benchmark add-in, its golden frames and device cost model; uses fxOGL as a submodule |
+| [fxglxgears](https://github.com/HelaFaye/fxglxgears) | glxgears on fxOGL through a GL 1.x compatibility layer |
+| [fxSDL](https://github.com/HelaFaye/fxSDL) | An SDL-compatible layer on gint |
+| [fxLauncher](https://github.com/HelaFaye/fxLauncher) | The launcher, the calculator <-> ESP32 link library and the ESP32-S3 firmware |
 
-Install a working fxSDK/Gint toolchain, then run:
-
-```sh
-cd apps/fxGLMark
-fxsdk build-cg
-```
-
-The generated add-in is `fxGLMark.g3a`.
-
-## Run host regression tests
+## Run the library tests
 
 From the repository root:
 
 ```sh
-cmake -S apps/fxGLMark/tests/host -B /tmp/fxogl-host-tests
+cmake -S lib/fxOGL/tests/host -B /tmp/fxogl-host-tests
 cmake --build /tmp/fxogl-host-tests --parallel 2
 ctest --test-dir /tmp/fxogl-host-tests --output-on-failure
 ```
 
-These tests compile the renderer and app integration against host-side Gint
+`lib/fxOGL/tests/emulator` holds the GLES regression add-in that CI runs in
+casio-emu. Host tests compile the renderer against host-side Gint
 stubs. They validate CPU-side behavior but do not replace an SH cross-build or
 physical calculator validation.
 

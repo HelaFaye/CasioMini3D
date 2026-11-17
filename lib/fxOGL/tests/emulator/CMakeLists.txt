@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../lib/fxOGL"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.."
     "${CMAKE_CURRENT_BINARY_DIR}/fxOGL"
 )
 
@@ -22,6 +22,6 @@ generate_g3a(
     OUTPUT "fxogl-emulator-regression.g3a"
     NAME "fxOGL GLES Regression"
     ICONS
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-uns.png"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../assets/icon-sel.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon-uns.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon-sel.png"
 )
