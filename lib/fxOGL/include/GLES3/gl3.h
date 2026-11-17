@@ -28,6 +28,9 @@
 #define GL_BUFFER_MAP_POINTER 0x88BD
 #define GL_BUFFER_MAP_LENGTH 0x9120
 #define GL_BUFFER_MAP_OFFSET 0x9121
+#define GL_UNSIGNED_INT_VEC2 0x8DC6
+#define GL_UNSIGNED_INT_VEC3 0x8DC7
+#define GL_UNSIGNED_INT_VEC4 0x8DC8
 
 #ifdef __cplusplus
 extern "C" {
@@ -83,6 +86,18 @@ void glFlushMappedBufferRange(GLenum target, GLintptr offset,
     GLsizeiptr length);
 GLboolean glUnmapBuffer(GLenum target);
 void glGetBufferPointerv(GLenum target, GLenum pname, GLvoid **params);
+
+/* Unsigned integer uniforms (GLSL ES 3.00 uint/uvec). As in GLES 3.0, the
+   glUniform*i family cannot set them and glUniform*ui sets nothing else. */
+void glUniform1ui(GLint location, GLuint v0);
+void glUniform2ui(GLint location, GLuint v0, GLuint v1);
+void glUniform3ui(GLint location, GLuint v0, GLuint v1, GLuint v2);
+void glUniform4ui(GLint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3);
+void glUniform1uiv(GLint location, GLsizei count, const GLuint *value);
+void glUniform2uiv(GLint location, GLsizei count, const GLuint *value);
+void glUniform3uiv(GLint location, GLsizei count, const GLuint *value);
+void glUniform4uiv(GLint location, GLsizei count, const GLuint *value);
+void glGetUniformuiv(GLuint program, GLint location, GLuint *params);
 
 #ifdef __cplusplus
 }

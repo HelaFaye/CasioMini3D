@@ -28,6 +28,8 @@ struct Token
     /* Integer literals: the value modulo 2^32 (2147483648 is accepted so
        that -2147483648 can be written); larger literals are rejected. */
     int32_t integer_value;
+    /* The literal had a u/U suffix (GLSL ES 3.00 uint). */
+    bool unsigned_literal;
     size_t offset;
 };
 
@@ -91,6 +93,10 @@ public:
                     if (value > 0xffffffffull)
                         break;
                 }
+                const bool hex_unsigned =
+                    source_[offset_] == 'u' || source_[offset_] == 'U';
+                if (hex_unsigned)
+                    ++offset_;
                 if (digits == 0 || value > 0xffffffffull ||
                     is_identifier_part(source_[offset_]) || source_[offset_] == '.')
                 {
@@ -103,6 +109,7 @@ public:
                 std::memcpy(token.text, source_ + start, length);
                 token.text[length] = '\0';
                 token.integer = true;
+                token.unsigned_literal = hex_unsigned;
                 token.integer_value = static_cast<int32_t>(static_cast<uint32_t>(value));
                 token.number = static_cast<float>(token.integer_value);
                 token.kind = TokenKind::Number;
@@ -142,6 +149,11 @@ public:
             }
 
             const size_t length = offset_ - start;
+            // A u/U suffix makes an integer literal unsigned.
+            const bool unsigned_suffix = !has_dot && !has_exponent &&
+                (source_[offset_] == 'u' || source_[offset_] == 'U');
+            if (unsigned_suffix)
+                ++offset_;
             if (length >= sizeof(token.text))
             {
                 token.kind = TokenKind::Invalid;
@@ -159,11 +171,13 @@ public:
                 return token;
             }
             token.integer = !has_dot && !has_exponent;
+            token.unsigned_literal = unsigned_suffix;
             if (token.integer)
             {
                 // A leading 0 makes the literal octal, up to 037777777777.
                 const bool octal = token.text[0] == '0' && token.text[1] != '\0';
-                const uint64_t limit = octal ? 0xffffffffull : 2147483648ull;
+                const uint64_t limit = octal || unsigned_suffix
+                    ? 0xffffffffull : 2147483648ull;
                 uint64_t value = 0;
                 for (const char *digit = token.text; *digit; ++digit)
                 {
@@ -186,8 +200,9 @@ public:
                 }
                 token.integer_value = static_cast<int32_t>(
                     static_cast<uint32_t>(value));
-                if (octal)
-                    token.number = static_cast<float>(token.integer_value);
+                if (octal || unsigned_suffix)
+                    token.number = static_cast<float>(static_cast<uint32_t>(
+                        token.integer_value));
             }
             token.kind = TokenKind::Number;
             return token;
@@ -337,12 +352,16 @@ static size_t component_count(ShaderType type)
         case ShaderType::Int:
         case ShaderType::Bool:
         case ShaderType::Sampler2D:
+        case ShaderType::UInt:
             return 1;
         case ShaderType::Vec2:
+        case ShaderType::UVec2:
             return 2;
         case ShaderType::Vec3:
+        case ShaderType::UVec3:
             return 3;
         case ShaderType::Vec4:
+        case ShaderType::UVec4:
         case ShaderType::IVec4:
         case ShaderType::BVec4:
             return 4;
@@ -387,6 +406,24 @@ static bool is_int_vector(ShaderType type)
            type == ShaderType::IVec4;
 }
 
+static bool is_uint_vector(ShaderType type)
+{
+    return type == ShaderType::UVec2 || type == ShaderType::UVec3 ||
+           type == ShaderType::UVec4;
+}
+
+/* int, ivec, uint and uvec: exact 32-bit values. */
+static bool is_integer_type(ShaderType type)
+{
+    return type == ShaderType::Int || is_int_vector(type) ||
+           type == ShaderType::UInt || is_uint_vector(type);
+}
+
+static bool is_unsigned_type(ShaderType type)
+{
+    return type == ShaderType::UInt || is_uint_vector(type);
+}
+
 static bool is_bool_vector(ShaderType type)
 {
     return type == ShaderType::BVec2 || type == ShaderType::BVec3 ||
@@ -395,7 +432,8 @@ static bool is_bool_vector(ShaderType type)
 
 static bool is_any_vector(ShaderType type)
 {
-    return is_vector(type) || is_int_vector(type) || is_bool_vector(type);
+    return is_vector(type) || is_int_vector(type) || is_bool_vector(type) ||
+           is_uint_vector(type);
 }
 
 static size_t vector_dimension(ShaderType type)
@@ -404,12 +442,15 @@ static size_t vector_dimension(ShaderType type)
     {
         case ShaderType::Vec2:
         case ShaderType::IVec2:
+        case ShaderType::UVec2:
         case ShaderType::BVec2: return 2;
         case ShaderType::Vec3:
         case ShaderType::IVec3:
+        case ShaderType::UVec3:
         case ShaderType::BVec3: return 3;
         case ShaderType::Vec4:
         case ShaderType::IVec4:
+        case ShaderType::UVec4:
         case ShaderType::BVec4: return 4;
         default: return 0;
     }
@@ -431,6 +472,16 @@ static ShaderType vector_type_for(size_t components, ShaderType base)
             default: return ShaderType::Invalid;
         }
     }
+    if (base == ShaderType::UInt)
+    {
+        switch (components)
+        {
+            case 2: return ShaderType::UVec2;
+            case 3: return ShaderType::UVec3;
+            case 4: return ShaderType::UVec4;
+            default: return ShaderType::Invalid;
+        }
+    }
     if (base == ShaderType::Bool)
     {
         switch (components)
@@ -448,6 +499,7 @@ static ShaderType vector_base_type(ShaderType type)
 {
     if (is_vector(type)) return ShaderType::Float;
     if (is_int_vector(type)) return ShaderType::Int;
+    if (is_uint_vector(type)) return ShaderType::UInt;
     if (is_bool_vector(type)) return ShaderType::Bool;
     return ShaderType::Invalid;
 }
@@ -475,8 +527,8 @@ static bool is_matrix(ShaderType type)
 
 static bool is_numeric(ShaderType type)
 {
-    return type == ShaderType::Float || type == ShaderType::Int ||
-           is_vector(type) || is_int_vector(type) || is_matrix(type);
+    return type == ShaderType::Float || is_vector(type) || is_matrix(type) ||
+           is_integer_type(type);
 }
 
 /* Result type of a GLSL ES 1.00 arithmetic operator, shared by the
@@ -505,6 +557,8 @@ static ShaderType arithmetic_result(ShaderOp op, ShaderType left, ShaderType rig
             return ShaderType::Float;
         if (type == ShaderType::Int || is_int_vector(type))
             return ShaderType::Int;
+        if (type == ShaderType::UInt || is_uint_vector(type))
+            return ShaderType::UInt;
         return ShaderType::Invalid;
     };
     const ShaderType left_base = base(left);
@@ -524,14 +578,14 @@ static ShaderType arithmetic_result(ShaderOp op, ShaderType left, ShaderType rig
    operand's type and takes an int or a same-size ivec count. */
 static ShaderType integer_operator_result(ShaderOp op, ShaderType left, ShaderType right)
 {
-    const auto is_int_based = [](ShaderType type)
-    {
-        return type == ShaderType::Int || is_int_vector(type);
-    };
-    if (!is_int_based(left) || !is_int_based(right))
+    if (!is_integer_type(left) || !is_integer_type(right))
         return ShaderType::Invalid;
+    // A shift count may be int or uint whatever the shifted type; it is a
+    // scalar or a vector with as many components.
     if (op == ShaderOp::ShiftLeft || op == ShaderOp::ShiftRight)
-        return right == ShaderType::Int || right == left ? left : ShaderType::Invalid;
+        return component_count(right) == 1 ||
+               component_count(right) == component_count(left)
+            ? left : ShaderType::Invalid;
     return arithmetic_result(ShaderOp::Add, left, right);
 }
 
@@ -740,6 +794,14 @@ private:
             type = ShaderType::IVec3;
         else if (std::strcmp(current_.text, "ivec4") == 0)
             type = ShaderType::IVec4;
+        else if (es3() && std::strcmp(current_.text, "uint") == 0)
+            type = ShaderType::UInt;
+        else if (es3() && std::strcmp(current_.text, "uvec2") == 0)
+            type = ShaderType::UVec2;
+        else if (es3() && std::strcmp(current_.text, "uvec3") == 0)
+            type = ShaderType::UVec3;
+        else if (es3() && std::strcmp(current_.text, "uvec4") == 0)
+            type = ShaderType::UVec4;
         else if (std::strcmp(current_.text, "bvec2") == 0)
             type = ShaderType::BVec2;
         else if (std::strcmp(current_.text, "bvec3") == 0)
@@ -1256,9 +1318,10 @@ private:
                 fail("varying arrays require a constant integer index");
                 return false;
             }
-            if (parse_expression(1) != ShaderType::Int)
+            const ShaderType index_type = parse_expression(1);
+            if (index_type != ShaderType::Int && index_type != ShaderType::UInt)
             {
-                fail("array index must be an int expression");
+                fail("array index must be an int or uint expression");
                 return false;
             }
             dynamic = true;
@@ -1566,6 +1629,11 @@ private:
     {
         if (current_.kind != TokenKind::Identifier)
             return false;
+        if (es3() && (std::strcmp(current_.text, "uint") == 0 ||
+                      std::strcmp(current_.text, "uvec2") == 0 ||
+                      std::strcmp(current_.text, "uvec3") == 0 ||
+                      std::strcmp(current_.text, "uvec4") == 0))
+            return true;
         return std::strcmp(current_.text, "float") == 0 ||
                std::strcmp(current_.text, "int") == 0 ||
                std::strcmp(current_.text, "bool") == 0 ||
@@ -1814,15 +1882,16 @@ private:
         {
             const ShaderType base = component_count(target_type) == 1
                 ? target_type : vector_base_type(target_type);
-            if (base != ShaderType::Int && base != ShaderType::Float)
+            if (base != ShaderType::Int && base != ShaderType::UInt &&
+                base != ShaderType::Float)
             {
-                fail("++ and -- require an int or float target");
+                fail("++ and -- require an int, uint or float target");
                 return ShaderType::Invalid;
             }
             ShaderInstruction one = {};
-            one.op = base == ShaderType::Int ? ShaderOp::PushInt : ShaderOp::PushFloat;
+            one.op = base == ShaderType::Float ? ShaderOp::PushFloat : ShaderOp::PushInt;
             one.type = base;
-            one.literal = base == ShaderType::Int ? shader_int_bits(1) : 1.0f;
+            one.literal = base == ShaderType::Float ? 1.0f : shader_int_bits(1);
             emit(one);
             operand_type = base;
         }
@@ -2058,7 +2127,8 @@ private:
         {
             const bool increment = std::strcmp(current_.text, "++") == 0;
             advance();
-            if (target.type != ShaderType::Int && target.type != ShaderType::Float)
+            if (target.type != ShaderType::Int && target.type != ShaderType::UInt &&
+                target.type != ShaderType::Float)
             {
                 fail("increment/decrement requires an int or float local");
                 return;
@@ -2066,10 +2136,10 @@ private:
 
             emit_simple(ShaderOp::LoadLocal, target.type, target.index);
             ShaderInstruction one = {};
-            one.op = target.type == ShaderType::Int
-                ? ShaderOp::PushInt : ShaderOp::PushFloat;
+            one.op = target.type == ShaderType::Float
+                ? ShaderOp::PushFloat : ShaderOp::PushInt;
             one.type = target.type;
-            one.literal = target.type == ShaderType::Int ? shader_int_bits(1) : 1.0f;
+            one.literal = target.type == ShaderType::Float ? 1.0f : shader_int_bits(1);
             emit(one);
             emit_simple(increment ? ShaderOp::Add : ShaderOp::Subtract, target.type);
             emit_assignment_store(target);
@@ -2351,9 +2421,9 @@ private:
             advance();
             parse_unary(result_type);
             expression_lvalue_ = {};
-            if (result_type != ShaderType::Int && !is_int_vector(result_type))
+            if (!is_integer_type(result_type))
             {
-                fail("~ requires an int or ivec operand");
+                fail("~ requires an integer operand");
                 return;
             }
             emit_simple(ShaderOp::BitNot, result_type);
@@ -2512,8 +2582,8 @@ private:
             std::strcmp(operation, ">") == 0 ||
             std::strcmp(operation, ">=") == 0)
         {
-            if ((left == ShaderType::Float || left == ShaderType::Int) &&
-                left == right)
+            if ((left == ShaderType::Float || left == ShaderType::Int ||
+                 left == ShaderType::UInt) && left == right)
                 return ShaderType::Bool;
             return ShaderType::Invalid;
         }
@@ -2537,7 +2607,14 @@ private:
         {
             ShaderInstruction instruction = {};
             instruction.op = current_.integer ? ShaderOp::PushInt : ShaderOp::PushFloat;
-            instruction.type = current_.integer ? ShaderType::Int : ShaderType::Float;
+            if (current_.unsigned_literal && !es3())
+            {
+                fail("unsigned literals require GLSL ES 3.00");
+                result_type = ShaderType::Invalid;
+                return;
+            }
+            instruction.type = !current_.integer ? ShaderType::Float
+                : current_.unsigned_literal ? ShaderType::UInt : ShaderType::Int;
             instruction.literal = current_.integer
                 ? shader_int_bits(current_.integer_value) : current_.number;
             emit(instruction);
@@ -2925,6 +3002,8 @@ private:
         }
 
         ShaderType constructor = constructor_type(name);
+        if (is_unsigned_type(constructor) && !es3())
+            constructor = ShaderType::Invalid; // uint is GLSL ES 3.00 only.
         if (constructor != ShaderType::Invalid)
         {
             if (!valid_constructor(constructor, arguments, argument_count))
@@ -3233,7 +3312,8 @@ private:
                  std::strcmp(name, "lessThanEqual") == 0 ||
                  std::strcmp(name, "greaterThan") == 0 ||
                  std::strcmp(name, "greaterThanEqual") == 0) &&
-                !is_vector(arguments[0]) && !is_int_vector(arguments[0]))
+                !is_vector(arguments[0]) && !is_int_vector(arguments[0]) &&
+                !is_uint_vector(arguments[0]))
             {
                 fail("ordered vector comparison requires float or integer vectors");
                 return ShaderType::Invalid;
@@ -3383,6 +3463,10 @@ private:
         if (std::strcmp(name, "ivec2") == 0) return ShaderType::IVec2;
         if (std::strcmp(name, "ivec3") == 0) return ShaderType::IVec3;
         if (std::strcmp(name, "ivec4") == 0) return ShaderType::IVec4;
+        if (std::strcmp(name, "uint") == 0) return ShaderType::UInt;
+        if (std::strcmp(name, "uvec2") == 0) return ShaderType::UVec2;
+        if (std::strcmp(name, "uvec3") == 0) return ShaderType::UVec3;
+        if (std::strcmp(name, "uvec4") == 0) return ShaderType::UVec4;
         if (std::strcmp(name, "bvec2") == 0) return ShaderType::BVec2;
         if (std::strcmp(name, "bvec3") == 0) return ShaderType::BVec3;
         if (std::strcmp(name, "bvec4") == 0) return ShaderType::BVec4;
@@ -3418,10 +3502,11 @@ private:
             is_matrix(arguments[0]))
             return true;
         if (destination == ShaderType::Float || destination == ShaderType::Int ||
-            destination == ShaderType::Bool)
+            destination == ShaderType::UInt || destination == ShaderType::Bool)
             return argument_count == 1 &&
                 (arguments[0] == ShaderType::Float ||
                  arguments[0] == ShaderType::Int ||
+                 arguments[0] == ShaderType::UInt ||
                  arguments[0] == ShaderType::Bool);
         if (is_any_vector(destination))
         {
@@ -3555,11 +3640,6 @@ static void copy_shader_value(ShaderValue& destination,
     }
 }
 
-static bool is_integer_type(ShaderType type)
-{
-    return type == ShaderType::Int || is_int_vector(type);
-}
-
 static bool is_boolean_type(ShaderType type)
 {
     return type == ShaderType::Bool || is_bool_vector(type);
@@ -3578,6 +3658,17 @@ static int32_t float_to_int(float value)
     return static_cast<int32_t>(value);
 }
 
+/* float -> uint truncates; negative values (undefined in GLSL) give 0 and
+   values past the range saturate. */
+static uint32_t float_to_uint(float value)
+{
+    if (!(value > 0.0f))
+        return 0;
+    if (value >= 4294967296.0f)
+        return UINT32_MAX;
+    return static_cast<uint32_t>(value);
+}
+
 /* Convert one component of a `source`-typed value for a constructor of
    `destination` type. */
 static float convert_component(
@@ -3586,11 +3677,13 @@ static float convert_component(
     const bool from_int = is_integer_type(source);
     if (is_integer_type(destination))
     {
+        // int <-> uint keeps the bit pattern, as GLSL specifies.
         if (from_int)
             return value;
         if (is_boolean_type(source))
             return shader_int_bits(value != 0.0f ? 1 : 0);
-        return shader_int_bits(float_to_int(value));
+        return shader_int_bits(is_unsigned_type(destination)
+            ? static_cast<int32_t>(float_to_uint(value)) : float_to_int(value));
     }
     if (is_boolean_type(destination))
     {
@@ -3598,19 +3691,28 @@ static float convert_component(
             return shader_int(value) != 0 ? 1.0f : 0.0f;
         return value != 0.0f ? 1.0f : 0.0f;
     }
-    return from_int ? static_cast<float>(shader_int(value)) : value;
+    if (!from_int)
+        return value;
+    return is_unsigned_type(source)
+        ? static_cast<float>(static_cast<uint32_t>(shader_int(value)))
+        : static_cast<float>(shader_int(value));
 }
 
 /* % & | ^ << >> on 32-bit integers. GLSL leaves a negative % operand,
    a zero divisor and a shift count outside [0, 31] undefined: here % uses
    C's truncating remainder, x % 0 is 0, and an out-of-range shift gives 0
    (<<) or the sign fill (>>). >> is arithmetic. */
-static int32_t integer_operator(ShaderOp op, int32_t a, int32_t b)
+static int32_t integer_operator(ShaderOp op, int32_t a, int32_t b, bool is_unsigned)
 {
     const uint32_t ua = static_cast<uint32_t>(a);
+    // A uint shift count is never negative.
+    if ((op == ShaderOp::ShiftLeft || op == ShaderOp::ShiftRight) && b < 0)
+        b = 32;
     switch (op)
     {
         case ShaderOp::Modulo:
+            if (is_unsigned)
+                return b == 0 ? 0 : static_cast<int32_t>(ua % static_cast<uint32_t>(b));
             if (b == 0 || (a == INT32_MIN && b == -1))
                 return 0;
             return a % b;
@@ -3619,20 +3721,37 @@ static int32_t integer_operator(ShaderOp op, int32_t a, int32_t b)
         case ShaderOp::BitXor: return a ^ b;
         case ShaderOp::ShiftLeft:
             return b < 0 || b > 31 ? 0 : static_cast<int32_t>(ua << b);
-        default: // ShiftRight
+        default: // ShiftRight: logical for uint, arithmetic for int
             if (b < 0 || b > 31)
-                return a < 0 ? -1 : 0;
-            return a < 0 ? ~static_cast<int32_t>(~ua >> b)
-                         : static_cast<int32_t>(ua >> b);
+                return is_unsigned || a >= 0 ? 0 : -1;
+            if (is_unsigned || a >= 0)
+                return static_cast<int32_t>(ua >> b);
+            return ~static_cast<int32_t>(~ua >> b);
     }
 }
 
 /* Integer + - * / with 32-bit wraparound. Division truncates toward zero;
    division by zero, undefined in GLSL, gives 0, and INT32_MIN / -1 wraps. */
-static int32_t integer_arithmetic(ShaderOp op, int32_t a, int32_t b)
+/* -1, 0 or 1 for two int (or, with is_unsigned, uint) components. */
+static int compare_integers(float left, float right, bool is_unsigned)
+{
+    const int32_t a = shader_int(left);
+    const int32_t b = shader_int(right);
+    if (is_unsigned)
+    {
+        const uint32_t ua = static_cast<uint32_t>(a);
+        const uint32_t ub = static_cast<uint32_t>(b);
+        return ua < ub ? -1 : (ua > ub ? 1 : 0);
+    }
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static int32_t integer_arithmetic(ShaderOp op, int32_t a, int32_t b, bool is_unsigned)
 {
     const uint32_t ua = static_cast<uint32_t>(a);
     const uint32_t ub = static_cast<uint32_t>(b);
+    if (op == ShaderOp::Divide && is_unsigned)
+        return ub == 0 ? 0 : static_cast<int32_t>(ua / ub);
     switch (op)
     {
         case ShaderOp::Add: return static_cast<int32_t>(ua + ub);
@@ -3866,9 +3985,10 @@ static bool array_element_slot(
     size_t& slot,
     size_t slot_limit = GLSL_MAX_LOCALS)
 {
-    if (index.type != ShaderType::Int)
+    if (index.type != ShaderType::Int && index.type != ShaderType::UInt)
         return false;
     const int32_t element = shader_int(index.data[0]);
+    // A uint index past INT32_MAX reads as negative here and is rejected.
     if (element < 0 || element >= static_cast<int32_t>(instruction.argument_count))
         return false;
     slot = static_cast<size_t>(instruction.index) +
@@ -4604,7 +4724,8 @@ bool execute_glsl(
                         result.data[i] = shader_int_bits(integer_arithmetic(
                             instruction.op,
                             shader_int(a.data[scalar_a ? 0 : i]),
-                            shader_int(b.data[scalar_b ? 0 : i])));
+                            shader_int(b.data[scalar_b ? 0 : i]),
+                            is_unsigned_type(instruction.type)));
                     if (!push_value(stack, stack_size, result))
                         return false;
                     break;
@@ -4634,7 +4755,8 @@ bool execute_glsl(
                     result.data[i] = shader_int_bits(integer_operator(
                         instruction.op,
                         shader_int(a.data[scalar_a ? 0 : i]),
-                        shader_int(b.data[scalar_b ? 0 : i])));
+                        shader_int(b.data[scalar_b ? 0 : i]),
+                        is_unsigned_type(instruction.type)));
                 if (!push_value(stack, stack_size, result))
                     return false;
                 break;
@@ -4692,17 +4814,17 @@ bool execute_glsl(
                          instruction.op == ShaderOp::GreaterEqual)
                 {
                     if (a.type != ShaderType::Float &&
-                        a.type != ShaderType::Int)
+                        a.type != ShaderType::Int && a.type != ShaderType::UInt)
                         return false;
-                    if (a.type == ShaderType::Int)
+                    if (a.type != ShaderType::Float)
                     {
-                        const int32_t left = shader_int(a.data[0]);
-                        const int32_t right = shader_int(b.data[0]);
+                        const int order = compare_integers(
+                            a.data[0], b.data[0], a.type == ShaderType::UInt);
                         result.data[0] =
-                            instruction.op == ShaderOp::Less ? left < right :
-                            instruction.op == ShaderOp::LessEqual ? left <= right :
-                            instruction.op == ShaderOp::Greater ? left > right :
-                            left >= right;
+                            instruction.op == ShaderOp::Less ? order < 0 :
+                            instruction.op == ShaderOp::LessEqual ? order <= 0 :
+                            instruction.op == ShaderOp::Greater ? order > 0 :
+                            order >= 0;
                     }
                     else if (instruction.op == ShaderOp::Less)
                         result.data[0] = a.data[0] < b.data[0];
@@ -5095,8 +5217,15 @@ bool execute_glsl(
                             return false;
                         for (size_t i = 0; i < vector_dimension(args[0].type); ++i)
                         {
-                            const float left = args[0].data[i];
-                            const float right = args[1].data[i];
+                            float left = args[0].data[i];
+                            float right = args[1].data[i];
+                            if (is_integer_type(args[0].type))
+                            {
+                                // Compare integer bit patterns as integers.
+                                left = static_cast<float>(compare_integers(
+                                    left, right, is_unsigned_type(args[0].type)));
+                                right = 0.0f;
+                            }
                             bool comparison = false;
                             switch (function)
                             {

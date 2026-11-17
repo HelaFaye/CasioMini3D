@@ -196,7 +196,7 @@ Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
 
 ## Priorities
 
-1. Continue the GLSL ES 3.00 front end. Done: `#version 300 es`, in/out, layout(location) on vertex inputs, the declared fragment output, the texture() family, gl_VertexID and gl_InstanceID. Exact 32-bit int/ivec values in both language versions, and ==/!= on every non-sampler type. % & | ^ << >> ~ (GLSL ES 3.00); compound assignment, statement x++/x--, ^^ and hex/octal literals (both versions). Next: uint, flat interpolation, uniform blocks, integer and 3D samplers; then the GLES 3.0 features that depend on them (uniform buffers, integer and 3D textures).
+1. Continue the GLSL ES 3.00 front end. Done: `#version 300 es`, in/out, layout(location) on vertex inputs, the declared fragment output, the texture() family, gl_VertexID and gl_InstanceID. Exact 32-bit int/ivec values in both language versions, and ==/!= on every non-sampler type. % & | ^ << >> ~ (GLSL ES 3.00); compound assignment, statement x++/x--, ^^ and hex/octal literals (both versions). uint/uvec with glUniform*ui. Next: flat interpolation, uniform blocks, integer and 3D samplers; then the GLES 3.0 features that depend on them (uniform buffers, integer and 3D textures).
 2. Close remaining texture-completeness and pixel-store edge cases.
 3. Increase coverage of GLES state, queries, errors and resource lifetime.
 4. Add differential tests for every new shader and pipeline optimization.

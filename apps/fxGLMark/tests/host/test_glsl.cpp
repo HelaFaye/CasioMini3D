@@ -1817,6 +1817,89 @@ static void test_integer_operators_and_compound_assignment()
     }
 }
 
+static void test_unsigned_integers()
+{
+    static const char arithmetic[] =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "out vec4 o;\n"
+        "void main() {\n"
+        "  uint big = 4294967295u;\n"
+        "  uint wrapped = big + 1u;\n"                   // wraps to 0
+        "  uint shifted = 0x80000000u >> 31;\n"          // logical shift
+        "  uvec2 q = uvec2(4294967294u, 7u) / 2u;\n"
+        "  o = vec4(wrapped == 0u && big > 0u && shifted == 1u ? 1.0 : 0.0,\n"
+        "           q == uvec2(2147483647u, 3u) && 7u % 4u == 3u ? 1.0 : 0.0,\n"
+        "           uint(-1) == big && int(big) == -1 && uint(3.75) == 3u ? 1.0 : 0.0,\n"
+        "           float(big) == 4294967296.0 && uint(-2.0) == 0u ? 1.0 : 0.0);\n"
+        "}\n";
+    static const char relational[] =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "out vec4 o;\n"
+        "void main() {\n"
+        "  bvec2 signed_less = lessThan(ivec2(-1, 5), ivec2(0, 4));\n"
+        "  bvec2 unsigned_less = lessThan(uvec2(0xFFFFFFFFu, 1u), uvec2(0u, 2u));\n"
+        "  uint n = 1u; n <<= 4; n |= 3u; n++; uint a[2]; a[1u] = 2.0 > 1.0 ? n : 0u;\n"
+        "  o = vec4(signed_less == bvec2(true, false) ? 1.0 : 0.0,\n"
+        "           unsigned_less == bvec2(false, true) ? 1.0 : 0.0,\n"
+        "           a[1] == 20u ? 1.0 : 0.0, 1.0);\n"
+        "}\n";
+    static const char functions[] =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "out vec4 o;\n"
+        "uint twice(uint x) { return x * 2u; }\n"
+        "uvec2 swap(uvec2 v) { return v.yx; }\n"
+        "void bump(inout uint x) { x += 1u; }\n"
+        "void main() { uint v = twice(3000000000u); bump(v);\n"
+        "  o = vec4(v == 1705032705u ? 1.0 : 0.0,\n"
+        "           swap(uvec2(1u, 2u)) == uvec2(2u, 1u) ? 1.0 : 0.0, 1.0, 1.0); }\n";
+    const char *const sources[] = {arithmetic, relational, functions};
+    for (const char *source : sources)
+    {
+        ShaderModule module = {};
+        compile_or_report(ShaderStage::Fragment, source, module, "unsigned integers");
+        ShaderRuntime runtime = {};
+        fxgl::prepare_shader_runtime(module, runtime);
+        assert(fxgl::execute_glsl(module, runtime));
+        for (size_t i = 0; i < 4; ++i)
+        {
+            if (!near(runtime.fragment_color.data[i], 1.0f))
+                std::fprintf(stderr, "unsigned check %zu failed\n", i);
+            assert(near(runtime.fragment_color.data[i], 1.0f));
+        }
+    }
+
+    // ivec relational built-ins in GLSL ES 1.00 compare as integers too.
+    static const char es1[] =
+        "void main() { bvec2 b = lessThan(ivec2(-3, 2), ivec2(-1, 2));\n"
+        "  gl_FragColor = vec4(b.x ? 1.0 : 0.0, b.y ? 1.0 : 0.0, 0.0, 1.0); }\n";
+    ShaderModule es1_module = {};
+    compile_or_report(ShaderStage::Fragment, es1, es1_module, "ivec lessThan");
+    ShaderRuntime runtime = {};
+    fxgl::prepare_shader_runtime(es1_module, runtime);
+    assert(fxgl::execute_glsl(es1_module, runtime));
+    assert(near(runtime.fragment_color.data[0], 1.0f));
+    assert(near(runtime.fragment_color.data[1], 0.0f));
+
+    const char *invalid[] = {
+        "void main() { uint u = 1u; gl_FragColor = vec4(1.0); }",
+        "void main() { gl_FragColor = vec4(float(uint(1))); }",
+        "#version 300 es\nout vec4 o; void main() { uint u = 1u + 1; o = vec4(1.0); }",
+        "#version 300 es\nout vec4 o; void main() { uint u = 4294967296u; o = vec4(1.0); }",
+        "#version 300 es\nout vec4 o; void main() { bool b = 1u < 2; o = vec4(1.0); }",
+    };
+    for (const char *bad : invalid)
+    {
+        ShaderModule rejected = {};
+        const bool compiled = fxgl::compile_glsl(ShaderStage::Fragment, bad, rejected);
+        if (compiled)
+            std::fprintf(stderr, "unexpectedly accepted: %s\n", bad);
+        assert(!compiled);
+    }
+}
+
 static ShaderValue make_value(ShaderType type, float x, float y = 0.0f, float z = 0.0f)
 {
     ShaderValue value = {};
@@ -1959,6 +2042,7 @@ int main()
     test_glsl_es_300_front_end();
     test_exact_32_bit_integers();
     test_integer_operators_and_compound_assignment();
+    test_unsigned_integers();
 
     std::puts("GLSL ES subset compiler/VM tests: PASS");
     return 0;

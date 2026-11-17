@@ -43,7 +43,12 @@ enum class ShaderType : uint8_t
     Mat2,
     Mat3,
     Mat4,
-    Sampler2D
+    Sampler2D,
+    /* GLSL ES 3.00 unsigned integers, stored bit for bit like int. */
+    UInt,
+    UVec2,
+    UVec3,
+    UVec4
 };
 
 struct ShaderValue
@@ -57,7 +62,8 @@ struct ShaderValue
     float ddy[4];
 };
 
-/* Read and write the 32-bit integer stored in an int/ivec component. */
+/* Read and write the 32-bit integer stored in an int/ivec or uint/uvec
+   component (for uint, convert the result to uint32_t). */
 inline int32_t shader_int(float component)
 {
     int32_t value;
@@ -327,8 +333,11 @@ using TextureSampleFunction = bool (*)(
    (x % 0 is 0; out-of-range shifts give 0 or the sign fill).
    Compound assignment to a dynamically indexed array element is
    unsupported.
-   Not yet supported in GLSL ES 3.00: unsigned types, flat/centroid
-   interpolation, uniform
+   GLSL ES 3.00 also has uint and uvec2-4: u-suffixed literals, unsigned
+   / % >> and comparisons, int<->uint conversions that keep the bit pattern,
+   float->uint truncation (negative gives 0), uint array indices, and
+   glUniform*ui/glGetUniformuiv.
+   Not yet supported in GLSL ES 3.00: flat/centroid interpolation, uniform
    blocks, integer and 3D samplers, and multiple fragment outputs. Both
    stages of a program must use the same version.
    Whole-array assignment, structs, do-while, switch, preprocessor

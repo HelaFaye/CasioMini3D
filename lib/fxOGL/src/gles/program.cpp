@@ -1,4 +1,5 @@
 #include <GLES2/gl2.h>
+#include <GLES3/gl3.h>
 #include <fxgl/platform.h>
 #include "context_internal.hpp"
 
@@ -128,6 +129,10 @@ static GLenum gl_type_for_shader_type(fxgl::ShaderType type)
         case fxgl::ShaderType::IVec2: return GL_INT_VEC2;
         case fxgl::ShaderType::IVec3: return GL_INT_VEC3;
         case fxgl::ShaderType::IVec4: return GL_INT_VEC4;
+        case fxgl::ShaderType::UInt: return GL_UNSIGNED_INT;
+        case fxgl::ShaderType::UVec2: return GL_UNSIGNED_INT_VEC2;
+        case fxgl::ShaderType::UVec3: return GL_UNSIGNED_INT_VEC3;
+        case fxgl::ShaderType::UVec4: return GL_UNSIGNED_INT_VEC4;
         case fxgl::ShaderType::BVec2: return GL_BOOL_VEC2;
         case fxgl::ShaderType::BVec3: return GL_BOOL_VEC3;
         case fxgl::ShaderType::BVec4: return GL_BOOL_VEC4;
@@ -302,6 +307,12 @@ static bool is_int_type(fxgl::ShaderType type)
            type == fxgl::ShaderType::IVec3 || type == fxgl::ShaderType::IVec4;
 }
 
+static bool is_uint_type(fxgl::ShaderType type)
+{
+    return type == fxgl::ShaderType::UInt || type == fxgl::ShaderType::UVec2 ||
+           type == fxgl::ShaderType::UVec3 || type == fxgl::ShaderType::UVec4;
+}
+
 /* An integer-API uniform value as stored for `type`: exact 32-bit integers
    for int types, 0.0/1.0 for bools, the unit number for samplers. */
 static float shader_integer_component(fxgl::ShaderType type, GLint value)
@@ -332,15 +343,19 @@ static size_t shader_component_count(fxgl::ShaderType type)
         case fxgl::ShaderType::Int:
         case fxgl::ShaderType::Bool:
         case fxgl::ShaderType::Sampler2D:
+        case fxgl::ShaderType::UInt:
             return 1;
         case fxgl::ShaderType::Vec2: return 2;
         case fxgl::ShaderType::Vec3: return 3;
         case fxgl::ShaderType::Vec4: return 4;
         case fxgl::ShaderType::IVec2:
+        case fxgl::ShaderType::UVec2:
         case fxgl::ShaderType::BVec2: return 2;
         case fxgl::ShaderType::IVec3:
+        case fxgl::ShaderType::UVec3:
         case fxgl::ShaderType::BVec3: return 3;
         case fxgl::ShaderType::IVec4:
+        case fxgl::ShaderType::UVec4:
         case fxgl::ShaderType::BVec4: return 4;
         case fxgl::ShaderType::Mat2: return 4;
         case fxgl::ShaderType::Mat3: return 9;
@@ -584,6 +599,45 @@ static size_t uniform_write_count(
     const size_t remaining = program.uniform_remaining[location];
     return static_cast<size_t>(count) < remaining
         ? static_cast<size_t>(count) : remaining;
+}
+
+/* glUniform*ui: only uint and uvec uniforms of matching size. */
+static void set_uniform_unsigned(
+    GLint location,
+    const GLuint *values,
+    size_t components,
+    GLsizei count = 1)
+{
+    if (!fxglHasCurrentContext() || location == -1 || count == 0)
+        return;
+    if (count < 0 || !values)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    ProgramObject *program = current_program();
+    if (!program || location < 0 ||
+        static_cast<size_t>(location) >= program->uniform_count)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+    const fxgl::ShaderType declared = program->uniforms[location].type;
+    if (!is_uint_type(declared) || shader_component_count(declared) != components)
+    {
+        fxgl::report_error(GL_INVALID_OPERATION);
+        return;
+    }
+    const size_t elements = uniform_write_count(*program, location, count);
+    for (size_t element = 0; element < elements; ++element)
+    {
+        fxgl::ShaderValue& destination = program->uniform_values[location + element];
+        destination = {};
+        destination.type = declared;
+        for (size_t i = 0; i < components; ++i)
+            destination.data[i] = fxgl::shader_int_bits(
+                static_cast<int32_t>(values[element * components + i]));
+    }
 }
 
 static void set_uniform_integer(
@@ -1464,6 +1518,8 @@ void glGetUniformfv(GLuint program_name, GLint location, GLfloat *params)
     for (size_t i = 0; i < components; ++i)
         params[i] = is_int_type(value.type)
             ? static_cast<GLfloat>(fxgl::shader_int(value.data[i]))
+            : is_uint_type(value.type)
+            ? static_cast<GLfloat>(static_cast<uint32_t>(fxgl::shader_int(value.data[i])))
             : value.data[i];
 }
 
@@ -1485,9 +1541,75 @@ void glGetUniformiv(GLuint program_name, GLint location, GLint *params)
     const fxgl::ShaderValue& value = program->uniform_values[location];
     const size_t components = shader_component_count(value.type);
     for (size_t i = 0; i < components; ++i)
-        params[i] = is_int_type(value.type)
+        params[i] = is_int_type(value.type) || is_uint_type(value.type)
             ? fxgl::shader_int(value.data[i])
             : static_cast<GLint>(value.data[i]);
+}
+
+void glGetUniformuiv(GLuint program_name, GLint location, GLuint *params)
+{
+    if (!fxglHasCurrentContext()) return;
+    ProgramObject *program = find_program(program_name);
+    if (!program || !program->linked)
+    {
+        fxgl::report_error(program ? GL_INVALID_OPERATION : GL_INVALID_VALUE);
+        return;
+    }
+    if (!params || location < 0 ||
+        static_cast<size_t>(location) >= program->uniform_count)
+    {
+        fxgl::report_error(GL_INVALID_VALUE);
+        return;
+    }
+    const fxgl::ShaderValue& value = program->uniform_values[location];
+    const size_t components = shader_component_count(value.type);
+    for (size_t i = 0; i < components; ++i)
+        params[i] = is_int_type(value.type) || is_uint_type(value.type)
+            ? static_cast<GLuint>(fxgl::shader_int(value.data[i]))
+            : static_cast<GLuint>(value.data[i]);
+}
+
+void glUniform1ui(GLint location, GLuint v0)
+{
+    set_uniform_unsigned(location, &v0, 1);
+}
+
+void glUniform2ui(GLint location, GLuint v0, GLuint v1)
+{
+    const GLuint values[2] = {v0, v1};
+    set_uniform_unsigned(location, values, 2);
+}
+
+void glUniform3ui(GLint location, GLuint v0, GLuint v1, GLuint v2)
+{
+    const GLuint values[3] = {v0, v1, v2};
+    set_uniform_unsigned(location, values, 3);
+}
+
+void glUniform4ui(GLint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3)
+{
+    const GLuint values[4] = {v0, v1, v2, v3};
+    set_uniform_unsigned(location, values, 4);
+}
+
+void glUniform1uiv(GLint location, GLsizei count, const GLuint *value)
+{
+    set_uniform_unsigned(location, value, 1, count);
+}
+
+void glUniform2uiv(GLint location, GLsizei count, const GLuint *value)
+{
+    set_uniform_unsigned(location, value, 2, count);
+}
+
+void glUniform3uiv(GLint location, GLsizei count, const GLuint *value)
+{
+    set_uniform_unsigned(location, value, 3, count);
+}
+
+void glUniform4uiv(GLint location, GLsizei count, const GLuint *value)
+{
+    set_uniform_unsigned(location, value, 4, count);
 }
 
 void glUniform2i(GLint location, GLint v0, GLint v1)

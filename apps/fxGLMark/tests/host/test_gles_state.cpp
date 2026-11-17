@@ -3102,9 +3102,57 @@ void test_exact_integer_uniforms()
     GLfloat as_float = 0.0f;
     glGetUniformfv(program, big, &as_float);
     assert(as_float == 16777216.0f); // The nearest float.
+    // glUniform*ui cannot set an int uniform.
+    glUniform1ui(big, 5u);
+    assert(glGetError() == GL_INVALID_OPERATION);
     glDrawArrays(GL_POINTS, 0, 1);
     assert(glGetError() == GL_NO_ERROR);
     assert(color[0] == 0xffe0); // Red and green: both comparisons held.
+    glUseProgram(0);
+    glDeleteProgram(program);
+    fxglReleaseCurrent();
+}
+
+void test_unsigned_uniforms()
+{
+    uint16_t color[1] = {};
+    fxgl_surface_t surface = {color, nullptr, nullptr, 1, 1, 1};
+    assert(fxglMakeCurrent(&surface) == GL_TRUE);
+    glViewport(0, 0, 1, 1);
+    static const GLchar vertex[] =
+        "#version 300 es\n"
+        "void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); gl_PointSize = 1.0; }\n";
+    static const GLchar fragment[] =
+        "#version 300 es\n"
+        "precision mediump float; uniform uint u_max; uniform uvec2 u_pair; out vec4 o;\n"
+        "void main() { o = vec4(u_max == 4294967295u ? 1.0 : 0.0,\n"
+        "  u_pair.y > u_pair.x ? 1.0 : 0.0, 0.0, 1.0); }\n";
+    const GLuint program = build_test_program(vertex, fragment);
+    glUseProgram(program);
+    const GLint max = glGetUniformLocation(program, "u_max");
+    const GLint pair = glGetUniformLocation(program, "u_pair");
+    glUniform1ui(max, 4294967295u);
+    const GLuint values[2] = {7u, 0x80000000u};
+    glUniform2uiv(pair, 1, values);
+    assert(glGetError() == GL_NO_ERROR);
+    GLuint read[2] = {};
+    glGetUniformuiv(program, pair, read);
+    assert(read[0] == 7u && read[1] == 0x80000000u);
+    GLfloat as_float = 0.0f;
+    glGetUniformfv(program, max, &as_float);
+    assert(as_float == 4294967296.0f);
+    glUniform1i(max, 1);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    glUniform2ui(max, 1u, 2u);
+    assert(glGetError() == GL_INVALID_OPERATION);
+    GLint size = 0;
+    GLenum type = 0;
+    GLchar name[16] = {};
+    glGetActiveUniform(program, static_cast<GLuint>(pair), sizeof(name), nullptr, &size, &type, name);
+    assert(type == GL_UNSIGNED_INT_VEC2);
+    glDrawArrays(GL_POINTS, 0, 1);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(color[0] == 0xffe0); // u_max matched and 0x80000000 > 7 unsigned.
     glUseProgram(0);
     glDeleteProgram(program);
     fxglReleaseCurrent();
@@ -3356,6 +3404,7 @@ int main()
     test_buffer_mapping();
     test_glsl_es_300_programs();
     test_exact_integer_uniforms();
+    test_unsigned_uniforms();
     test_gles_mipmap_generation_and_level_uploads();
     test_gles_draw_arrays_and_elements();
     test_draw_call_texture_cache_refreshes_between_draws();
