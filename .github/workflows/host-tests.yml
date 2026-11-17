@@ -21,3 +21,10 @@ jobs:
 
       - name: Run regression tests
         run: ctest --test-dir build/host-tests --output-on-failure
+
+      - name: Build and test the calculator link library
+        run: |
+          cmake -S lib/cglink -B build/cglink -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
+          cmake --build build/cglink --parallel 2
+          ctest --test-dir build/cglink --output-on-failure

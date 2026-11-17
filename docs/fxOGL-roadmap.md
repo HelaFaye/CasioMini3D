@@ -251,9 +251,16 @@ These parts serve every port, Project Picori first, so they live here:
   - save backup;
   - Wi-Fi file transfer;
   - audio playback.
-- **Calculator link client.** A gint library for the same protocol.
-- **Launcher.** An add-in that browses the SD card and installs or starts
-  applications.
+- **Calculator link library** ([`lib/cglink`](../lib/cglink/README.md)),
+  shared by the launcher and the ESP32 firmware:
+  - framing, the page-pak index, a raw-deflate decoder, the RAM page cache
+    and page streaming;
+  - host-tested, with `cglink_sim` to replay room routes over a simulated
+    serial link.
+- **Launcher.** The one add-in installed on the calculator. It owns the ESP32
+  link, preloads compressed pages into its RAM cache, and loads applications
+  from the SD card into RAM and runs them. Internal storage then holds only
+  the launcher.
 - **GB-Link compatibility.** Link-cable emulation for ports such as Pokémon
   Emerald, talking to GB-Link hosts (Celio, the netplay bridge) through the
   ESP32. It starts here and moves to its own repository later.
