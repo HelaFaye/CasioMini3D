@@ -18,7 +18,7 @@ full GLES 2.0 compatibility or Khronos conformance.
 | **Documentation** | [`docs/`](docs/) | Architecture, compatibility roadmap, benchmark design and third-party notices |
 
 fxOGL and the graphics benchmarks are planned to move into repositories of
-their own later. The shared fx-CG50 infrastructure (the launcher, the ESP32-S3
+their own; see [`docs/repository-split.md`](docs/repository-split.md). The shared fx-CG50 infrastructure (the launcher, the ESP32-S3
 storage interface and GB-Link compatibility) starts here too; see
 [`docs/fxOGL-roadmap.md`](docs/fxOGL-roadmap.md).
 
