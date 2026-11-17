@@ -206,14 +206,34 @@ Earlier hardware baselines: overloaded-shader run, 3.206439 s VBO build and
 
 ## Applications to port
 
-- **glxgears.** The classic three-gear spinning demo, as an fxOGL add-in that
-  reports its frame rate.
-  - glxgears itself uses GLX and fixed-function OpenGL (display lists,
-    `glBegin`, built-in lighting), none of which fxOGL has. Port it the way
-    Mesa's `es2gears` does: the same gear geometry built into vertex buffers,
-    lit per vertex in a GLSL ES 1.00 shader.
-  - Keep the original copyright and permission notice, per the Mesa demos
-    license.
+- **glxgears.** Brian Paul's demo
+  (`mesademos/src/xdemos/glxgears.c`, MIT license), kept as close to the
+  original source as possible and reporting its frame rate.
+  - It uses a small part of fixed-function OpenGL 1.x:
+    - `glBegin`/`glEnd` with `GL_QUADS` and `GL_QUAD_STRIP`, plus
+      `glVertex3f`/`glNormal3f`;
+    - three display lists;
+    - the modelview/projection matrix stack, `glFrustum`, `glRotatef` and
+      `glTranslatef`;
+    - one light with materials and `GL_FLAT` shading;
+    - depth test and face culling.
+  - The rest is GLX/X11 window setup.
+  - **Plan: a GL 1.x compatibility layer on fxOGL, not a Mesa port.** Mesa's
+    core plus a software driver is many times the size of fxOGL, and its
+    software rasterizers are float-heavy, which costs a library call per
+    operation on this FPU-less CPU.
+  - The layer:
+    - records immediate mode and display lists into vertex buffers, with
+      quads split into triangles;
+    - keeps the matrix stacks on the CPU;
+    - generates a GLSL ES 1.00 lighting shader for the fixed-function light
+      and material state;
+    - gives `GL_FLAT` the provoking vertex's lit color, until fxOGL has flat
+      interpolation.
+  - A gint main loop replaces the GLX/X11 code. The arrow keys rotate the
+    view, as glxgears' keys do.
+  - This layer also serves other small GL 1.x programs later.
+  - Keep the original copyright and permission notice.
   - A useful second workload next to fxGLMark: depth-tested, lit, mid-sized
     meshes drawn every frame.
 - **Project Picori** (HelaFaye/tmc, `fx-cg50` branch): a 2D port that uses no
